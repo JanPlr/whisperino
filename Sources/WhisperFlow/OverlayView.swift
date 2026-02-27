@@ -1,11 +1,7 @@
-import AppKit
 import SwiftUI
 
 struct OverlayView: View {
     @ObservedObject var appState: AppState
-    @State private var isHoveringBars = false
-    @State private var isHoveringCancel = false
-    @State private var isHoveringPause = false
 
     private var isDismissing: Bool {
         if case .dismissing = appState.state { return true }
@@ -38,27 +34,21 @@ struct OverlayView: View {
 
     // MARK: - Recording
 
-    /// Buttons visible when mouse is over the panel or recording is paused
-    private var showButtons: Bool { appState.isPillHovered || isPaused }
-
     private var recordingView: some View {
-        HStack(spacing: showButtons ? 10 : 0) {
-            // Cancel button — slides in from left on hover
+        HStack(spacing: 10) {
+            // Cancel button (left)
             Image(systemName: "xmark")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.primary.opacity(isHoveringCancel ? 0.5 : 0.25))
-                .frame(width: showButtons ? 16 : 0, height: 16)
-                .opacity(showButtons ? 1 : 0)
-                .clipped()
+                .foregroundStyle(.primary.opacity(0.25))
+                .frame(width: 16, height: 16)
                 .contentShape(Rectangle())
-                .floatingHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringCancel = h } }
                 .onTapGesture { appState.cancelRecording() }
 
-            // Waveform bars — always visible, clickable to submit
+            // Waveform bars — clickable to submit
             HStack(spacing: 2.5) {
                 ForEach(0..<5, id: \.self) { i in
                     RoundedRectangle(cornerRadius: 2)
-                        .fill(.primary.opacity(isPaused ? 0.2 : (isHoveringBars ? 0.6 : 0.4)))
+                        .fill(.primary.opacity(isPaused ? 0.2 : 0.4))
                         .frame(width: 3.5, height: barHeight(for: i))
                 }
             }
@@ -66,18 +56,14 @@ struct OverlayView: View {
             .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
             .animation(.easeInOut(duration: 0.2), value: isPaused)
             .contentShape(Rectangle())
-            .floatingHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringBars = h } }
             .onTapGesture { appState.toggleRecording() }
 
-            // Pause / Resume button — slides in from right on hover
+            // Pause / Resume button (right)
             Image(systemName: isPaused ? "play.fill" : "pause.fill")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.primary.opacity(isHoveringPause ? 0.5 : 0.25))
-                .frame(width: showButtons ? 16 : 0, height: 16)
-                .opacity(showButtons ? 1 : 0)
-                .clipped()
+                .foregroundStyle(.primary.opacity(0.25))
+                .frame(width: 16, height: 16)
                 .contentShape(Rectangle())
-                .floatingHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringPause = h } }
                 .onTapGesture {
                     if isPaused { appState.resumeRecording() }
                     else { appState.pauseRecording() }
@@ -163,67 +149,3 @@ private extension View {
     }
 }
 
-// MARK: - Floating Hover (for individual elements within the panel)
-//
-// Uses NSTrackingArea with .activeAlways for element-level hover effects
-// (bar brightness, button highlight) on non-activating panels.
-
-private struct FloatingHoverTracker: NSViewRepresentable {
-    let onChange: (Bool) -> Void
-
-    func makeNSView(context: Context) -> FloatingHoverNSView {
-        let view = FloatingHoverNSView()
-        view.onChange = onChange
-        return view
-    }
-
-    func updateNSView(_ nsView: FloatingHoverNSView, context: Context) {
-        nsView.onChange = onChange
-    }
-}
-
-private class FloatingHoverNSView: NSView {
-    var onChange: ((Bool) -> Void)?
-    private var area: NSTrackingArea?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        reinstallTrackingArea()
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        reinstallTrackingArea()
-    }
-
-    override func layout() {
-        super.layout()
-        reinstallTrackingArea()
-    }
-
-    private func reinstallTrackingArea() {
-        if let area { removeTrackingArea(area) }
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area!)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        onChange?(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        onChange?(false)
-    }
-}
-
-private extension View {
-    func floatingHover(onChange: @escaping (Bool) -> Void) -> some View {
-        background(FloatingHoverTracker(onChange: onChange))
-    }
-}

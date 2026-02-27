@@ -17,8 +17,6 @@ class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
     @Published var recordingStartTime: Date?
-    @Published var isPillHovered = false
-
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
 
