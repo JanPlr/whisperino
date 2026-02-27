@@ -91,16 +91,13 @@ class AppState: ObservableObject {
 
     /// Request accessibility permission (shows system prompt if not yet granted)
     static func ensureAccessibility() {
-        let trusted = AXIsProcessTrusted()
-        NSLog("[WhisperFlow] Accessibility trusted: \(trusted)")
-        if !trusted {
+        if !AXIsProcessTrusted() {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
             AXIsProcessTrustedWithOptions(options)
         }
     }
 
     private func simulatePaste() {
-        // CGEvent is instant; AppleScript spawns a subprocess and takes seconds
         let source = CGEventSource(stateID: .combinedSessionState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
         keyDown?.flags = .maskCommand

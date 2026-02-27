@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import SwiftUI
 
 class StatusBarController {
     private let statusItem: NSStatusItem
@@ -73,8 +72,6 @@ class StatusBarController {
         guard let button = statusItem.button else { return }
         let symbolName: String
         switch state {
-        case .recording:
-            symbolName = "mic.fill"
         case .transcribing:
             symbolName = "waveform"
         default:

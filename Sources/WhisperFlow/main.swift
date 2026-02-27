@@ -5,17 +5,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let appState = AppState()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSLog("[WhisperFlow] App launched, whisper available: \(appState.isSetUp)")
         AppState.ensureAccessibility()
         statusBarController = StatusBarController(appState: appState)
 
         HotkeyManager.shared.register {
-            NSLog("[WhisperFlow] Hotkey triggered!")
             DispatchQueue.main.async { [weak self] in
                 self?.appState.toggleRecording()
             }
         }
-        NSLog("[WhisperFlow] Hotkey registered (Option+D)")
     }
 }
 
