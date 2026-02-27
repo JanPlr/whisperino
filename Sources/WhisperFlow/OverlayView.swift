@@ -136,16 +136,48 @@ struct OverlayView: View {
     }
 }
 
-// MARK: - Overlay Chrome
+// MARK: - Liquid Glass Chrome
 
 private extension View {
     func overlayChrome() -> some View {
         self
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 11)
+            .background(.ultraThinMaterial, in: Capsule())
+            // Inner luminance — subtle top-down glow simulating light refraction
+            .overlay {
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white.opacity(0.14), location: 0),
+                                .init(color: .white.opacity(0.04), location: 0.45),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .allowsHitTesting(false)
+            }
+            // Specular highlight stroke — bright top edge fading down
+            .overlay {
+                Capsule()
+                    .strokeBorder(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white.opacity(0.55), location: 0),
+                                .init(color: .white.opacity(0.12), location: 0.35),
+                                .init(color: .white.opacity(0.04), location: 0.7),
+                                .init(color: .white.opacity(0.08), location: 1),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.5
+                    )
+                    .allowsHitTesting(false)
+            }
     }
 }
 

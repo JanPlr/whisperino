@@ -6,12 +6,14 @@ class AudioRecorder {
     private var audioFile: AVAudioFile?
     private var tempURL: URL?
     private var smoothedLevel: Float = 0
+    private var isPaused = false
 
     func start(levelCallback: @escaping (Float) -> Void) throws {
         let tempDir = FileManager.default.temporaryDirectory
         let url = tempDir.appendingPathComponent("whisperflow_\(UUID().uuidString).wav")
         self.tempURL = url
         smoothedLevel = 0
+        isPaused = false
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
@@ -22,6 +24,12 @@ class AudioRecorder {
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
+
+            // When paused, keep engine running but skip writing and report zero level
+            guard !self.isPaused else {
+                levelCallback(0)
+                return
+            }
 
             // Calculate RMS and convert to a visible 0..1 range
             if let channelData = buffer.floatChannelData {
@@ -58,11 +66,11 @@ class AudioRecorder {
     }
 
     func pause() {
-        audioEngine?.pause()
+        isPaused = true
     }
 
-    func resume() throws {
-        try audioEngine?.start()
+    func resume() {
+        isPaused = false
     }
 
     func stop() -> URL? {

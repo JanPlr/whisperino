@@ -74,13 +74,8 @@ class AppState: ObservableObject {
     /// Resume a paused recording
     func resumeRecording() {
         guard case .paused = state else { return }
-        do {
-            try recorder.resume()
-            state = .recording
-        } catch {
-            state = .error(message: "Resume failed")
-            autoDismiss(after: 3)
-        }
+        recorder.resume()
+        state = .recording
     }
 
     /// Cancel recording and discard audio
