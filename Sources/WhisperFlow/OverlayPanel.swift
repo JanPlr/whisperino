@@ -8,7 +8,7 @@ class OverlayPanel {
     init(appState: AppState) {
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 340, height: 56),
-            styleMask: [.nonactivatingPanel],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -27,6 +27,7 @@ class OverlayPanel {
         )
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = .clear
+        hostingView.layer?.isOpaque = false
         panel.contentView = hostingView
     }
 
