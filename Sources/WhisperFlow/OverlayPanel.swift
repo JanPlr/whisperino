@@ -63,7 +63,7 @@ class OverlayPanel {
         let screenFrame = screen.visibleFrame
         let panelSize = panel.frame.size
         let x = screenFrame.midX - panelSize.width / 2
-        let y = screenFrame.minY + 24
+        let y = screenFrame.minY + 60
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }

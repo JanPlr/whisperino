@@ -38,8 +38,8 @@ struct OverlayView: View {
         HStack(spacing: 10) {
             // Cancel button (left)
             Image(systemName: "xmark")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.red.opacity(0.5))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.primary.opacity(0.25))
                 .frame(width: 16, height: 16)
                 .contentShape(Rectangle())
                 .onTapGesture { appState.cancelRecording() }
@@ -60,8 +60,8 @@ struct OverlayView: View {
 
             // Pause / Resume button (right)
             Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.primary.opacity(0.45))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.primary.opacity(0.25))
                 .frame(width: 16, height: 16)
                 .contentShape(Rectangle())
                 .onTapGesture {
