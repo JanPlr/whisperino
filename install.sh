@@ -1,43 +1,53 @@
 #!/bin/bash
 set -e
 
-echo "==> WhisperFlow Installer"
+echo ""
+echo "  ╦ ╦┬ ┬┬┌─┐┌─┐┌─┐┬─┐╔═╗┬  ┌─┐┬ ┬"
+echo "  ║║║├─┤│└─┐├─┘├┤ ├┬┘╠╣ │  │ ││││"
+echo "  ╚╩╝┴ ┴┴└─┘┴  └─┘┴└─╚  ┴─┘└─┘└┴┘"
+echo ""
+echo "  Local voice transcription for macOS"
 echo ""
 
 # Check for Xcode Command Line Tools
 if ! xcode-select -p &>/dev/null; then
-    echo "Xcode Command Line Tools not found. Installing..."
+    echo "[1/4] Installing Xcode Command Line Tools..."
     xcode-select --install
-    echo "Please re-run this script after installation completes."
+    echo ""
+    echo "  Please re-run this script after installation completes."
     exit 1
 fi
+echo "[1/4] Xcode Command Line Tools: OK"
 
-# Step 1: Setup whisper.cpp + model
-echo "==> Step 1/3: Setting up whisper.cpp and downloading model..."
-./setup.sh
+# Setup whisper.cpp + model
+if [ -f "$HOME/.whisper-flow/bin/whisper-cli" ] && [ -f "$HOME/.whisper-flow/models/ggml-small.bin" ]; then
+    echo "[2/4] whisper.cpp + model: already installed"
+else
+    echo "[2/4] Installing whisper.cpp + downloading model (~466 MB)..."
+    ./setup.sh
+fi
 
-# Step 2: Build the app
-echo ""
-echo "==> Step 2/3: Building WhisperFlow.app..."
+# Build the app
+echo "[3/4] Building WhisperFlow.app..."
 ./build.sh
 
-# Step 3: Install to /Applications
-echo ""
-echo "==> Step 3/3: Installing to /Applications..."
+# Install to /Applications
+echo "[4/4] Installing to /Applications..."
 if [ -d "/Applications/WhisperFlow.app" ]; then
-    echo "    Removing old version..."
     rm -rf "/Applications/WhisperFlow.app"
 fi
 cp -R build/WhisperFlow.app /Applications/
-echo "    Installed to /Applications/WhisperFlow.app"
 
 echo ""
-echo "==> Done! WhisperFlow is ready."
+echo "  ✓ WhisperFlow installed successfully!"
 echo ""
-echo "    Open from Spotlight: search 'WhisperFlow'"
-echo "    Or run: open /Applications/WhisperFlow.app"
+echo "  Launch:    open /Applications/WhisperFlow.app"
+echo "             or search 'WhisperFlow' in Spotlight"
 echo ""
-echo "    Shortcut: Option+D to toggle recording"
+echo "  Usage:     Option+D to start/stop recording"
+echo "             Click the menu bar icon to record"
+echo "             Right-click menu bar icon for options"
 echo ""
-echo "    First launch: macOS will ask for Microphone and"
-echo "    Accessibility permissions. Grant both for auto-paste."
+echo "  First run: Grant Microphone + Accessibility"
+echo "             when macOS prompts you."
+echo ""

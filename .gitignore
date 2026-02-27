@@ -5,3 +5,4 @@ build/
 *.xcworkspace
 DerivedData/
 .swiftpm/
+dist/
