@@ -10,7 +10,7 @@ class StatusBarController: NSObject {
 
     init(appState: AppState) {
         self.appState = appState
-        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.overlayPanel = OverlayPanel(appState: appState)
         self.menu = NSMenu()
         super.init()
@@ -20,38 +20,11 @@ class StatusBarController: NSObject {
         observeState()
     }
 
-    // MARK: - Custom waveform icon
-
-    private static func makeWaveformImage(height: CGFloat, barColor: NSColor) -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let image = NSImage(size: size, flipped: false) { rect in
-            let barWidth: CGFloat = 1.6
-            let gap: CGFloat = 2.4
-            let barHeights: [CGFloat] = [0.30, 0.55, 1.0, 0.55, 0.30]
-            let totalWidth = CGFloat(barHeights.count) * barWidth + CGFloat(barHeights.count - 1) * gap
-            let startX = (rect.width - totalWidth) / 2
-            let maxBarHeight = rect.height * 0.7
-
-            barColor.setFill()
-            for (i, ratio) in barHeights.enumerated() {
-                let h = max(barWidth, maxBarHeight * ratio)
-                let x = startX + CGFloat(i) * (barWidth + gap)
-                let y = (rect.height - h) / 2
-                let bar = NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: h),
-                                       xRadius: barWidth / 2, yRadius: barWidth / 2)
-                bar.fill()
-            }
-            return true
-        }
-        image.isTemplate = true
-        return image
-    }
-
-    // MARK: - Setup
-
     private func setupButton() {
         guard let button = statusItem.button else { return }
-        button.image = Self.makeWaveformImage(height: 18, barColor: .black)
+        let image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "WhisperFlow")
+        image?.isTemplate = true
+        button.image = image
         button.target = self
         button.action = #selector(statusBarClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -82,14 +55,11 @@ class StatusBarController: NSObject {
         menu.addItem(quitItem)
     }
 
-    // MARK: - Actions
-
     @objc private func statusBarClicked(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
             statusItem.menu = menu
             statusItem.button?.performClick(nil)
-            // Remove menu so left-click works again next time
             DispatchQueue.main.async { self.statusItem.menu = nil }
         } else {
             appState.toggleRecording()
@@ -103,8 +73,6 @@ class StatusBarController: NSObject {
     @objc private func quit() {
         NSApp.terminate(nil)
     }
-
-    // MARK: - State observation
 
     private func observeState() {
         appState.$state
@@ -123,18 +91,20 @@ class StatusBarController: NSObject {
 
     private func updateStatusIcon(for state: TranscriptionState) {
         guard let button = statusItem.button else { return }
-
+        let symbolName: String
         switch state {
-        case .recording:
-            button.image = Self.makeWaveformImage(height: 18, barColor: .black)
-            button.contentTintColor = .systemRed
         case .transcribing:
-            let img = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
-            img?.isTemplate = true
-            button.image = img
-            button.contentTintColor = nil
+            symbolName = "waveform"
         default:
-            button.image = Self.makeWaveformImage(height: 18, barColor: .black)
+            symbolName = "mic.fill"
+        }
+        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        image?.isTemplate = true
+        button.image = image
+
+        if case .recording = state {
+            button.contentTintColor = .systemRed
+        } else {
             button.contentTintColor = nil
         }
     }
