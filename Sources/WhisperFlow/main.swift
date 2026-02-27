@@ -8,11 +8,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AppState.ensureAccessibility()
         statusBarController = StatusBarController(appState: appState)
 
-        HotkeyManager.shared.register {
-            DispatchQueue.main.async { [weak self] in
-                self?.appState.toggleRecording()
+        HotkeyManager.shared.register(
+            onPress: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.appState.hotkeyPressed()
+                }
+            },
+            onRelease: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.appState.hotkeyReleased()
+                }
             }
-        }
+        )
     }
 }
 

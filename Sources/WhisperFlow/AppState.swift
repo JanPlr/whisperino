@@ -8,6 +8,7 @@ enum TranscriptionState: Equatable {
     case recording
     case transcribing
     case result(text: String)
+    case dismissing
     case error(message: String)
 }
 
@@ -19,17 +20,48 @@ class AppState: ObservableObject {
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
 
+    /// Timestamp when the hotkey was pressed (for push-to-talk detection)
+    private var hotkeyPressTime: Date?
+    /// Hold longer than this to activate push-to-talk mode
+    private let pushToTalkThreshold: TimeInterval = 0.4
+
     var isSetUp: Bool { transcriber.isAvailable }
 
+    /// Toggle recording (used by menu bar click)
     func toggleRecording() {
         switch state {
-        case .idle, .result, .error:
+        case .idle, .result, .error, .dismissing:
             startRecording()
         case .recording:
             stopRecording()
         case .transcribing:
             break
         }
+    }
+
+    /// Called when the hotkey is pressed down
+    func hotkeyPressed() {
+        hotkeyPressTime = Date()
+        switch state {
+        case .idle, .result, .error, .dismissing:
+            startRecording()
+        case .recording:
+            // Quick tap toggle: pressing again while recording stops it
+            stopRecording()
+        case .transcribing:
+            break
+        }
+    }
+
+    /// Called when the hotkey is released — stops recording if held long enough (push-to-talk)
+    func hotkeyReleased() {
+        guard case .recording = state,
+              let pressTime = hotkeyPressTime,
+              Date().timeIntervalSince(pressTime) > pushToTalkThreshold else {
+            return
+        }
+        // Push-to-talk: held long enough, release stops recording
+        stopRecording()
     }
 
     private func startRecording() {
@@ -78,13 +110,28 @@ class AppState: ObservableObject {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         self.simulatePaste()
                     }
-                    self.autoDismiss(after: 3)
+                    // Animated dismiss sequence: result → dismissing → idle
+                    self.startDismissSequence()
                 }
             } catch {
                 await MainActor.run {
                     self.state = .error(message: "Transcription failed")
                     self.autoDismiss(after: 3)
                 }
+            }
+        }
+    }
+
+    /// Animated dismiss: show result briefly, then shrink away
+    private func startDismissSequence() {
+        // Show "Copied to clipboard" for 1.2s
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard case .result = self?.state else { return }
+            self?.state = .dismissing
+            // After shrink animation completes, fully hide
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard case .dismissing = self?.state else { return }
+                self?.state = .idle
             }
         }
     }

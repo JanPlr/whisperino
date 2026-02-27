@@ -5,30 +5,43 @@ class HotkeyManager {
     static let shared = HotkeyManager()
 
     private var hotKeyRef: EventHotKeyRef?
-    private var onTrigger: (() -> Void)?
+    private var onPress: (() -> Void)?
+    private var onRelease: (() -> Void)?
 
-    func register(callback: @escaping () -> Void) {
-        self.onTrigger = callback
+    func register(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
+        self.onPress = onPress
+        self.onRelease = onRelease
         registerCarbonHotkey()
     }
 
-    func handleHotkey() {
-        onTrigger?()
+    func handleHotkeyPress() {
+        onPress?()
+    }
+
+    func handleHotkeyRelease() {
+        onRelease?()
     }
 
     private func registerCarbonHotkey() {
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+        // Listen for both key press AND key release (for push-to-talk)
+        var eventTypes = [
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            ),
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyReleased)
+            ),
+        ]
 
         let handlerRef = Unmanaged.passUnretained(self).toOpaque()
 
         InstallEventHandler(
             GetApplicationEventTarget(),
             carbonHotkeyHandler,
-            1,
-            &eventType,
+            2,
+            &eventTypes,
             handlerRef,
             nil
         )
@@ -52,12 +65,18 @@ private func carbonHotkeyHandler(
     event: EventRef?,
     userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    guard let userData = userData else {
+    guard let userData = userData, let event = event else {
         return OSStatus(eventNotHandledErr)
     }
     let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+    let eventKind = GetEventKind(event)
+
     DispatchQueue.main.async {
-        manager.handleHotkey()
+        if eventKind == UInt32(kEventHotKeyPressed) {
+            manager.handleHotkeyPress()
+        } else if eventKind == UInt32(kEventHotKeyReleased) {
+            manager.handleHotkeyRelease()
+        }
     }
     return noErr
 }

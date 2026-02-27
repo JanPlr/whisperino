@@ -4,6 +4,11 @@ struct OverlayView: View {
     @ObservedObject var appState: AppState
     @State private var isPulsing = false
 
+    private var isDismissing: Bool {
+        if case .dismissing = appState.state { return true }
+        return false
+    }
+
     var body: some View {
         Group {
             switch appState.state {
@@ -13,14 +18,14 @@ struct OverlayView: View {
                 recordingView
             case .transcribing:
                 transcribingView
-            case .result(let text):
-                resultView(text: text)
+            case .result, .dismissing:
+                resultDismissView
             case .error(let message):
                 errorView(message: message)
             }
         }
         .frame(width: 320)
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: appState.state)
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: appState.state)
     }
 
     // MARK: - Recording
@@ -47,7 +52,7 @@ struct OverlayView: View {
 
             durationLabel
 
-            shortcutBadge("Stop")
+            shortcutBadge("Release or tap")
         }
         .overlayChrome()
     }
@@ -101,28 +106,24 @@ struct OverlayView: View {
         .overlayChrome()
     }
 
-    // MARK: - Result
+    // MARK: - Result / Dismissing (Dynamic Island-style)
 
-    private func resultView(text: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.green)
+    private var resultDismissView: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(.green)
 
-                Text("Copied to clipboard")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+            Text("Copied to clipboard")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
 
-                Spacer()
-            }
-
-            Text(text)
-                .font(.system(size: 13))
-                .lineLimit(3)
-                .truncationMode(.tail)
+            Spacer()
         }
         .overlayChrome()
+        .scaleEffect(isDismissing ? 0.6 : 1.0)
+        .opacity(isDismissing ? 0 : 1.0)
+        .animation(.easeInOut(duration: 0.4), value: isDismissing)
     }
 
     // MARK: - Error
