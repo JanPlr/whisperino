@@ -3,6 +3,7 @@ import SwiftUI
 struct OverlayView: View {
     @ObservedObject var appState: AppState
     @State private var isHoveringBars = false
+    @State private var isHoveringPill = false
     @State private var isHoveringCancel = false
     @State private var isHoveringPause = false
 
@@ -37,18 +38,23 @@ struct OverlayView: View {
 
     // MARK: - Recording
 
+    /// Whether buttons should be visible (hover or paused state)
+    private var showButtons: Bool { isHoveringPill || isPaused }
+
     private var recordingView: some View {
-        HStack(spacing: 10) {
-            // Cancel button
+        HStack(spacing: showButtons ? 10 : 0) {
+            // Cancel button — slides in from left on hover
             Image(systemName: "xmark")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.primary.opacity(isHoveringCancel ? 0.5 : 0.2))
-                .frame(width: 16, height: 16)
+                .foregroundStyle(.primary.opacity(isHoveringCancel ? 0.5 : 0.25))
+                .frame(width: showButtons ? 16 : 0, height: 16)
+                .opacity(showButtons ? 1 : 0)
+                .clipped()
                 .contentShape(Rectangle())
                 .onHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringCancel = h } }
                 .onTapGesture { appState.cancelRecording() }
 
-            // Waveform bars
+            // Waveform bars — always visible, clickable to submit
             HStack(spacing: 2.5) {
                 ForEach(0..<5, id: \.self) { i in
                     RoundedRectangle(cornerRadius: 2)
@@ -63,11 +69,13 @@ struct OverlayView: View {
             .onHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringBars = h } }
             .onTapGesture { appState.toggleRecording() }
 
-            // Pause / Resume button
+            // Pause / Resume button — slides in from right on hover
             Image(systemName: isPaused ? "play.fill" : "pause.fill")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.primary.opacity(isHoveringPause ? 0.5 : 0.2))
-                .frame(width: 16, height: 16)
+                .foregroundStyle(.primary.opacity(isHoveringPause ? 0.5 : 0.25))
+                .frame(width: showButtons ? 16 : 0, height: 16)
+                .opacity(showButtons ? 1 : 0)
+                .clipped()
                 .contentShape(Rectangle())
                 .onHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringPause = h } }
                 .onTapGesture {
@@ -76,6 +84,9 @@ struct OverlayView: View {
                 }
         }
         .overlayChrome()
+        .onHover { h in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { isHoveringPill = h }
+        }
     }
 
     private func barHeight(for index: Int) -> CGFloat {
