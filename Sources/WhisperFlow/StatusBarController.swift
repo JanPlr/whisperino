@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 
-class StatusBarController: NSObject {
+class StatusBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let appState: AppState
     private let overlayPanel: OverlayPanel
@@ -10,74 +10,21 @@ class StatusBarController: NSObject {
 
     init(appState: AppState) {
         self.appState = appState
-        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.overlayPanel = OverlayPanel(appState: appState)
         self.menu = NSMenu()
         super.init()
 
+        menu.delegate = self
         setupButton()
         buildMenu()
         observeState()
     }
 
-    /// Custom 5-bar waveform icon matching the app icon, drawn as a template image
-    private static func makeIcon() -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let image = NSImage(size: size, flipped: false) { rect in
-            let barWidth: CGFloat = 2.0
-            let gap: CGFloat = 2.0
-            let heights: [CGFloat] = [0.28, 0.52, 1.0, 0.52, 0.28]
-            let totalW = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
-            let originX = (rect.width - totalW) / 2
-            let maxH = rect.height * 0.65
-
-            NSColor.black.setFill()
-            for (i, ratio) in heights.enumerated() {
-                let h = max(barWidth, maxH * ratio)
-                let x = originX + CGFloat(i) * (barWidth + gap)
-                let y = (rect.height - h) / 2
-                NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: h),
-                             xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
-            }
-            return true
-        }
-        image.isTemplate = true
-        return image
-    }
-
-    /// Red-tinted recording icon — filled circle with white bars inside
-    private static func makeRecordingIcon() -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let image = NSImage(size: size, flipped: false) { rect in
-            let inset: CGFloat = 1
-            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: inset, dy: inset))
-            NSColor.black.setFill()
-            circle.fill()
-
-            let barWidth: CGFloat = 1.6
-            let gap: CGFloat = 1.6
-            let heights: [CGFloat] = [0.25, 0.45, 0.8, 0.45, 0.25]
-            let totalW = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
-            let originX = (rect.width - totalW) / 2
-            let maxH = rect.height * 0.5
-
-            NSColor.white.setFill()
-            for (i, ratio) in heights.enumerated() {
-                let h = max(barWidth, maxH * ratio)
-                let x = originX + CGFloat(i) * (barWidth + gap)
-                let y = (rect.height - h) / 2
-                NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: h),
-                             xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
-            }
-            return true
-        }
-        image.isTemplate = false
-        return image
-    }
-
     private func setupButton() {
         guard let button = statusItem.button else { return }
-        button.image = Self.makeIcon()
+        button.title = " W "
+        button.font = NSFont.systemFont(ofSize: 11, weight: .bold)
         button.target = self
         button.action = #selector(statusBarClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -108,15 +55,20 @@ class StatusBarController: NSObject {
         menu.addItem(quitItem)
     }
 
+    // Left-click toggles recording, right-click opens menu
     @objc private func statusBarClicked(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
             statusItem.menu = menu
             statusItem.button?.performClick(nil)
-            DispatchQueue.main.async { self.statusItem.menu = nil }
         } else {
             appState.toggleRecording()
         }
+    }
+
+    // Remove menu after it closes so left-click works again
+    func menuDidClose(_ menu: NSMenu) {
+        statusItem.menu = nil
     }
 
     @objc private func toggleRecording() {
@@ -146,16 +98,14 @@ class StatusBarController: NSObject {
         guard let button = statusItem.button else { return }
         switch state {
         case .recording:
-            button.image = Self.makeRecordingIcon()
+            button.title = " ● REC "
             button.contentTintColor = .systemRed
         case .transcribing:
-            let img = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
-            img?.isTemplate = true
-            button.image = img
-            button.contentTintColor = nil
+            button.title = " W ··· "
+            button.contentTintColor = .secondaryLabelColor
         default:
-            button.image = Self.makeIcon()
-            button.contentTintColor = nil
+            button.title = " W "
+            button.contentTintColor = .labelColor
         }
     }
 }
