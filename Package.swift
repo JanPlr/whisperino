@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "WhisperFlow",
+    name: "Whisperino",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "WhisperFlow",
-            path: "Sources/WhisperFlow"
+            name: "Whisperino",
+            path: "Sources/Whisperino"
         ),
     ]
 )

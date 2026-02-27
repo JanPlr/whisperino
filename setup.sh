@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-INSTALL_DIR="$HOME/.whisper-flow"
+INSTALL_DIR="$HOME/.whisperino"
 WHISPER_REPO="https://github.com/ggerganov/whisper.cpp.git"
 MODEL_NAME="medium"
 
-echo "==> WhisperFlow Setup"
+echo "==> Whisperino Setup"
 echo ""
 
 # Check for cmake
@@ -80,4 +80,4 @@ echo "==> Setup complete!"
 echo "    Binary: $INSTALL_DIR/bin/whisper-cli"
 echo "    Model:  $MODEL_FILE"
 echo ""
-echo "    Next: Run ./build.sh to build WhisperFlow.app"
+echo "    Next: Run ./build.sh to build Whisperino.app"

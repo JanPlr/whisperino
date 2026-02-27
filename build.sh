@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-APP_NAME="WhisperFlow"
+APP_NAME="Whisperino"
 BUILD_DIR="build"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 
@@ -17,7 +17,7 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 # Copy binary
-cp .build/release/WhisperFlow "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+cp .build/release/Whisperino "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
 # Copy Info.plist and icon
 cp Info.plist "$APP_BUNDLE/Contents/"

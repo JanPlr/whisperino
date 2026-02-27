@@ -2,9 +2,9 @@
 set -e
 
 echo ""
-echo "  ╦ ╦┬ ┬┬┌─┐┌─┐┌─┐┬─┐╔═╗┬  ┌─┐┬ ┬"
-echo "  ║║║├─┤│└─┐├─┘├┤ ├┬┘╠╣ │  │ ││││"
-echo "  ╚╩╝┴ ┴┴└─┘┴  └─┘┴└─╚  ┴─┘└─┘└┴┘"
+echo "  ╦ ╦┬ ┬┬┌─┐┌─┐┌─┐┬─┐┬┌┐┌┌─┐"
+echo "  ║║║├─┤│└─┐├─┘├┤ ├┬┘│││││ │"
+echo "  ╚╩╝┴ ┴┴└─┘┴  └─┘┴└─┴┘└┘└─┘"
 echo ""
 echo "  Local voice transcription for macOS"
 echo ""
@@ -20,7 +20,7 @@ fi
 echo "[1/4] Xcode Command Line Tools: OK"
 
 # Setup whisper.cpp + model
-if [ -f "$HOME/.whisper-flow/bin/whisper-cli" ] && [ -f "$HOME/.whisper-flow/models/ggml-small.bin" ]; then
+if [ -f "$HOME/.whisperino/bin/whisper-cli" ] && [ -f "$HOME/.whisperino/models/ggml-small.bin" ]; then
     echo "[2/4] whisper.cpp + model: already installed"
 else
     echo "[2/4] Installing whisper.cpp + downloading model (~466 MB)..."
@@ -28,21 +28,21 @@ else
 fi
 
 # Build the app
-echo "[3/4] Building WhisperFlow.app..."
+echo "[3/4] Building Whisperino.app..."
 ./build.sh
 
 # Install to /Applications
 echo "[4/4] Installing to /Applications..."
-if [ -d "/Applications/WhisperFlow.app" ]; then
-    rm -rf "/Applications/WhisperFlow.app"
+if [ -d "/Applications/Whisperino.app" ]; then
+    rm -rf "/Applications/Whisperino.app"
 fi
-cp -R build/WhisperFlow.app /Applications/
+cp -R build/Whisperino.app /Applications/
 
 echo ""
-echo "  ✓ WhisperFlow installed successfully!"
+echo "  ✓ Whisperino installed successfully!"
 echo ""
-echo "  Launch:    open /Applications/WhisperFlow.app"
-echo "             or search 'WhisperFlow' in Spotlight"
+echo "  Launch:    open /Applications/Whisperino.app"
+echo "             or search 'Whisperino' in Spotlight"
 echo ""
 echo "  Usage:     Option+D to start/stop recording"
 echo "             Click the menu bar icon to record"

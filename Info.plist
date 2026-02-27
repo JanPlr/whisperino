@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>WhisperFlow</string>
+    <string>Whisperino</string>
     <key>CFBundleDisplayName</key>
-    <string>WhisperFlow</string>
+    <string>Whisperino</string>
     <key>CFBundleIdentifier</key>
-    <string>com.whisperflow.app</string>
+    <string>com.whisperino.app</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -15,13 +15,13 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>WhisperFlow</string>
+    <string>Whisperino</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>WhisperFlow needs microphone access to transcribe your voice.</string>
+    <string>Whisperino needs microphone access to transcribe your voice.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>CFBundleIconFile</key>

@@ -10,7 +10,7 @@ class AudioRecorder {
 
     func start(levelCallback: @escaping (Float) -> Void) throws {
         let tempDir = FileManager.default.temporaryDirectory
-        let url = tempDir.appendingPathComponent("whisperflow_\(UUID().uuidString).wav")
+        let url = tempDir.appendingPathComponent("whisperino_\(UUID().uuidString).wav")
         self.tempURL = url
         smoothedLevel = 0
         isPaused = false

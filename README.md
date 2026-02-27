@@ -1,4 +1,4 @@
-# WhisperFlow
+# Whisperino
 
 Minimal, local-only voice transcription for macOS. Lives in your menu bar, runs fully on-device using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with Metal GPU acceleration.
 
@@ -7,14 +7,14 @@ Press **Option+D** or click the menu bar icon to start recording. The transcribe
 ## Install
 
 ```bash
-git clone https://github.com/JanPlr/whisper-flow.git
-cd whisper-flow
+git clone https://github.com/JanPlr/whisperino.git
+cd whisperino
 ./install.sh
 ```
 
 That's it. The script handles everything: installs whisper.cpp with Metal acceleration, downloads the model (~1.5 GB), builds the app, and installs it to `/Applications`.
 
-After install, launch from **Spotlight** (search "WhisperFlow") or find it in `/Applications`.
+After install, launch from **Spotlight** (search "Whisperino") or find it in `/Applications`.
 
 ### Requirements
 
@@ -56,12 +56,12 @@ Default model is `medium` (1.5 GB, multilingual with strong language detection).
 | `small` | 466 MB | Medium | Better |
 | `medium` | 1.5 GB | Slower | High (default) |
 
-Models are stored in `~/.whisper-flow/models/`.
+Models are stored in `~/.whisperino/models/`.
 
 ## Manual setup
 
 ```bash
 ./setup.sh    # Install whisper.cpp + download model
-./build.sh    # Build WhisperFlow.app
-open build/WhisperFlow.app
+./build.sh    # Build Whisperino.app
+open build/Whisperino.app
 ```
