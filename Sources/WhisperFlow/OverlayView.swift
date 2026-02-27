@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct OverlayView: View {
@@ -51,7 +52,7 @@ struct OverlayView: View {
                 .opacity(showButtons ? 1 : 0)
                 .clipped()
                 .contentShape(Rectangle())
-                .onHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringCancel = h } }
+                .floatingHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringCancel = h } }
                 .onTapGesture { appState.cancelRecording() }
 
             // Waveform bars — always visible, clickable to submit
@@ -66,7 +67,7 @@ struct OverlayView: View {
             .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
             .animation(.easeInOut(duration: 0.2), value: isPaused)
             .contentShape(Rectangle())
-            .onHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringBars = h } }
+            .floatingHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringBars = h } }
             .onTapGesture { appState.toggleRecording() }
 
             // Pause / Resume button — slides in from right on hover
@@ -77,14 +78,14 @@ struct OverlayView: View {
                 .opacity(showButtons ? 1 : 0)
                 .clipped()
                 .contentShape(Rectangle())
-                .onHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringPause = h } }
+                .floatingHover { h in withAnimation(.easeInOut(duration: 0.15)) { isHoveringPause = h } }
                 .onTapGesture {
                     if isPaused { appState.resumeRecording() }
                     else { appState.pauseRecording() }
                 }
         }
         .overlayChrome()
-        .onHover { h in
+        .floatingHover { h in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { isHoveringPill = h }
         }
     }
@@ -153,6 +154,8 @@ struct OverlayView: View {
     }
 }
 
+// MARK: - Overlay Chrome
+
 private extension View {
     func overlayChrome() -> some View {
         self
@@ -161,5 +164,57 @@ private extension View {
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
+    }
+}
+
+// MARK: - Floating Hover (works on non-activating panels)
+//
+// SwiftUI's .onHover uses NSTrackingArea with .activeInKeyWindow,
+// which doesn't fire when the app isn't focused. This custom
+// implementation uses .activeAlways so hover works on our floating
+// panel even while another app has keyboard focus.
+
+private struct FloatingHoverTracker: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> FloatingHoverNSView {
+        let view = FloatingHoverNSView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ nsView: FloatingHoverNSView, context: Context) {
+        nsView.onChange = onChange
+    }
+}
+
+private class FloatingHoverNSView: NSView {
+    var onChange: ((Bool) -> Void)?
+    private var area: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onChange?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onChange?(false)
+    }
+}
+
+private extension View {
+    func floatingHover(onChange: @escaping (Bool) -> Void) -> some View {
+        background(FloatingHoverTracker(onChange: onChange))
     }
 }
