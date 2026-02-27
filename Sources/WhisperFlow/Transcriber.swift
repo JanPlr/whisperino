@@ -26,7 +26,7 @@ class Transcriber {
         let home = FileManager.default.homeDirectoryForCurrentUser
         baseDir = home.appendingPathComponent(".whisper-flow")
         whisperBinary = baseDir.appendingPathComponent("bin/whisper-cli")
-        modelPath = baseDir.appendingPathComponent("models/ggml-base.bin")
+        modelPath = baseDir.appendingPathComponent("models/ggml-small.bin")
     }
 
     var isAvailable: Bool {
@@ -57,8 +57,20 @@ class Transcriber {
 
             process.terminationHandler = { _ in
                 let data = stdout.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8)?
+                var output = String(data: data, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                // Strip whisper special tokens
+                for token in ["[EOT]", "[SOT]", "[BEG]", "[END]", "[BLANK_AUDIO]"] {
+                    output = output.replacingOccurrences(of: token, with: "")
+                }
+                // Also strip bracket tokens like [_TT_123]
+                output = output.replacingOccurrences(
+                    of: "\\[_[A-Z]+_\\d*\\]",
+                    with: "",
+                    options: .regularExpression
+                )
+                output = output.trimmingCharacters(in: .whitespacesAndNewlines)
 
                 // Clean up temp audio file
                 try? FileManager.default.removeItem(at: audioURL)

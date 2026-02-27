@@ -1,26 +1,22 @@
 import Carbon
 import Foundation
 
-@MainActor
 class HotkeyManager {
     static let shared = HotkeyManager()
 
     private var hotKeyRef: EventHotKeyRef?
-    nonisolated private var onTrigger: (@Sendable () -> Void)?
+    private var onTrigger: (() -> Void)?
 
-    nonisolated init() {}
-
-    func register(callback: @escaping @Sendable () -> Void) {
+    func register(callback: @escaping () -> Void) {
         self.onTrigger = callback
         registerCarbonHotkey()
     }
 
-    nonisolated func handleHotkey() {
+    func handleHotkey() {
         onTrigger?()
     }
 
     private func registerCarbonHotkey() {
-        // Register for hotkey pressed events
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)

@@ -19,8 +19,9 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 # Copy binary
 cp .build/release/WhisperFlow "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
-# Copy Info.plist
+# Copy Info.plist and icon
 cp Info.plist "$APP_BUNDLE/Contents/"
+cp AppIcon.icns "$APP_BUNDLE/Contents/Resources/"
 
 # Ad-hoc code sign (required for microphone access)
 codesign --force --sign - "$APP_BUNDLE"

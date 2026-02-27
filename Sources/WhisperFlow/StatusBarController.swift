@@ -2,7 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-@MainActor
 class StatusBarController {
     private let statusItem: NSStatusItem
     private let appState: AppState

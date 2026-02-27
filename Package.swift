@@ -7,10 +7,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "WhisperFlow",
-            path: "Sources/WhisperFlow",
-            swiftSettings: [
-                .unsafeFlags(["-parse-as-library"])
-            ]
+            path: "Sources/WhisperFlow"
         ),
     ]
 )

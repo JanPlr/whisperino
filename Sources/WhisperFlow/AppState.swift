@@ -1,5 +1,7 @@
 import AppKit
+import Carbon
 import Combine
+import CoreGraphics
 
 enum TranscriptionState: Equatable {
     case idle
@@ -9,7 +11,6 @@ enum TranscriptionState: Equatable {
     case error(message: String)
 }
 
-@MainActor
 class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
@@ -40,7 +41,7 @@ class AppState: ObservableObject {
 
         do {
             try recorder.start { [weak self] level in
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     self?.audioLevel = level
                 }
             }
@@ -64,28 +65,56 @@ class AppState: ObservableObject {
         Task {
             do {
                 let text = try await transcriber.transcribe(audioURL: audioURL)
-                guard !text.isEmpty else {
-                    state = .error(message: "No speech detected")
-                    autoDismiss(after: 2)
-                    return
+                await MainActor.run {
+                    guard !text.isEmpty else {
+                        self.state = .error(message: "No speech detected")
+                        self.autoDismiss(after: 2)
+                        return
+                    }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    self.state = .result(text: text)
+                    // Paste into focused text field
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        self.simulatePaste()
+                    }
+                    self.autoDismiss(after: 3)
                 }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                state = .result(text: text)
-                autoDismiss(after: 3)
             } catch {
-                state = .error(message: "Transcription failed")
-                autoDismiss(after: 3)
+                await MainActor.run {
+                    self.state = .error(message: "Transcription failed")
+                    self.autoDismiss(after: 3)
+                }
             }
         }
     }
 
+    /// Request accessibility permission (shows system prompt if not yet granted)
+    static func ensureAccessibility() {
+        let trusted = AXIsProcessTrusted()
+        NSLog("[WhisperFlow] Accessibility trusted: \(trusted)")
+        if !trusted {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+            AXIsProcessTrustedWithOptions(options)
+        }
+    }
+
+    private func simulatePaste() {
+        // CGEvent is instant; AppleScript spawns a subprocess and takes seconds
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
+        keyDown?.flags = .maskCommand
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
+        keyUp?.flags = .maskCommand
+        keyDown?.post(tap: .cghidEventTap)
+        keyUp?.post(tap: .cghidEventTap)
+    }
+
     private func autoDismiss(after seconds: Double) {
         let currentState = state
-        Task {
-            try? await Task.sleep(for: .seconds(seconds))
-            if state == currentState {
-                state = .idle
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            if self?.state == currentState {
+                self?.state = .idle
             }
         }
     }

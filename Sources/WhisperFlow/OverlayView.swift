@@ -55,20 +55,21 @@ struct OverlayView: View {
     private var audioLevelBars: some View {
         HStack(spacing: 2) {
             ForEach(0..<5, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(.primary.opacity(0.35))
-                    .frame(width: 2, height: barHeight(for: i))
-                    .animation(.easeOut(duration: 0.1), value: appState.audioLevel)
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(.primary.opacity(0.4))
+                    .frame(width: 3, height: barHeight(for: i))
             }
         }
         .frame(height: 16)
+        .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
     }
 
     private func barHeight(for index: Int) -> CGFloat {
-        let base: CGFloat = 4
-        let level = CGFloat(appState.audioLevel)
-        let variation = CGFloat(index % 3 + 1) / 3.0
-        return min(16, max(base, level * 80 * variation))
+        let level = CGFloat(appState.audioLevel) // already 0..1
+        // Each bar gets a different scale for a waveform look
+        let patterns: [CGFloat] = [0.5, 0.8, 1.0, 0.7, 0.4]
+        let barLevel = level * patterns[index]
+        return max(3, barLevel * 16)
     }
 
     private var durationLabel: some View {

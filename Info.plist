@@ -24,5 +24,7 @@
     <string>WhisperFlow needs microphone access to transcribe your voice.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>

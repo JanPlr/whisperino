@@ -5,22 +5,25 @@ class AudioRecorder {
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
     private var tempURL: URL?
+    private var smoothedLevel: Float = 0
 
     func start(levelCallback: @escaping (Float) -> Void) throws {
         let tempDir = FileManager.default.temporaryDirectory
         let url = tempDir.appendingPathComponent("whisperflow_\(UUID().uuidString).wav")
         self.tempURL = url
+        smoothedLevel = 0
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        // Record in native format - whisper.cpp handles resampling
         let audioFile = try AVAudioFile(forWriting: url, settings: inputFormat.settings)
         self.audioFile = audioFile
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            // Calculate RMS audio level
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+            guard let self = self else { return }
+
+            // Calculate RMS and convert to a visible 0..1 range
             if let channelData = buffer.floatChannelData {
                 let frames = Int(buffer.frameLength)
                 var sum: Float = 0
@@ -29,15 +32,24 @@ class AudioRecorder {
                     sum += sample * sample
                 }
                 let rms = sqrt(sum / max(Float(frames), 1))
-                levelCallback(rms)
+
+                // Convert to decibels, then normalize to 0..1
+                // More sensitive: -60dB=0, -15dB=1
+                let db = 20 * log10(max(rms, 1e-6))
+                let normalized = max(0, min(1, (db + 60) / 45))
+
+                // Smooth: fast attack, slow decay
+                let attack: Float = 0.7
+                let decay: Float = 0.2
+                let factor = normalized > self.smoothedLevel ? attack : decay
+                self.smoothedLevel += factor * (normalized - self.smoothedLevel)
+
+                levelCallback(self.smoothedLevel)
             }
 
-            // Write buffer to file
             do {
-                try self?.audioFile?.write(from: buffer)
-            } catch {
-                // Silently skip write errors for individual buffers
-            }
+                try self.audioFile?.write(from: buffer)
+            } catch {}
         }
 
         engine.prepare()

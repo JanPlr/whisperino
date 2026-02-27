@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-@MainActor
 class OverlayPanel {
     private let panel: NSPanel
     private var isVisible = false
