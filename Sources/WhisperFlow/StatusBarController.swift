@@ -10,7 +10,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     init(appState: AppState) {
         self.appState = appState
-        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.overlayPanel = OverlayPanel(appState: appState)
         self.menu = NSMenu()
         super.init()
@@ -21,10 +21,34 @@ class StatusBarController: NSObject, NSMenuDelegate {
         observeState()
     }
 
+    private static func makeIcon(barColor: NSColor) -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let barWidth: CGFloat = 2.0
+            let gap: CGFloat = 2.0
+            let heights: [CGFloat] = [0.30, 0.55, 1.0, 0.55, 0.30]
+            let totalW = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
+            let originX = (rect.width - totalW) / 2
+            let maxH = rect.height * 0.68
+
+            barColor.setFill()
+            for (i, ratio) in heights.enumerated() {
+                let h = max(barWidth, maxH * ratio)
+                let x = originX + CGFloat(i) * (barWidth + gap)
+                let y = (rect.height - h) / 2
+                NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: h),
+                             xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
+            }
+            return true
+        }
+        // NOT template — we control the color explicitly
+        image.isTemplate = false
+        return image
+    }
+
     private func setupButton() {
         guard let button = statusItem.button else { return }
-        button.title = " W "
-        button.font = NSFont.systemFont(ofSize: 11, weight: .bold)
+        button.image = Self.makeIcon(barColor: .white)
         button.target = self
         button.action = #selector(statusBarClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -55,7 +79,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(quitItem)
     }
 
-    // Left-click toggles recording, right-click opens menu
     @objc private func statusBarClicked(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
@@ -66,7 +89,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    // Remove menu after it closes so left-click works again
     func menuDidClose(_ menu: NSMenu) {
         statusItem.menu = nil
     }
@@ -98,14 +120,11 @@ class StatusBarController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         switch state {
         case .recording:
-            button.title = " ● REC "
-            button.contentTintColor = .systemRed
+            button.image = Self.makeIcon(barColor: .systemRed)
         case .transcribing:
-            button.title = " W ··· "
-            button.contentTintColor = .secondaryLabelColor
+            button.image = Self.makeIcon(barColor: .systemGray)
         default:
-            button.title = " W "
-            button.contentTintColor = .labelColor
+            button.image = Self.makeIcon(barColor: .white)
         }
     }
 }
