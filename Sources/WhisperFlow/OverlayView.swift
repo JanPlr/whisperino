@@ -4,7 +4,6 @@ import SwiftUI
 struct OverlayView: View {
     @ObservedObject var appState: AppState
     @State private var isHoveringBars = false
-    @State private var isHoveringPill = false
     @State private var isHoveringCancel = false
     @State private var isHoveringPause = false
 
@@ -39,8 +38,8 @@ struct OverlayView: View {
 
     // MARK: - Recording
 
-    /// Whether buttons should be visible (hover or paused state)
-    private var showButtons: Bool { isHoveringPill || isPaused }
+    /// Buttons visible when mouse is over the panel or recording is paused
+    private var showButtons: Bool { appState.isPillHovered || isPaused }
 
     private var recordingView: some View {
         HStack(spacing: showButtons ? 10 : 0) {
@@ -84,16 +83,7 @@ struct OverlayView: View {
                     else { appState.pauseRecording() }
                 }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        // Pill-level hover: placed BETWEEN padding and material so the
-        // tracking NSView gets the full padded frame without clipShape interference
-        .floatingHover { h in
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { isHoveringPill = h }
-        }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
+        .overlayChrome()
     }
 
     private func barHeight(for index: Int) -> CGFloat {
@@ -173,12 +163,10 @@ private extension View {
     }
 }
 
-// MARK: - Floating Hover (works on non-activating panels)
+// MARK: - Floating Hover (for individual elements within the panel)
 //
-// SwiftUI's .onHover uses NSTrackingArea with .activeInKeyWindow,
-// which doesn't fire when the app isn't focused. This custom
-// implementation uses .activeAlways so hover works on our floating
-// panel even while another app has keyboard focus.
+// Uses NSTrackingArea with .activeAlways for element-level hover effects
+// (bar brightness, button highlight) on non-activating panels.
 
 private struct FloatingHoverTracker: NSViewRepresentable {
     let onChange: (Bool) -> Void
