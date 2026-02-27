@@ -3,7 +3,7 @@ set -e
 
 INSTALL_DIR="$HOME/.whisper-flow"
 WHISPER_REPO="https://github.com/ggerganov/whisper.cpp.git"
-MODEL_NAME="small"
+MODEL_NAME="medium"
 
 echo "==> WhisperFlow Setup"
 echo ""
@@ -69,7 +69,7 @@ MODEL_FILE="$INSTALL_DIR/models/ggml-${MODEL_NAME}.bin"
 if [ -f "$MODEL_FILE" ]; then
     echo "==> Model ggml-${MODEL_NAME}.bin already downloaded"
 else
-    echo "==> Downloading ggml-${MODEL_NAME}.bin model (~466 MB)..."
+    echo "==> Downloading ggml-${MODEL_NAME}.bin model (~1.5 GB)..."
     MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${MODEL_NAME}.bin"
     curl -L --progress-bar -o "$MODEL_FILE" "$MODEL_URL"
 fi

@@ -26,7 +26,7 @@ class Transcriber {
         let home = FileManager.default.homeDirectoryForCurrentUser
         baseDir = home.appendingPathComponent(".whisper-flow")
         whisperBinary = baseDir.appendingPathComponent("bin/whisper-cli")
-        modelPath = baseDir.appendingPathComponent("models/ggml-small.bin")
+        modelPath = baseDir.appendingPathComponent("models/ggml-medium.bin")
     }
 
     var isAvailable: Bool {
