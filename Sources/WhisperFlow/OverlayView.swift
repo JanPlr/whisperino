@@ -84,10 +84,16 @@ struct OverlayView: View {
                     else { appState.pauseRecording() }
                 }
         }
-        .overlayChrome()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        // Pill-level hover: placed BETWEEN padding and material so the
+        // tracking NSView gets the full padded frame without clipShape interference
         .floatingHover { h in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { isHoveringPill = h }
         }
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
     }
 
     private func barHeight(for index: Int) -> CGFloat {
@@ -194,7 +200,22 @@ private class FloatingHoverNSView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
+        reinstallTrackingArea()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        reinstallTrackingArea()
+    }
+
+    override func layout() {
+        super.layout()
+        reinstallTrackingArea()
+    }
+
+    private func reinstallTrackingArea() {
         if let area { removeTrackingArea(area) }
+        guard bounds.width > 0, bounds.height > 0 else { return }
         area = NSTrackingArea(
             rect: bounds,
             options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
