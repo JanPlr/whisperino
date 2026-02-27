@@ -52,9 +52,23 @@ struct OverlayView: View {
 
             durationLabel
 
-            shortcutBadge("Release or tap")
+            stopButton
         }
         .overlayChrome()
+    }
+
+    private var stopButton: some View {
+        Button(action: { appState.toggleRecording() }) {
+            ZStack {
+                Circle()
+                    .fill(.primary.opacity(0.08))
+                    .frame(width: 26, height: 26)
+                RoundedRectangle(cornerRadius: 2.5)
+                    .fill(.primary.opacity(0.5))
+                    .frame(width: 9, height: 9)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private var audioLevelBars: some View {
@@ -142,17 +156,6 @@ struct OverlayView: View {
         .overlayChrome()
     }
 
-    // MARK: - Shared
-
-    private func shortcutBadge(_ label: String) -> some View {
-        Text("\u{2325}D \(label)")
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(.quaternary)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-    }
 }
 
 private extension View {
