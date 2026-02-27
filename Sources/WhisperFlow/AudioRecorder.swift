@@ -57,6 +57,14 @@ class AudioRecorder {
         self.audioEngine = engine
     }
 
+    func pause() {
+        audioEngine?.pause()
+    }
+
+    func resume() throws {
+        try audioEngine?.start()
+    }
+
     func stop() -> URL? {
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()

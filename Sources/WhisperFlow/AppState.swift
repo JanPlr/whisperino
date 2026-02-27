@@ -6,6 +6,7 @@ import CoreGraphics
 enum TranscriptionState: Equatable {
     case idle
     case recording
+    case paused
     case transcribing
     case result(text: String)
     case dismissing
@@ -27,12 +28,12 @@ class AppState: ObservableObject {
 
     var isSetUp: Bool { transcriber.isAvailable }
 
-    /// Toggle recording (used by menu bar click)
+    /// Toggle recording (used by menu bar click and waveform tap)
     func toggleRecording() {
         switch state {
         case .idle, .result, .error, .dismissing:
             startRecording()
-        case .recording:
+        case .recording, .paused:
             stopRecording()
         case .transcribing:
             break
@@ -45,8 +46,7 @@ class AppState: ObservableObject {
         switch state {
         case .idle, .result, .error, .dismissing:
             startRecording()
-        case .recording:
-            // Quick tap toggle: pressing again while recording stops it
+        case .recording, .paused:
             stopRecording()
         case .transcribing:
             break
@@ -62,6 +62,36 @@ class AppState: ObservableObject {
         }
         // Push-to-talk: held long enough, release stops recording
         stopRecording()
+    }
+
+    /// Pause the current recording
+    func pauseRecording() {
+        guard case .recording = state else { return }
+        recorder.pause()
+        audioLevel = 0.3
+        state = .paused
+    }
+
+    /// Resume a paused recording
+    func resumeRecording() {
+        guard case .paused = state else { return }
+        do {
+            try recorder.resume()
+            state = .recording
+        } catch {
+            state = .error(message: "Resume failed")
+            autoDismiss(after: 3)
+        }
+    }
+
+    /// Cancel recording and discard audio
+    func cancelRecording() {
+        if let url = recorder.stop() {
+            try? FileManager.default.removeItem(at: url)
+        }
+        audioLevel = 0
+        recordingStartTime = nil
+        state = .idle
     }
 
     private func startRecording() {
