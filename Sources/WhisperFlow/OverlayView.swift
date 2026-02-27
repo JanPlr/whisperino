@@ -31,34 +31,20 @@ struct OverlayView: View {
     // MARK: - Recording
 
     private var recordingView: some View {
-        HStack(spacing: 12) {
-            // Clickable bars — hover dims bars, reveals stop square
-            ZStack {
-                HStack(spacing: 2) {
-                    ForEach(0..<5, id: \.self) { i in
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(.primary.opacity(isHoveringBars ? 0.15 : 0.4))
-                            .frame(width: 3, height: barHeight(for: i))
-                    }
-                }
-                .frame(height: 16)
-                .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
-
-                if isHoveringBars {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(.primary.opacity(0.5))
-                        .frame(width: 7, height: 7)
-                        .transition(.opacity)
-                }
+        HStack(spacing: 2.5) {
+            ForEach(0..<5, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.primary.opacity(isHoveringBars ? 0.6 : 0.4))
+                    .frame(width: 3.5, height: barHeight(for: i))
             }
-            .contentShape(Rectangle())
-            .onHover { h in
-                withAnimation(.easeInOut(duration: 0.12)) { isHoveringBars = h }
-            }
-            .onTapGesture { appState.toggleRecording() }
-
-            durationLabel
         }
+        .frame(height: 20)
+        .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
+        .contentShape(Rectangle())
+        .onHover { h in
+            withAnimation(.easeInOut(duration: 0.15)) { isHoveringBars = h }
+        }
+        .onTapGesture { appState.toggleRecording() }
         .overlayChrome()
     }
 
@@ -66,20 +52,7 @@ struct OverlayView: View {
         let level = CGFloat(appState.audioLevel)
         let patterns: [CGFloat] = [0.5, 0.8, 1.0, 0.7, 0.4]
         let barLevel = level * patterns[index]
-        return max(3, barLevel * 16)
-    }
-
-    private var durationLabel: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            if let start = appState.recordingStartTime {
-                let seconds = Int(timeline.date.timeIntervalSince(start))
-                let m = seconds / 60
-                let s = seconds % 60
-                Text(String(format: "%d:%02d", m, s))
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-        }
+        return max(3, barLevel * 20)
     }
 
     // MARK: - Transcribing (very subtle wave)
@@ -90,18 +63,18 @@ struct OverlayView: View {
                 timeline.date.timeIntervalSince1970
                     .truncatingRemainder(dividingBy: 3.0) / 3.0
             )
-            HStack(spacing: 2) {
+            HStack(spacing: 2.5) {
                 ForEach(0..<5, id: \.self) { i in
                     let offset = CGFloat(i) / 4.0
                     let wave = (sin((phase + offset) * .pi * 2) + 1) / 2
-                    let h: CGFloat = 4 + wave * 8
+                    let h: CGFloat = 4 + wave * 10
                     let opacity = 0.2 + wave * 0.25
-                    RoundedRectangle(cornerRadius: 1.5)
+                    RoundedRectangle(cornerRadius: 2)
                         .fill(.primary.opacity(opacity))
-                        .frame(width: 3, height: h)
+                        .frame(width: 3.5, height: h)
                 }
             }
-            .frame(height: 16)
+            .frame(height: 20)
         }
         .overlayChrome()
     }
