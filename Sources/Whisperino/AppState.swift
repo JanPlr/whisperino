@@ -8,6 +8,7 @@ enum TranscriptionState: Equatable {
     case recording
     case paused
     case transcribing
+    case refining
     case result(text: String)
     case dismissing
     case error(message: String)
@@ -17,8 +18,11 @@ class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
     @Published var recordingStartTime: Date?
+    private(set) var lastTranscriptionResult: String?
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
+    private let refiner = LLMRefiner()
+    private let store = SettingsStore.shared
 
     /// Timestamp when the hotkey was pressed (for push-to-talk detection)
     private var hotkeyPressTime: Date?
@@ -36,7 +40,7 @@ class AppState: ObservableObject {
             startRecording()
         case .recording, .paused:
             stopRecording()
-        case .transcribing:
+        case .transcribing, .refining:
             break
         }
     }
@@ -59,7 +63,7 @@ class AppState: ObservableObject {
             stopRecording()
         case .paused:
             stopRecording()
-        case .transcribing:
+        case .transcribing, .refining:
             break
         }
     }
@@ -128,21 +132,54 @@ class AppState: ObservableObject {
             return
         }
         audioLevel = 0
+        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
         recordingStartTime = nil
+
+        // Discard recordings shorter than 0.5s — likely a mis-tap or permission dialog timing
+        guard duration >= 0.5 else {
+            try? FileManager.default.removeItem(at: audioURL)
+            state = .idle
+            return
+        }
+
         state = .transcribing
 
         Task {
             do {
-                let text = try await transcriber.transcribe(audioURL: audioURL)
+                let rawText = try await transcriber.transcribe(audioURL: audioURL)
                 await MainActor.run {
-                    guard !text.isEmpty else {
+                    guard !rawText.isEmpty else {
                         self.state = .error(message: "No speech detected")
                         self.autoDismiss(after: 2)
                         return
                     }
+                    self.state = .refining
+                }
+
+                // Optionally refine with LLM
+                let finalText: String
+                let settings = store.settings
+                print("[whisperino] raw: \(rawText)")
+                if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
+                    print("[whisperino] refining with LLM (dictionary: \(store.dictionary.count) terms)…")
+                    do {
+                        let terms = store.dictionary.map { $0.term }
+                        finalText = try await refiner.refine(text: rawText, apiKey: settings.apiKey, dictionaryTerms: terms)
+                        print("[whisperino] refined: \(finalText)")
+                    } catch {
+                        print("[whisperino] LLM error: \(error) — using raw text")
+                        finalText = rawText
+                    }
+                } else {
+                    print("[whisperino] refinement off — using raw text")
+                    finalText = rawText
+                }
+
+                await MainActor.run {
+                    self.lastTranscriptionResult = finalText
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                    self.state = .result(text: text)
+                    NSPasteboard.general.setString(finalText, forType: .string)
+                    self.state = .result(text: finalText)
                     // Paste into focused text field
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         self.simulatePaste()
@@ -189,6 +226,13 @@ class AppState: ObservableObject {
         keyUp?.flags = .maskCommand
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
+    }
+
+    /// Copy snippet text to clipboard and paste it
+    func insertSnippet(_ snippet: Snippet) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(snippet.text, forType: .string)
+        simulatePaste()
     }
 
     private func autoDismiss(after seconds: Double) {

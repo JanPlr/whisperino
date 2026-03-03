@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController!
@@ -6,6 +7,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppState.ensureAccessibility()
+        // Pre-request microphone permission so the first recording attempt isn't
+        // interrupted by the macOS permission dialog mid-press
+        AVCaptureDevice.requestAccess(for: .audio) { _ in }
         statusBarController = StatusBarController(appState: appState)
 
         HotkeyManager.shared.register(

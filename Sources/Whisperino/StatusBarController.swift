@@ -7,6 +7,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private let overlayPanel: OverlayPanel
     private var cancellables = Set<AnyCancellable>()
     private let menu: NSMenu
+    private let store = SettingsStore.shared
 
     init(appState: AppState) {
         self.appState = appState
@@ -74,6 +75,21 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let saveSnippetItem = NSMenuItem(title: "Save Last as Snippet…", action: #selector(saveLastAsSnippet), keyEquivalent: "")
+        saveSnippetItem.target = self
+        menu.addItem(saveSnippetItem)
+
+        let insertSnippetItem = NSMenuItem(title: "Insert Snippet", action: nil, keyEquivalent: "")
+        menu.addItem(insertSnippetItem)
+
+        menu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(title: "Quit Whisperino", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -89,6 +105,32 @@ class StatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        // Update "Save Last as Snippet…" enabled state
+        if let saveItem = menu.items.first(where: { $0.action == #selector(saveLastAsSnippet) }) {
+            saveItem.isEnabled = appState.lastTranscriptionResult != nil
+        }
+
+        // Rebuild Insert Snippet submenu
+        if let insertItem = menu.items.first(where: { $0.title == "Insert Snippet" }) {
+            let snippets = store.snippets
+            if snippets.isEmpty {
+                insertItem.submenu = nil
+                insertItem.isEnabled = false
+            } else {
+                let submenu = NSMenu()
+                for snippet in snippets {
+                    let item = NSMenuItem(title: snippet.name, action: #selector(insertSnippet(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = snippet
+                    submenu.addItem(item)
+                }
+                insertItem.submenu = submenu
+                insertItem.isEnabled = true
+            }
+        }
+    }
+
     func menuDidClose(_ menu: NSMenu) {
         statusItem.menu = nil
     }
@@ -99,6 +141,22 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    @objc private func openSettings() {
+        SettingsWindowController.shared.show()
+    }
+
+    @objc private func saveLastAsSnippet() {
+        guard let text = appState.lastTranscriptionResult else { return }
+        let name = "Snippet \(store.snippets.count + 1)"
+        store.addSnippet(name: name, text: text)
+        SettingsWindowController.shared.show()
+    }
+
+    @objc private func insertSnippet(_ sender: NSMenuItem) {
+        guard let snippet = sender.representedObject as? Snippet else { return }
+        appState.insertSnippet(snippet)
     }
 
     private func observeState() {

@@ -22,6 +22,8 @@ struct OverlayView: View {
                 recordingView
             case .transcribing:
                 transcribingView
+            case .refining:
+                refiningView
             case .result, .dismissing:
                 resultDismissView
             case .error(let message):
@@ -87,6 +89,20 @@ struct OverlayView: View {
                 .controlSize(.small)
 
             Text("Transcribing…")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .overlayChrome()
+    }
+
+    // MARK: - Refining
+
+    private var refiningView: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+
+            Text("Refining…")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }
