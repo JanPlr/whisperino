@@ -25,6 +25,13 @@ private struct GeneralTab: View {
 
     var body: some View {
         Form {
+            Section("Keyboard Shortcut") {
+                ShortcutRecorderView()
+                Text("Tap to toggle recording, hold to push-to-talk.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 Toggle("Enable LLM refinement", isOn: $store.settings.llmRefinementEnabled)
                 Text("Removes filler words, adds punctuation, corrects backtracking, and applies your dictionary terms using Claude Haiku via Langdock.")
@@ -58,11 +65,76 @@ private struct GeneralTab: View {
     }
 }
 
+// MARK: - Shortcut Recorder
+
+private struct ShortcutRecorderView: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @State private var isRecording = false
+    @State private var eventMonitor: Any?
+
+    var body: some View {
+        HStack {
+            Text("Dictation shortcut")
+            Spacer()
+            Button(action: { startRecording() }) {
+                Text(isRecording ? "Press shortcut…" : store.settings.hotkey.displayString)
+                    .frame(minWidth: 100)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.bordered)
+            .foregroundColor(isRecording ? .secondary : .primary)
+
+            if store.settings.hotkey != .default {
+                Button("Reset") {
+                    store.settings.hotkey = .default
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+        }
+    }
+
+    private func startRecording() {
+        guard !isRecording else { return }
+        isRecording = true
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            // Escape cancels
+            if event.keyCode == 53 {
+                stopRecording()
+                return nil
+            }
+            // Require at least one modifier key
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let hasModifier = mods.contains(.command) || mods.contains(.option)
+                || mods.contains(.control) || mods.contains(.shift)
+            guard hasModifier else { return event }
+
+            let carbonMods = HotkeyConfig.carbonModifiers(from: mods)
+            store.settings.hotkey = HotkeyConfig(
+                keyCode: UInt32(event.keyCode),
+                modifiers: carbonMods
+            )
+            stopRecording()
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+        isRecording = false
+    }
+}
+
 // MARK: - Dictionary Tab
 
 private struct DictionaryTab: View {
     @ObservedObject private var store = SettingsStore.shared
     @State private var newTerm = ""
+    @State private var selectedID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -74,17 +146,26 @@ private struct DictionaryTab: View {
 
             Divider()
 
-            List {
+            List(selection: $selectedID) {
                 ForEach(store.dictionary) { entry in
                     Text(entry.term)
+                        .tag(entry.id)
                 }
-                .onDelete { store.removeDictionaryTerms(at: $0) }
             }
             .listStyle(.inset(alternatesRowBackgrounds: true))
+            .onDeleteCommand { deleteSelected() }
 
             Divider()
 
             HStack(spacing: 8) {
+                Button(action: deleteSelected) {
+                    Image(systemName: "minus")
+                }
+                .buttonStyle(.borderless)
+                .disabled(selectedID == nil)
+
+                Spacer()
+
                 TextField("e.g. Langdock  or  langdonk = Langdock", text: $newTerm)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { addTerm() }
@@ -99,6 +180,13 @@ private struct DictionaryTab: View {
     private func addTerm() {
         store.addDictionaryTerm(newTerm)
         newTerm = ""
+    }
+
+    private func deleteSelected() {
+        guard let id = selectedID,
+              let index = store.dictionary.firstIndex(where: { $0.id == id }) else { return }
+        store.removeDictionaryTerms(at: [index])
+        selectedID = nil
     }
 }
 
@@ -118,11 +206,14 @@ private struct SnippetsTab: View {
         HSplitView {
             // Left: list
             VStack(spacing: 0) {
-                List(store.snippets, selection: $selectedID) { snippet in
-                    Text(snippet.name)
-                        .tag(snippet.id)
+                List(selection: $selectedID) {
+                    ForEach(store.snippets) { snippet in
+                        Text(snippet.name)
+                            .tag(snippet.id)
+                    }
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
+                .onDeleteCommand { deleteSelected() }
 
                 Divider()
 

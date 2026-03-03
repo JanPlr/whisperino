@@ -2,17 +2,19 @@
 
 Local voice transcription for macOS. Lives in your menu bar, runs fully on-device using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with Metal GPU acceleration.
 
-Press **Option+D** or click the menu bar icon to record. When you stop, the transcribed text is automatically pasted into your focused text field and copied to the clipboard.
+Press **Option+D**, double-tap **Option**, or click the menu bar icon to record. When you stop, the transcribed text is automatically pasted into your focused text field and copied to the clipboard.
 
 ## Features
 
 - **Fully local** — all transcription happens on-device. No audio leaves your machine.
 - **Multilingual** — automatic language detection. Switch languages mid-sentence and it picks up both.
 - **Push-to-talk** — hold Option+D to record, release to transcribe. Or tap to toggle.
+- **Double-tap Option** — quickly press Option twice to start recording (always active).
+- **Configurable shortcut** — change the keyboard shortcut in Settings.
 - **LLM refinement** (optional) — cleans up filler words, adds punctuation, corrects backtracking, and applies your custom dictionary. Uses Claude Haiku via Langdock. Disabled by default; requires an API key.
 - **Custom dictionary** — teach the LLM the correct spelling of names, products, and jargon that Whisper frequently mishears.
 - **Snippets** — save and quickly insert frequently used text blocks from the menu bar.
-- **Minimal overlay** — a small waveform appears at the bottom of your screen while recording. It never steals focus from your current app.
+- **Minimal overlay** — a small waveform appears at the bottom of your screen while recording. Hover over it to see a stop button. It never steals focus from your current app.
 
 ## Requirements
 
@@ -52,14 +54,15 @@ Once both permissions are granted, you're ready to go.
 |--------|-------------|
 | **Option+D** (tap) | Toggle recording on/off |
 | **Option+D** (hold > 0.4s) | Push-to-talk — records while held, transcribes on release |
+| **Double-tap Option** | Start recording (always works, even with a custom shortcut) |
 | **Left-click** menu bar icon | Toggle recording |
 | **Right-click** menu bar icon | Open the options menu |
 
 ### Recording flow
 
-1. Start recording with Option+D or by clicking the menu bar icon. The icon turns **red** and a waveform overlay appears.
+1. Start recording with Option+D, double-tap Option, or by clicking the menu bar icon. The icon turns **red** and a waveform overlay appears.
 2. Speak. The overlay shows your audio level in real time.
-3. Stop recording (tap Option+D again, release if holding, or click the icon). The icon turns **gray** while transcribing.
+3. Stop recording — tap the shortcut again, release if holding, click the waveform (hover to see a stop icon), or click the menu bar icon. The icon turns **gray** while transcribing.
 4. The transcribed text is placed on your clipboard and automatically pasted (Cmd+V) into whatever text field has focus.
 5. The overlay briefly shows the result, then fades away.
 
@@ -77,6 +80,7 @@ Right-click the menu bar icon and select **Settings**, or use the keyboard short
 
 ### General
 
+- **Dictation shortcut** — click the shortcut button and press your desired key combination (must include at least one modifier key like Option, Cmd, Shift, or Ctrl). Default is Option+D. Double-tap Option always works as an additional trigger regardless of this setting.
 - **Enable LLM refinement** — when turned on, transcriptions are post-processed by Claude Haiku (via Langdock) to remove filler words ("um", "uh", "like"), add punctuation and capitalization, handle spoken corrections ("scratch that", "actually"), and apply your dictionary terms.
 - **Langdock API Key** — required for LLM refinement. Paste your API key from [Langdock](https://langdock.com). The key is stored locally in `~/.whisperino/settings.json`.
 

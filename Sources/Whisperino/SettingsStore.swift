@@ -10,7 +10,12 @@ class SettingsStore: ObservableObject {
     private let snippetsFile: URL
 
     @Published var settings: AppSettings {
-        didSet { save(settings, to: settingsFile) }
+        didSet {
+            save(settings, to: settingsFile)
+            if oldValue.hotkey != settings.hotkey {
+                HotkeyManager.shared.updateHotkey(config: settings.hotkey)
+            }
+        }
     }
     @Published var dictionary: [DictionaryEntry] {
         didSet { save(dictionary, to: dictionaryFile) }

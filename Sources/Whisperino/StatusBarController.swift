@@ -65,7 +65,8 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let shortcutItem = NSMenuItem(title: "\u{2325}D — tap to toggle, hold to push-to-talk", action: nil, keyEquivalent: "")
+        let config = store.settings.hotkey
+        let shortcutItem = NSMenuItem(title: "\(config.displayString) — tap to toggle, hold to push-to-talk", action: nil, keyEquivalent: "")
         shortcutItem.isEnabled = false
         menu.addItem(shortcutItem)
 
@@ -109,6 +110,12 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        // Update shortcut hint label
+        if let shortcutItem = menu.items.first(where: { $0.title.contains("tap to toggle") }) {
+            let config = store.settings.hotkey
+            shortcutItem.title = "\(config.displayString) — tap to toggle, hold to push-to-talk"
+        }
+
         // Update "Save Last as Snippet…" enabled state
         if let saveItem = menu.items.first(where: { $0.action == #selector(saveLastAsSnippet) }) {
             saveItem.isEnabled = appState.lastTranscriptionResult != nil

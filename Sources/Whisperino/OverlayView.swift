@@ -34,6 +34,8 @@ struct OverlayView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: appState.state)
     }
 
+    @State private var isHoveringWaveform = false
+
     // MARK: - Recording
 
     private var recordingView: some View {
@@ -46,18 +48,30 @@ struct OverlayView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { appState.cancelRecording() }
 
-            // Waveform bars — clickable to submit
-            HStack(spacing: 2.5) {
-                ForEach(0..<5, id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(.primary.opacity(isPaused ? 0.2 : 0.4))
-                        .frame(width: 3.5, height: barHeight(for: i))
+            // Waveform bars — hover shows stop icon, click to submit
+            ZStack {
+                // Waveform bars
+                HStack(spacing: 2.5) {
+                    ForEach(0..<5, id: \.self) { i in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(.primary.opacity(isPaused ? 0.2 : 0.4))
+                            .frame(width: 3.5, height: barHeight(for: i))
+                    }
                 }
+                .opacity(isHoveringWaveform ? 0 : 1)
+
+                // Stop icon (shown on hover)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.primary.opacity(0.5))
+                    .frame(width: 12, height: 12)
+                    .opacity(isHoveringWaveform ? 1 : 0)
             }
             .frame(height: 20)
             .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
+            .animation(.easeInOut(duration: 0.15), value: isHoveringWaveform)
             .animation(.easeInOut(duration: 0.2), value: isPaused)
             .contentShape(Rectangle())
+            .onHover { hovering in isHoveringWaveform = hovering }
             .onTapGesture { appState.toggleRecording() }
 
             // Pause / Resume button (right)

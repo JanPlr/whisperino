@@ -30,6 +30,8 @@ class AppState: ObservableObject {
     private var isHotkeyHeld = false
     /// Hold longer than this to activate push-to-talk mode
     private let pushToTalkThreshold: TimeInterval = 0.4
+    /// PID of the app that was frontmost when recording started
+    private var recordingTargetPID: pid_t?
     var isSetUp: Bool { transcriber.isAvailable }
 
     /// Toggle recording (used by menu bar click and waveform tap)
@@ -101,6 +103,7 @@ class AppState: ObservableObject {
         }
         audioLevel = 0
         recordingStartTime = nil
+        recordingTargetPID = nil
         state = .idle
     }
 
@@ -110,6 +113,9 @@ class AppState: ObservableObject {
             autoDismiss(after: 4)
             return
         }
+
+        // Capture the frontmost app so we can re-activate it before pasting
+        recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
 
         do {
             try recorder.start { [weak self] level in
@@ -176,9 +182,7 @@ class AppState: ObservableObject {
                     NSPasteboard.general.setString(finalText, forType: .string)
                     self.state = .result(text: finalText)
 
-                    // Re-activate the app that was frontmost when recording started,
-                    // then Cmd+V once it regains focus
-                    self.pasteClipboard()
+                    self.activateTargetAndPaste()
 
                     // Animated dismiss sequence: result → dismissing → idle
                     self.startDismissSequence()
@@ -189,6 +193,25 @@ class AppState: ObservableObject {
                     self.autoDismiss(after: 3)
                 }
             }
+        }
+    }
+
+    /// Re-activate the app that was frontmost when recording started, then Cmd+V
+    private func activateTargetAndPaste() {
+        let targetPID = recordingTargetPID
+        recordingTargetPID = nil
+
+        if let pid = targetPID,
+           let app = NSRunningApplication(processIdentifier: pid) {
+            print("[whisperino] re-activating target app: \(app.localizedName ?? "?") (pid \(pid))")
+            app.activate()
+        }
+
+        print("[whisperino] AX trusted: \(AXIsProcessTrusted())")
+
+        // Give the target app 150ms to regain focus, then paste
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.pasteClipboard()
         }
     }
 
