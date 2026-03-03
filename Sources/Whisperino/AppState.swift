@@ -182,12 +182,13 @@ class AppState: ObservableObject {
 
                 await MainActor.run {
                     self.lastTranscriptionResult = finalText
+                    self.pendingPasteText = finalText
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(finalText, forType: .string)
                     self.state = .result(text: finalText)
-                    // Paste into focused text field
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        self.simulatePaste()
+                    // Insert into focused text field
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        self.insertText(self.pendingPasteText)
                     }
                     // Animated dismiss sequence: result → dismissing → idle
                     self.startDismissSequence()
@@ -223,16 +224,28 @@ class AppState: ObservableObject {
         }
     }
 
-    private func simulatePaste() {
+    // Text waiting to be inserted after transcription completes
+    private var pendingPasteText: String = ""
+
+    /// Primary insertion method — tries AX direct insert first, falls back to Cmd+V
+    private func insertText(_ text: String) {
+        // Strategy 1: Accessibility API — directly set the focused element's selected
+        // text. This works in native apps (Mail, Notes, Xcode, Slack desktop, etc.)
+        // and is the most reliable because it bypasses focus/timing issues entirely.
+        if insertViaAccessibility(text) {
+            print("[whisperino] inserted via AX")
+            return
+        }
+
+        // Strategy 2: Cmd+V fallback — clipboard is already set, just trigger paste.
+        // Works in web-based text fields (browser, Electron apps) where AX can't
+        // write directly.
+        print("[whisperino] AX failed — falling back to Cmd+V")
         let source = CGEventSource(stateID: .combinedSessionState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
         keyDown?.flags = .maskCommand
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
         keyUp?.flags = .maskCommand
-
-        // Post directly to the app that was frontmost when recording started,
-        // so paste always lands in the right place regardless of what gained
-        // focus during the transcription/refining delay
         if recordingTargetPID > 0 {
             keyDown?.postToPid(recordingTargetPID)
             keyUp?.postToPid(recordingTargetPID)
@@ -242,11 +255,34 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Copy snippet text to clipboard and paste it
+    /// Directly insert text into the currently focused UI element via the
+    /// Accessibility API. Replaces any selected text, or inserts at the cursor.
+    @discardableResult
+    private func insertViaAccessibility(_ text: String) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedElement: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElement
+        ) == .success else { return false }
+
+        let element = focusedElement as! AXUIElement
+        // kAXSelectedTextAttribute replaces the current selection (or inserts at
+        // cursor if nothing is selected) — exactly what dictation should do
+        return AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            text as CFString
+        ) == .success
+    }
+
+    /// Copy snippet text to clipboard and insert it
     func insertSnippet(_ snippet: Snippet) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(snippet.text, forType: .string)
-        simulatePaste()
+        insertText(snippet.text)
     }
 
     private func autoDismiss(after seconds: Double) {
