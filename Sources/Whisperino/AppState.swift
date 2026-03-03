@@ -30,9 +30,6 @@ class AppState: ObservableObject {
     private var isHotkeyHeld = false
     /// Hold longer than this to activate push-to-talk mode
     private let pushToTalkThreshold: TimeInterval = 0.4
-    /// PID of the app that was frontmost when recording started — paste target
-    private var recordingTargetPID: pid_t = 0
-
     var isSetUp: Bool { transcriber.isAvailable }
 
     /// Toggle recording (used by menu bar click and waveform tap)
@@ -115,9 +112,6 @@ class AppState: ObservableObject {
         }
 
         do {
-            // Capture the frontmost app now — this is where paste will be sent
-            // after transcription, no matter what gains focus in the meantime
-            recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
             try recorder.start { [weak self] level in
                 DispatchQueue.main.async {
                     self?.audioLevel = level
@@ -184,7 +178,7 @@ class AppState: ObservableObject {
 
                     // Re-activate the app that was frontmost when recording started,
                     // then Cmd+V once it regains focus
-                    self.activateTargetAndPaste()
+                    self.pasteClipboard()
 
                     // Animated dismiss sequence: result → dismissing → idle
                     self.startDismissSequence()
@@ -220,29 +214,22 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Re-activate the app that was frontmost when recording started, then paste via Cmd+V.
-    private func activateTargetAndPaste() {
-        if recordingTargetPID != 0,
-           let targetApp = NSRunningApplication(processIdentifier: recordingTargetPID) {
-            targetApp.activate()
-        }
-        // Wait for the target app to regain focus, then Cmd+V
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            let source = CGEventSource(stateID: .combinedSessionState)
-            let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
-            keyDown?.flags = .maskCommand
-            let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
-            keyUp?.flags = .maskCommand
-            keyDown?.post(tap: .cghidEventTap)
-            keyUp?.post(tap: .cghidEventTap)
-        }
+    /// Paste clipboard content into the frontmost app via Cmd+V.
+    private func pasteClipboard() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
+        keyDown?.flags = .maskCommand
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
+        keyUp?.flags = .maskCommand
+        keyDown?.post(tap: .cghidEventTap)
+        keyUp?.post(tap: .cghidEventTap)
     }
 
     /// Copy snippet text to clipboard and paste it
     func insertSnippet(_ snippet: Snippet) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(snippet.text, forType: .string)
-        activateTargetAndPaste()
+        pasteClipboard()
     }
 
     private func autoDismiss(after seconds: Double) {
