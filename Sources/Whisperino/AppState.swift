@@ -30,6 +30,8 @@ class AppState: ObservableObject {
     private var isHotkeyHeld = false
     /// Hold longer than this to activate push-to-talk mode
     private let pushToTalkThreshold: TimeInterval = 0.4
+    /// PID of the app that was frontmost when recording started — paste target
+    private var recordingTargetPID: pid_t = 0
 
     var isSetUp: Bool { transcriber.isAvailable }
 
@@ -113,6 +115,9 @@ class AppState: ObservableObject {
         }
 
         do {
+            // Capture the frontmost app now — this is where paste will be sent
+            // after transcription, no matter what gains focus in the meantime
+            recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
             try recorder.start { [weak self] level in
                 DispatchQueue.main.async {
                     self?.audioLevel = level
@@ -224,8 +229,17 @@ class AppState: ObservableObject {
         keyDown?.flags = .maskCommand
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
         keyUp?.flags = .maskCommand
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+
+        // Post directly to the app that was frontmost when recording started,
+        // so paste always lands in the right place regardless of what gained
+        // focus during the transcription/refining delay
+        if recordingTargetPID > 0 {
+            keyDown?.postToPid(recordingTargetPID)
+            keyUp?.postToPid(recordingTargetPID)
+        } else {
+            keyDown?.post(tap: .cghidEventTap)
+            keyUp?.post(tap: .cghidEventTap)
+        }
     }
 
     /// Copy snippet text to clipboard and paste it

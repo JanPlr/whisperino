@@ -33,21 +33,40 @@ echo "[3/4] Building Whisperino.app..."
 
 # Install to /Applications
 echo "[4/4] Installing to /Applications..."
+pkill Whisperino 2>/dev/null || true
 if [ -d "/Applications/Whisperino.app" ]; then
     rm -rf "/Applications/Whisperino.app"
 fi
 cp -R build/Whisperino.app /Applications/
 
 echo ""
-echo "  ✓ Whisperino installed successfully!"
+echo "  ✓ Whisperino installed!"
 echo ""
-echo "  Launch:    open /Applications/Whisperino.app"
-echo "             or search 'Whisperino' in Spotlight"
+echo "  ─────────────────────────────────────────"
+echo "  IMPORTANT — two permissions required:"
+echo "  ─────────────────────────────────────────"
 echo ""
-echo "  Usage:     Option+D to start/stop recording"
-echo "             Click the menu bar icon to record"
-echo "             Right-click menu bar icon for options"
+echo "  1. MICROPHONE — macOS will ask on first"
+echo "     recording. Click Allow."
 echo ""
-echo "  First run: Grant Microphone + Accessibility"
-echo "             when macOS prompts you."
+echo "  2. ACCESSIBILITY — required for auto-paste."
+echo "     When the app launches, a System Settings"
+echo "     window will open. Toggle Whisperino ON"
+echo "     in Privacy & Security → Accessibility."
+echo ""
+echo "  ─────────────────────────────────────────"
+echo ""
+echo "  Launching Whisperino now..."
+echo ""
+
+open /Applications/Whisperino.app
+
+sleep 2
+
+# Open System Settings directly to Accessibility so they can grant permission
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+
+echo "  Look for Whisperino in the Accessibility list and toggle it ON."
+echo ""
+echo "  Then: Option+D to record  |  Right-click menu bar icon for Settings"
 echo ""
