@@ -133,7 +133,7 @@ private extension View {
         self
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(.regularMaterial)
+            .background(Color.black.opacity(0.85))
             .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
