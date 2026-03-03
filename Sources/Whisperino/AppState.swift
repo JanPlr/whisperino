@@ -246,13 +246,8 @@ class AppState: ObservableObject {
         keyDown?.flags = .maskCommand
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
         keyUp?.flags = .maskCommand
-        if recordingTargetPID > 0 {
-            keyDown?.postToPid(recordingTargetPID)
-            keyUp?.postToPid(recordingTargetPID)
-        } else {
-            keyDown?.post(tap: .cghidEventTap)
-            keyUp?.post(tap: .cghidEventTap)
-        }
+        keyDown?.post(tap: .cghidEventTap)
+        keyUp?.post(tap: .cghidEventTap)
     }
 
     /// Directly insert text into the currently focused UI element via the
