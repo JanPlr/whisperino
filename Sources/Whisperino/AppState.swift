@@ -50,7 +50,14 @@ class AppState: ObservableObject {
         switch state {
         case .idle, .result, .error, .dismissing:
             startRecording()
-        case .recording, .paused:
+        case .recording:
+            // Require at least 300ms of recording before allowing a stop via hotkey.
+            // This prevents key bounce or a spurious repeat press from immediately
+            // stopping a recording that just started.
+            guard let startTime = recordingStartTime,
+                  Date().timeIntervalSince(startTime) >= 0.3 else { return }
+            stopRecording()
+        case .paused:
             stopRecording()
         case .transcribing:
             break

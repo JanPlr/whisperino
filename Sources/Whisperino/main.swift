@@ -9,16 +9,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarController = StatusBarController(appState: appState)
 
         HotkeyManager.shared.register(
-            onPress: { [weak self] in
-                DispatchQueue.main.async {
-                    self?.appState.hotkeyPressed()
-                }
-            },
-            onRelease: { [weak self] in
-                DispatchQueue.main.async {
-                    self?.appState.hotkeyReleased()
-                }
-            }
+            onPress: { [weak self] in self?.appState.hotkeyPressed() },
+            onRelease: { [weak self] in self?.appState.hotkeyReleased() }
         )
     }
 }
