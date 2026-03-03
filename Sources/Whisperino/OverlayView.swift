@@ -79,26 +79,16 @@ struct OverlayView: View {
         return max(3, barLevel * 20)
     }
 
-    // MARK: - Transcribing (very subtle wave)
+    // MARK: - Transcribing
 
     private var transcribingView: some View {
-        TimelineView(.animation) { timeline in
-            let phase = CGFloat(
-                timeline.date.timeIntervalSince1970
-                    .truncatingRemainder(dividingBy: 3.0) / 3.0
-            )
-            HStack(spacing: 2.5) {
-                ForEach(0..<5, id: \.self) { i in
-                    let offset = CGFloat(i) / 4.0
-                    let wave = (sin((phase + offset) * .pi * 2) + 1) / 2
-                    let h: CGFloat = 4 + wave * 10
-                    let opacity = 0.2 + wave * 0.25
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(.primary.opacity(opacity))
-                        .frame(width: 3.5, height: h)
-                }
-            }
-            .frame(height: 20)
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+
+            Text("Transcribing…")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
         }
         .overlayChrome()
     }
@@ -143,7 +133,7 @@ private extension View {
         self
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(.ultraThinMaterial)
+            .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
