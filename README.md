@@ -146,7 +146,27 @@ open build/Whisperino.app
 ~/.whisperino/
 ├── bin/whisper-cli          # whisper.cpp binary
 ├── models/ggml-medium.bin   # Whisper model
-├── settings.json            # App settings (LLM toggle, API key)
+├── settings.json            # App settings (LLM toggle, API key, shortcut)
 ├── dictionary.json          # Custom dictionary terms
 └── snippets.json            # Saved snippets
 ```
+
+## Changelog
+
+### 2025-03-03
+
+**New features:**
+- **Configurable keyboard shortcut** — change the dictation hotkey in Settings > General. Click the shortcut button, press your desired key combo (requires at least one modifier), and it takes effect immediately. Persists across restarts.
+- **Double-tap Option** — quickly press the Option key twice to start recording. Always active regardless of the configured shortcut.
+- **Hover stop indicator** — hovering over the waveform overlay during recording shows a stop icon. Click to stop and transcribe.
+- **LLM refinement** — optional post-processing via Claude Haiku (Langdock) to clean up filler words, add punctuation, and apply dictionary corrections.
+- **Custom dictionary** — add terms and phonetic mappings so the LLM always spells names, products, and jargon correctly.
+- **Snippets** — save frequently used text blocks and insert them from the menu bar.
+
+**Fixes:**
+- **Dictionary delete/edit** — delete button now works on macOS (replaced swipe-to-delete with selection + minus button and keyboard Delete key).
+- **Snippet delete/edit** — fixed selection binding issue in SwiftUI List on macOS.
+- **Paste reliability** — text now reliably pastes into the previously focused app by re-activating it before sending Cmd+V.
+- **Settings text fields** — Cmd+V, Cmd+C, Cmd+X, and Cmd+A now work in Settings text fields (API key, dictionary, snippets).
+- **Dynamic menu label** — the right-click menu shows the current shortcut instead of hardcoded "Option+D".
+- **Backward-compatible settings** — existing `settings.json` files without the `hotkey` field load without errors (defaults to Option+D).
