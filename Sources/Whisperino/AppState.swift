@@ -22,6 +22,8 @@ class AppState: ObservableObject {
 
     /// Timestamp when the hotkey was pressed (for push-to-talk detection)
     private var hotkeyPressTime: Date?
+    /// Whether the hotkey is currently held (to ignore key repeat events)
+    private var isHotkeyHeld = false
     /// Hold longer than this to activate push-to-talk mode
     private let pushToTalkThreshold: TimeInterval = 0.4
 
@@ -41,6 +43,9 @@ class AppState: ObservableObject {
 
     /// Called when the hotkey is pressed down
     func hotkeyPressed() {
+        // Ignore key repeat events — only respond to the first press
+        guard !isHotkeyHeld else { return }
+        isHotkeyHeld = true
         hotkeyPressTime = Date()
         switch state {
         case .idle, .result, .error, .dismissing:
@@ -54,6 +59,7 @@ class AppState: ObservableObject {
 
     /// Called when the hotkey is released — stops recording if held long enough (push-to-talk)
     func hotkeyReleased() {
+        isHotkeyHeld = false
         guard case .recording = state,
               let pressTime = hotkeyPressTime,
               Date().timeIntervalSince(pressTime) > pushToTalkThreshold else {
