@@ -21,6 +21,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
+
+// Accessory apps have no default menu bar, so Cmd+V/C/X/A don't work
+// in text fields. Add a hidden Edit menu so the responder chain handles them.
+let editMenu = NSMenu(title: "Edit")
+editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+editMenuItem.submenu = editMenu
+let mainMenu = NSMenu()
+mainMenu.addItem(editMenuItem)
+app.mainMenu = mainMenu
+
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
