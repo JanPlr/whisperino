@@ -208,11 +208,7 @@ class AppState: ObservableObject {
         }
 
         print("[whisperino] AX trusted: \(AXIsProcessTrusted())")
-
-        // Give the target app 150ms to regain focus, then paste
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.pasteClipboard()
-        }
+        pasteClipboard()
     }
 
     /// Animated dismiss: show result briefly, then shrink away
