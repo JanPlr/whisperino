@@ -57,7 +57,9 @@ class AudioRecorder {
 
             do {
                 try self.audioFile?.write(from: buffer)
-            } catch {}
+            } catch {
+                print("[whisperino] audio write error: \(error.localizedDescription)")
+            }
         }
 
         engine.prepare()
@@ -78,6 +80,8 @@ class AudioRecorder {
         audioEngine?.stop()
         audioEngine = nil
         audioFile = nil
-        return tempURL
+        let url = tempURL
+        tempURL = nil
+        return url
     }
 }

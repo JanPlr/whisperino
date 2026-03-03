@@ -26,13 +26,34 @@ class SettingsStore: ObservableObject {
         dictionaryFile = baseDir.appendingPathComponent("dictionary.json")
         snippetsFile = baseDir.appendingPathComponent("snippets.json")
 
-        // Ensure directory exists
-        try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        // Ensure directory exists with owner-only permissions (rwx------)
+        try? FileManager.default.createDirectory(
+            at: baseDir, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
 
         // Load or use defaults
         settings = Self.load(from: settingsFile) ?? AppSettings()
         dictionary = Self.load(from: dictionaryFile) ?? []
         snippets = Self.load(from: snippetsFile) ?? []
+
+        // Migrate: move API key from plaintext JSON to Keychain
+        migrateAPIKeyToKeychain()
+    }
+
+    /// One-time migration: if settings.json still contains a plaintext "apiKey",
+    /// move it to the Keychain and strip it from the file.
+    private func migrateAPIKeyToKeychain() {
+        guard let data = try? Data(contentsOf: settingsFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let plaintextKey = json["apiKey"] as? String,
+              !plaintextKey.isEmpty else { return }
+
+        // Save to Keychain
+        settings.apiKey = plaintextKey
+
+        // Re-save settings (now without apiKey since it's excluded from CodingKeys)
+        save(settings, to: settingsFile)
     }
 
     // MARK: - Persistence
@@ -49,7 +70,11 @@ class SettingsStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(value) else { return }
+        // Write atomically with owner-only read/write permissions (rw-------)
         try? data.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: url.path
+        )
     }
 
     // MARK: - Dictionary

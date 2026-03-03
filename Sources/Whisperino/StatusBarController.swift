@@ -22,7 +22,10 @@ class StatusBarController: NSObject, NSMenuDelegate {
         observeState()
     }
 
-    private static func makeIcon(barColor: NSColor) -> NSImage {
+    /// Draw the waveform icon. When `isTemplate` is true, macOS adapts the
+    /// color automatically (black in light mode, white in dark mode).
+    /// When false, `barColor` is used directly (e.g. red for recording).
+    private static func makeIcon(barColor: NSColor, asTemplate: Bool) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
             let barWidth: CGFloat = 2.0
@@ -32,7 +35,8 @@ class StatusBarController: NSObject, NSMenuDelegate {
             let originX = (rect.width - totalW) / 2
             let maxH = rect.height * 0.68
 
-            barColor.setFill()
+            // Template images use black; macOS inverts automatically for dark mode
+            (asTemplate ? NSColor.black : barColor).setFill()
             for (i, ratio) in heights.enumerated() {
                 let h = max(barWidth, maxH * ratio)
                 let x = originX + CGFloat(i) * (barWidth + gap)
@@ -42,14 +46,13 @@ class StatusBarController: NSObject, NSMenuDelegate {
             }
             return true
         }
-        // NOT template — we control the color explicitly
-        image.isTemplate = false
+        image.isTemplate = asTemplate
         return image
     }
 
     private func setupButton() {
         guard let button = statusItem.button else { return }
-        button.image = Self.makeIcon(barColor: .white)
+        button.image = Self.makeIcon(barColor: .black, asTemplate: true)
         button.target = self
         button.action = #selector(statusBarClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -178,11 +181,13 @@ class StatusBarController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         switch state {
         case .recording:
-            button.image = Self.makeIcon(barColor: .systemRed)
+            // Red is explicitly colored — not a template
+            button.image = Self.makeIcon(barColor: .systemRed, asTemplate: false)
         case .transcribing:
-            button.image = Self.makeIcon(barColor: .systemGray)
+            button.image = Self.makeIcon(barColor: .systemGray, asTemplate: false)
         default:
-            button.image = Self.makeIcon(barColor: .white)
+            // Template: macOS auto-adapts to light/dark menu bar
+            button.image = Self.makeIcon(barColor: .black, asTemplate: true)
         }
     }
 }

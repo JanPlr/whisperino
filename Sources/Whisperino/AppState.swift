@@ -164,32 +164,28 @@ class AppState: ObservableObject {
                 // Optionally refine with LLM
                 let finalText: String
                 let settings = store.settings
-                print("[whisperino] raw: \(rawText)")
                 if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
-                    print("[whisperino] refining with LLM (dictionary: \(store.dictionary.count) terms)…")
                     do {
                         let terms = store.dictionary.map { $0.term }
                         finalText = try await refiner.refine(text: rawText, apiKey: settings.apiKey, dictionaryTerms: terms)
-                        print("[whisperino] refined: \(finalText)")
                     } catch {
-                        print("[whisperino] LLM error: \(error) — using raw text")
+                        print("[whisperino] LLM refinement failed — using raw text")
                         finalText = rawText
                     }
                 } else {
-                    print("[whisperino] refinement off — using raw text")
                     finalText = rawText
                 }
 
                 await MainActor.run {
                     self.lastTranscriptionResult = finalText
-                    self.pendingPasteText = finalText
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(finalText, forType: .string)
                     self.state = .result(text: finalText)
-                    // Insert into focused text field
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        self.insertText(self.pendingPasteText)
-                    }
+
+                    // Re-activate the app that was frontmost when recording started,
+                    // then Cmd+V once it regains focus
+                    self.activateTargetAndPaste()
+
                     // Animated dismiss sequence: result → dismissing → idle
                     self.startDismissSequence()
                 }
@@ -224,60 +220,29 @@ class AppState: ObservableObject {
         }
     }
 
-    // Text waiting to be inserted after transcription completes
-    private var pendingPasteText: String = ""
-
-    /// Primary insertion method — tries AX direct insert first, falls back to Cmd+V
-    private func insertText(_ text: String) {
-        // Strategy 1: Accessibility API — directly set the focused element's selected
-        // text. This works in native apps (Mail, Notes, Xcode, Slack desktop, etc.)
-        // and is the most reliable because it bypasses focus/timing issues entirely.
-        if insertViaAccessibility(text) {
-            print("[whisperino] inserted via AX")
-            return
+    /// Re-activate the app that was frontmost when recording started, then paste via Cmd+V.
+    private func activateTargetAndPaste() {
+        if recordingTargetPID != 0,
+           let targetApp = NSRunningApplication(processIdentifier: recordingTargetPID) {
+            targetApp.activate()
         }
-
-        // Strategy 2: Cmd+V fallback — clipboard is already set, just trigger paste.
-        // Works in web-based text fields (browser, Electron apps) where AX can't
-        // write directly.
-        print("[whisperino] AX failed — falling back to Cmd+V")
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
-        keyDown?.flags = .maskCommand
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+        // Wait for the target app to regain focus, then Cmd+V
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let source = CGEventSource(stateID: .combinedSessionState)
+            let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
+            keyDown?.flags = .maskCommand
+            let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
+            keyUp?.flags = .maskCommand
+            keyDown?.post(tap: .cghidEventTap)
+            keyUp?.post(tap: .cghidEventTap)
+        }
     }
 
-    /// Directly insert text into the currently focused UI element via the
-    /// Accessibility API. Replaces any selected text, or inserts at the cursor.
-    @discardableResult
-    private func insertViaAccessibility(_ text: String) -> Bool {
-        guard AXIsProcessTrusted() else { return false }
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedElement: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedElement
-        ) == .success else { return false }
-
-        let element = focusedElement as! AXUIElement
-        // kAXSelectedTextAttribute replaces the current selection (or inserts at
-        // cursor if nothing is selected) — exactly what dictation should do
-        return AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextAttribute as CFString,
-            text as CFString
-        ) == .success
-    }
-
-    /// Copy snippet text to clipboard and insert it
+    /// Copy snippet text to clipboard and paste it
     func insertSnippet(_ snippet: Snippet) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(snippet.text, forType: .string)
-        insertText(snippet.text)
+        activateTargetAndPaste()
     }
 
     private func autoDismiss(after seconds: Double) {

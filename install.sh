@@ -20,10 +20,10 @@ fi
 echo "[1/4] Xcode Command Line Tools: OK"
 
 # Setup whisper.cpp + model
-if [ -f "$HOME/.whisperino/bin/whisper-cli" ] && [ -f "$HOME/.whisperino/models/ggml-small.bin" ]; then
+if [ -f "$HOME/.whisperino/bin/whisper-cli" ] && [ -f "$HOME/.whisperino/models/ggml-medium.bin" ]; then
     echo "[2/4] whisper.cpp + model: already installed"
 else
-    echo "[2/4] Installing whisper.cpp + downloading model (~466 MB)..."
+    echo "[2/4] Installing whisper.cpp + downloading model (~1.5 GB)..."
     ./setup.sh
 fi
 
