@@ -50,6 +50,10 @@ sleep 0.5
 rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_BUNDLE" /Applications/
 
+# Clear stale Accessibility entries — ad-hoc signing changes the CDHash
+# on every build, leaving orphaned TCC records that confuse macOS
+tccutil reset Accessibility com.whisperino.app 2>/dev/null || true
+
 # Launch from /Applications so Accessibility permission is tied to the right app
 echo "==> Launching $APP_NAME from /Applications..."
 open /Applications/$APP_NAME.app
@@ -59,10 +63,11 @@ sleep 2
 echo ""
 echo "==> Build complete!"
 echo ""
-echo "  ⚠️  IMPORTANT: Grant Accessibility permission"
-echo "  Toggle Whisperino ON (or OFF then ON) in the"
-echo "  System Settings window that just opened."
+echo "  ⚠️  Grant Accessibility permission"
+echo "  A system prompt should appear — click 'Open System Settings'"
+echo "  then toggle Whisperino ON."
 echo ""
-echo "  Without Accessibility, paste will silently fail."
+echo "  If no prompt appeared, open System Settings manually:"
+echo "  System Settings → Privacy & Security → Accessibility → Whisperino ON"
 echo ""
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"

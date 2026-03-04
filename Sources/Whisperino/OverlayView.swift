@@ -165,6 +165,11 @@ private extension View {
             .padding(.vertical, 12)
             .background(Color.black.opacity(0.85))
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
     }
 }
 

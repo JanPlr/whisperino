@@ -203,11 +203,9 @@ class AppState: ObservableObject {
 
         if let pid = targetPID,
            let app = NSRunningApplication(processIdentifier: pid) {
-            print("[whisperino] re-activating target app: \(app.localizedName ?? "?") (pid \(pid))")
             app.activate()
         }
 
-        print("[whisperino] AX trusted: \(AXIsProcessTrusted())")
         pasteClipboard()
     }
 
