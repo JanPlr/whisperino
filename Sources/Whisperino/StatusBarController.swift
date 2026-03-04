@@ -53,9 +53,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private func setupButton() {
         guard let button = statusItem.button else { return }
         button.image = Self.makeIcon(barColor: .black, asTemplate: true)
-        button.target = self
-        button.action = #selector(statusBarClicked(_:))
-        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        statusItem.menu = menu
     }
 
     private func buildMenu() {
@@ -99,16 +97,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(quitItem)
     }
 
-    @objc private func statusBarClicked(_ sender: NSStatusBarButton) {
-        guard let event = NSApp.currentEvent else { return }
-        if event.type == .rightMouseUp {
-            statusItem.menu = menu
-            statusItem.button?.performClick(nil)
-        } else {
-            appState.toggleRecording()
-        }
-    }
-
     func menuWillOpen(_ menu: NSMenu) {
         // Update shortcut hint label
         if let shortcutItem = menu.items.first(where: { $0.title.contains("tap to toggle") }) {
@@ -142,7 +130,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func menuDidClose(_ menu: NSMenu) {
-        statusItem.menu = nil
     }
 
     @objc private func toggleRecording() {

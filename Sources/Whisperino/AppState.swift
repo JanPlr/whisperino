@@ -32,6 +32,8 @@ class AppState: ObservableObject {
     private let pushToTalkThreshold: TimeInterval = 0.4
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
+    /// Text context extracted from the frontmost app for LLM context awareness
+    private var extractedContext: String?
     var isSetUp: Bool { transcriber.isAvailable }
 
     /// Toggle recording (used by menu bar click and waveform tap)
@@ -104,6 +106,7 @@ class AppState: ObservableObject {
         audioLevel = 0
         recordingStartTime = nil
         recordingTargetPID = nil
+        extractedContext = nil
         state = .idle
     }
 
@@ -116,6 +119,15 @@ class AppState: ObservableObject {
 
         // Capture the frontmost app so we can re-activate it before pasting
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+
+        // Extract text context from the active app if enabled
+        let settings = store.settings
+        if settings.contextAwarenessEnabled && settings.llmRefinementEnabled,
+           let pid = recordingTargetPID {
+            extractedContext = ContextExtractor.extractContext(from: pid)
+        } else {
+            extractedContext = nil
+        }
 
         do {
             try recorder.start { [weak self] level in
@@ -167,7 +179,12 @@ class AppState: ObservableObject {
                 if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
                     do {
                         let terms = store.dictionary.map { $0.term }
-                        finalText = try await refiner.refine(text: rawText, apiKey: settings.apiKey, dictionaryTerms: terms)
+                        finalText = try await refiner.refine(
+                            text: rawText,
+                            apiKey: settings.apiKey,
+                            dictionaryTerms: terms,
+                            surroundingContext: self.extractedContext
+                        )
                     } catch {
                         print("[whisperino] LLM refinement failed — using raw text")
                         finalText = rawText
@@ -200,6 +217,7 @@ class AppState: ObservableObject {
     private func activateTargetAndPaste() {
         let targetPID = recordingTargetPID
         recordingTargetPID = nil
+        extractedContext = nil
 
         if let pid = targetPID,
            let app = NSRunningApplication(processIdentifier: pid) {

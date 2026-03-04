@@ -67,6 +67,7 @@ struct AppSettings: Codable, Equatable {
     var llmRefinementEnabled: Bool = false
     var apiKey: String = ""
     var hotkey: HotkeyConfig = .default
+    var contextAwarenessEnabled: Bool = false
 
     init() {}
 
@@ -75,6 +76,7 @@ struct AppSettings: Codable, Equatable {
         llmRefinementEnabled = try container.decodeIfPresent(Bool.self, forKey: .llmRefinementEnabled) ?? false
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         hotkey = try container.decodeIfPresent(HotkeyConfig.self, forKey: .hotkey) ?? .default
+        contextAwarenessEnabled = try container.decodeIfPresent(Bool.self, forKey: .contextAwarenessEnabled) ?? false
     }
 }
 

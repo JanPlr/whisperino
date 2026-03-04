@@ -39,6 +39,14 @@ private struct GeneralTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section {
+                Toggle("Enable context awareness", isOn: $store.settings.contextAwarenessEnabled)
+                Text("Reads surrounding text from the active app to help the LLM better recognize names and technical terms.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!store.settings.llmRefinementEnabled)
+
             Section("Langdock API Key") {
                 HStack {
                     if showAPIKey {
