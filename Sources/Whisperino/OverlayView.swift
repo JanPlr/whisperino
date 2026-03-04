@@ -169,7 +169,6 @@ private extension View {
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
     }
 }
 
