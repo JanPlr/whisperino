@@ -177,6 +177,17 @@ open /Applications/Whisperino.app
 
 ## Changelog
 
+### 2026-03-04
+
+**Fixes:**
+- **Paste now works reliably from Spotlight / Applications** — fixed an issue where auto-paste silently failed when launching from Spotlight or /Applications. Root cause: stale Accessibility (TCC) entries from ad-hoc code signing. The build script now resets TCC entries automatically on each build.
+- **Overlay visible on all backgrounds** — added a subtle white border so the dark overlay is visible on black wallpapers.
+- **Overlay hover redesign** — hovering the waveform now dims the bars and overlays a stop icon instead of swapping them out. Cleaner look, stop action is clearly visible.
+- **No more duplicate Spotlight results** — the local build directory is now excluded from Spotlight indexing.
+- **Build script improvements** — automatically installs to /Applications, launches the app, resets Accessibility permissions, and opens System Settings. No manual steps needed beyond toggling Accessibility ON.
+- **Fixed deprecated whisper.cpp cmake flag** — updated `WHISPER_METAL` to `GGML_METAL`.
+- **Added Swift 5.9+ version check** — build and install scripts now check your Swift version upfront and tell you how to update if needed.
+
 ### 2025-03-03
 
 **New features:**
