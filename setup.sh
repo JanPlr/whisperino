@@ -37,9 +37,8 @@ fi
 # Build with Metal support for Apple Silicon
 echo "==> Building whisper.cpp with Metal acceleration..."
 cmake -B build \
-    -DWHISPER_METAL=ON \
+    -DGGML_METAL=ON \
     -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_SHARED_LIBS=OFF \
     2>&1 | tail -5
 
 cmake --build build --config Release -j$(sysctl -n hw.ncpu) 2>&1 | tail -5

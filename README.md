@@ -20,8 +20,8 @@ Press **Option+D**, double-tap **Option**, or click the menu bar icon to record.
 
 - macOS 14+ (Sonoma or later)
 - Apple Silicon Mac (M1/M2/M3/M4)
-- Xcode Command Line Tools (`xcode-select --install`)
-- cmake (`brew install cmake`)
+- Xcode Command Line Tools with Swift 5.9+ (`xcode-select --install`)
+- [Homebrew](https://brew.sh) — cmake is installed automatically if missing
 
 ## Install
 
@@ -33,12 +33,12 @@ cd whisperino
 
 The install script does the following automatically:
 
-1. Checks for Xcode Command Line Tools (prompts you to install if missing)
-2. Builds whisper.cpp with Metal acceleration and downloads the `medium` model (~1.5 GB)
-3. Builds the Whisperino.app bundle
-4. Copies it to `/Applications`
-5. Launches the app
-6. Opens **System Settings > Privacy & Security > Accessibility**
+1. Checks for Xcode Command Line Tools and Swift 5.9+ (tells you how to update if needed)
+2. Installs cmake via Homebrew if missing
+3. Builds whisper.cpp with Metal acceleration and downloads the `medium` model (~1.5 GB)
+4. Builds the Whisperino.app bundle
+5. Copies it to `/Applications`
+6. Launches the app and opens **System Settings > Accessibility**
 
 ### After install — two permissions you need to grant manually
 
@@ -120,24 +120,48 @@ The default model is `medium` (1.5 GB) — multilingual with strong accuracy and
 
 Models are stored in `~/.whisperino/models/`.
 
-## Rebuilding
-
-After each rebuild, macOS revokes Accessibility permission because the code signature changes. You need to re-grant it:
+## Updating
 
 ```bash
+cd whisperino
+git pull
 ./build.sh
 ```
 
-The build script opens System Settings automatically. Find Whisperino, toggle it **OFF**, then **ON** again.
+After the build, macOS revokes Accessibility permission because the code signature changes. System Settings opens automatically — find Whisperino, toggle it **OFF**, then **ON** again. Then relaunch:
+
+```bash
+open /Applications/Whisperino.app
+```
+
+If the update includes whisper.cpp changes, re-run the full install instead:
+
+```bash
+./install.sh
+```
+
+## Troubleshooting
+
+**"Swift 5.9+ is required"** — your Xcode Command Line Tools are outdated. Update them:
+
+```bash
+sudo rm -rf /Library/Developer/CommandLineTools
+xcode-select --install
+```
+
+**Paste doesn't work** — make sure Accessibility is enabled for Whisperino in System Settings > Privacy & Security > Accessibility. Toggle it off and on again after each rebuild.
+
+**App doesn't appear in Accessibility list** — launch the app first (`open /Applications/Whisperino.app`), then check the list again.
 
 ## Manual setup
 
 If you prefer to run the steps individually:
 
 ```bash
-./setup.sh    # Build whisper.cpp + download model
+./setup.sh    # Build whisper.cpp + download model + install cmake
 ./build.sh    # Build Whisperino.app
-open build/Whisperino.app
+cp -R build/Whisperino.app /Applications/
+open /Applications/Whisperino.app
 ```
 
 ## File structure

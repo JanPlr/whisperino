@@ -7,6 +7,20 @@ APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 
 echo "==> Building $APP_NAME..."
 
+# Check Swift version (need 5.9+ for swift-tools-version: 5.9)
+SWIFT_VER=$(swift --version 2>&1 | grep -oE 'Swift version [0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+')
+SWIFT_MAJOR=$(echo "$SWIFT_VER" | cut -d. -f1)
+SWIFT_MINOR=$(echo "$SWIFT_VER" | cut -d. -f2)
+if [ -z "$SWIFT_VER" ] || [ "$SWIFT_MAJOR" -lt 5 ] || { [ "$SWIFT_MAJOR" -eq 5 ] && [ "$SWIFT_MINOR" -lt 9 ]; }; then
+    echo ""
+    echo "  ✗ Swift 5.9+ is required (found: ${SWIFT_VER:-none})"
+    echo "    Update Xcode Command Line Tools:"
+    echo "    sudo rm -rf /Library/Developer/CommandLineTools"
+    echo "    xcode-select --install"
+    echo ""
+    exit 1
+fi
+
 # Build with Swift Package Manager
 swift build -c release 2>&1 | tail -5
 
