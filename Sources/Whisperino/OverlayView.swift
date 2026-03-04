@@ -62,8 +62,8 @@ struct OverlayView: View {
 
                 // Stop icon (shown on hover)
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(.primary.opacity(0.5))
-                    .frame(width: 12, height: 12)
+                    .fill(.primary.opacity(0.3))
+                    .frame(width: 9, height: 9)
                     .opacity(isHoveringWaveform ? 1 : 0)
             }
             .frame(height: 20)
