@@ -43,7 +43,7 @@ struct OverlayView: View {
             // Cancel button (left)
             Image(systemName: "xmark")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.primary.opacity(0.25))
+                .foregroundStyle(.white.opacity(0.4))
                 .frame(width: 16, height: 16)
                 .contentShape(Rectangle())
                 .onTapGesture { appState.cancelRecording() }
@@ -54,7 +54,7 @@ struct OverlayView: View {
                 HStack(spacing: 2.5) {
                     ForEach(0..<5, id: \.self) { i in
                         RoundedRectangle(cornerRadius: 2)
-                            .fill(.primary.opacity(isPaused ? 0.2 : 0.4))
+                            .fill(.white.opacity(isPaused ? 0.25 : 0.7))
                             .frame(width: 3.5, height: barHeight(for: i))
                     }
                 }
@@ -62,7 +62,7 @@ struct OverlayView: View {
 
                 // Stop icon (fades in on hover, overlaid on dimmed bars)
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(.primary.opacity(0.45))
+                    .fill(.white.opacity(0.8))
                     .frame(width: 10, height: 10)
                     .opacity(isHoveringWaveform ? 1 : 0)
             }
@@ -77,7 +77,7 @@ struct OverlayView: View {
             // Pause / Resume button (right)
             Image(systemName: isPaused ? "play.fill" : "pause.fill")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.primary.opacity(0.25))
+                .foregroundStyle(.white.opacity(0.4))
                 .frame(width: 16, height: 16)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -104,7 +104,7 @@ struct OverlayView: View {
 
             Text("Transcribing…")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.75))
         }
         .overlayChrome()
     }
@@ -118,7 +118,7 @@ struct OverlayView: View {
 
             Text("Refining…")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.75))
         }
         .overlayChrome()
     }
@@ -133,7 +133,7 @@ struct OverlayView: View {
 
             Text("Copied to clipboard")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.75))
         }
         .overlayChrome()
         .scaleEffect(isDismissing ? 0.88 : 1.0)
