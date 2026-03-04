@@ -40,21 +40,23 @@ cp AppIcon.icns "$APP_BUNDLE/Contents/Resources/"
 # Ad-hoc code sign (required for microphone access)
 codesign --force --sign - "$APP_BUNDLE"
 
+# Install to /Applications
+echo "==> Installing to /Applications..."
+pkill Whisperino 2>/dev/null || true
+sleep 0.5
+rm -rf "/Applications/$APP_NAME.app"
+cp -R "$APP_BUNDLE" /Applications/
+
 echo ""
-echo "==> Build complete!"
-echo "    App: $APP_BUNDLE"
+echo "==> Build complete! Installed to /Applications/$APP_NAME.app"
 echo ""
-echo "  ⚠️  IMPORTANT: Re-grant Accessibility permission"
-echo "  Each rebuild changes the code signature, which causes"
-echo "  macOS to revoke Accessibility. Without it, text insertion"
-echo "  silently does nothing."
-echo ""
-echo "  Opening System Settings → Accessibility now..."
-echo "  Find Whisperino and toggle it OFF then back ON."
+echo "  ⚠️  Re-grant Accessibility permission"
+echo "  Each rebuild changes the code signature, so macOS"
+echo "  revokes Accessibility. Toggle Whisperino OFF then ON"
+echo "  in the System Settings window that just opened."
 echo ""
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
-echo "    Run with:  open $APP_BUNDLE"
-echo "    Or:        $APP_BUNDLE/Contents/MacOS/$APP_NAME"
+echo "  Then launch:  open /Applications/$APP_NAME.app"
+echo "  Or find Whisperino in Spotlight."
 echo ""
-echo "    Shortcut:  Option+D to toggle recording"

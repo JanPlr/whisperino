@@ -11,7 +11,7 @@ echo ""
 
 # Check for Xcode Command Line Tools
 if ! xcode-select -p &>/dev/null; then
-    echo "[1/4] Installing Xcode Command Line Tools..."
+    echo "[1/3] Installing Xcode Command Line Tools..."
     xcode-select --install
     echo ""
     echo "  Please re-run this script after installation completes."
@@ -31,27 +31,19 @@ if [ -z "$SWIFT_VER" ] || [ "$SWIFT_MAJOR" -lt 5 ] || { [ "$SWIFT_MAJOR" -eq 5 ]
     echo ""
     exit 1
 fi
-echo "[1/4] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
+echo "[1/3] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
 
 # Setup whisper.cpp + model
 if [ -f "$HOME/.whisperino/bin/whisper-cli" ] && [ -f "$HOME/.whisperino/models/ggml-medium.bin" ]; then
-    echo "[2/4] whisper.cpp + model: already installed"
+    echo "[2/3] whisper.cpp + model: already installed"
 else
-    echo "[2/4] Installing whisper.cpp + downloading model (~1.5 GB)..."
+    echo "[2/3] Installing whisper.cpp + downloading model (~1.5 GB)..."
     ./setup.sh
 fi
 
-# Build the app
-echo "[3/4] Building Whisperino.app..."
+# Build the app + install to /Applications
+echo "[3/3] Building and installing Whisperino.app..."
 ./build.sh
-
-# Install to /Applications
-echo "[4/4] Installing to /Applications..."
-pkill Whisperino 2>/dev/null || true
-if [ -d "/Applications/Whisperino.app" ]; then
-    rm -rf "/Applications/Whisperino.app"
-fi
-cp -R build/Whisperino.app /Applications/
 
 echo ""
 echo "  ✓ Whisperino installed!"
