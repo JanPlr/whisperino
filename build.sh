@@ -40,6 +40,9 @@ cp AppIcon.icns "$APP_BUNDLE/Contents/Resources/"
 # Ad-hoc code sign (required for microphone access)
 codesign --force --sign - "$APP_BUNDLE"
 
+# Prevent Spotlight from indexing the build directory (avoid duplicate results)
+touch "$BUILD_DIR/.metadata_never_index"
+
 # Install to /Applications
 echo "==> Installing to /Applications..."
 pkill Whisperino 2>/dev/null || true
@@ -47,16 +50,19 @@ sleep 0.5
 rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_BUNDLE" /Applications/
 
+# Launch from /Applications so Accessibility permission is tied to the right app
+echo "==> Launching $APP_NAME from /Applications..."
+open /Applications/$APP_NAME.app
+
+sleep 2
+
 echo ""
-echo "==> Build complete! Installed to /Applications/$APP_NAME.app"
+echo "==> Build complete!"
 echo ""
-echo "  ⚠️  Re-grant Accessibility permission"
-echo "  Each rebuild changes the code signature, so macOS"
-echo "  revokes Accessibility. Toggle Whisperino OFF then ON"
-echo "  in the System Settings window that just opened."
+echo "  ⚠️  IMPORTANT: Grant Accessibility permission"
+echo "  Toggle Whisperino ON (or OFF then ON) in the"
+echo "  System Settings window that just opened."
+echo ""
+echo "  Without Accessibility, paste will silently fail."
 echo ""
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-
-echo "  Then launch:  open /Applications/$APP_NAME.app"
-echo "  Or find Whisperino in Spotlight."
-echo ""
