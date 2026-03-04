@@ -48,9 +48,9 @@ struct OverlayView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { appState.cancelRecording() }
 
-            // Waveform bars — hover shows stop icon, click to submit
+            // Waveform bars — hover dims bars and overlays stop icon
             ZStack {
-                // Waveform bars
+                // Waveform bars (dim on hover, never fully hidden)
                 HStack(spacing: 2.5) {
                     ForEach(0..<5, id: \.self) { i in
                         RoundedRectangle(cornerRadius: 2)
@@ -58,12 +58,12 @@ struct OverlayView: View {
                             .frame(width: 3.5, height: barHeight(for: i))
                     }
                 }
-                .opacity(isHoveringWaveform ? 0 : 1)
+                .opacity(isHoveringWaveform ? 0.35 : 1)
 
-                // Stop icon (shown on hover)
+                // Stop icon (fades in on hover, overlaid on dimmed bars)
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(.primary.opacity(0.3))
-                    .frame(width: 9, height: 9)
+                    .fill(.primary.opacity(0.45))
+                    .frame(width: 10, height: 10)
                     .opacity(isHoveringWaveform ? 1 : 0)
             }
             .frame(height: 20)
