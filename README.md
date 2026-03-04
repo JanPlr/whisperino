@@ -179,7 +179,12 @@ open /Applications/Whisperino.app
 
 ### 2026-03-04
 
+**New features:**
+- **Context awareness** — when LLM refinement is enabled, Whisperino can read surrounding text from the active app to help the LLM better recognize names and technical terms. Enable in Settings → General.
+
 **Fixes:**
+- **Menu bar behavior** — left and right click now both show the standard macOS menu (with pin/unpin). Recording is started via hotkey only.
+- **Overlay colors** — switched from system `.primary` to explicit white so text and icons are always visible regardless of macOS light/dark mode.
 - **Paste now works reliably from Spotlight / Applications** — fixed an issue where auto-paste silently failed when launching from Spotlight or /Applications. Root cause: stale Accessibility (TCC) entries from ad-hoc code signing. The build script now resets TCC entries automatically on each build.
 - **Overlay visible on all backgrounds** — added a subtle white border so the dark overlay is visible on black wallpapers.
 - **Overlay hover redesign** — hovering the waveform now dims the bars and overlays a stop icon instead of swapping them out. Cleaner look, stop action is clearly visible.
