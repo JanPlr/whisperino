@@ -177,10 +177,23 @@ open /Applications/Whisperino.app
 
 ## Changelog
 
-### 2026-03-04
+### 2026-03-05
 
 **New features:**
-- **Context awareness** — when LLM refinement is enabled, Whisperino can read surrounding text from the active app to help the LLM better recognize names and technical terms. Enable in Settings → General.
+- **Instruction mode** — hold **Shift+Option+D** or **Shift+double-tap Option** to speak instructions to the LLM. It generates a response and pastes it directly. Attach clipboard content (text or images) with the paperclip icon.
+- **Escape to cancel** — press Esc to cancel any active recording.
+- **Double-tap Option to stop** — double-tap Option now toggles recording (start and stop), not just start.
+
+**Improvements:**
+- **Redesigned settings** — all shortcuts shown clearly in the General tab. API key is now a prerequisite: LLM refinement and instruction mode are disabled until a key is set.
+- **Animated overlay border** — instruction mode shows a colorful rotating gradient border to distinguish it from normal dictation.
+- **Empty transcription handling** — if no speech is detected, the LLM is no longer called in either mode.
+
+**Removed:**
+- **Context awareness** — removed (didn't work reliably for browser-based apps like Gmail).
+- **Custom shortcut recorder** — removed in favor of fixed, documented shortcuts.
+
+### 2026-03-04
 
 **Fixes:**
 - **Menu bar behavior** — left and right click now both show the standard macOS menu (with pin/unpin). Recording is started via hotkey only.
