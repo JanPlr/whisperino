@@ -16,7 +16,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             onPress: { [weak self] in self?.appState.hotkeyPressed() },
             onRelease: { [weak self] in self?.appState.hotkeyReleased() },
             onInstructionPress: { [weak self] in self?.appState.instructionHotkeyPressed() },
-            onInstructionRelease: { [weak self] in self?.appState.instructionHotkeyReleased() }
+            onInstructionRelease: { [weak self] in self?.appState.instructionHotkeyReleased() },
+            onCancel: { [weak self] in self?.appState.cancelRecording() }
         )
     }
 }

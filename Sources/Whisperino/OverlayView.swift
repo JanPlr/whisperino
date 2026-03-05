@@ -81,7 +81,7 @@ struct OverlayView: View {
                 }
             }
 
-            // Clipboard preview row (instruction mode only, fades in when attached)
+            // Clipboard preview row (instruction mode only)
             if appState.isInstructionMode, let preview = appState.clipboardPreview {
                 HStack(spacing: 4) {
                     Text("Clipboard context:")
@@ -94,11 +94,9 @@ struct OverlayView: View {
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .overlayChrome(instruction: appState.isInstructionMode)
-        .animation(.easeInOut(duration: 0.2), value: appState.clipboardPreview != nil)
     }
 
     private var pauseButton: some View {
