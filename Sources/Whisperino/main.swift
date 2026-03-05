@@ -14,7 +14,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         HotkeyManager.shared.register(
             onPress: { [weak self] in self?.appState.hotkeyPressed() },
-            onRelease: { [weak self] in self?.appState.hotkeyReleased() }
+            onRelease: { [weak self] in self?.appState.hotkeyReleased() },
+            onInstructionPress: { [weak self] in self?.appState.instructionHotkeyPressed() },
+            onInstructionRelease: { [weak self] in self?.appState.instructionHotkeyReleased() }
         )
     }
 }

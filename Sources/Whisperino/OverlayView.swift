@@ -39,53 +39,88 @@ struct OverlayView: View {
     // MARK: - Recording
 
     private var recordingView: some View {
-        HStack(spacing: 10) {
-            // Cancel button (left)
-            Image(systemName: "xmark")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.4))
-                .frame(width: 16, height: 16)
-                .contentShape(Rectangle())
-                .onTapGesture { appState.cancelRecording() }
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                // Cancel button (left)
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+                    .onTapGesture { appState.cancelRecording() }
 
-            // Waveform bars — hover dims bars and overlays stop icon
-            ZStack {
-                // Waveform bars (dim on hover, never fully hidden)
-                HStack(spacing: 2.5) {
-                    ForEach(0..<5, id: \.self) { i in
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(.white.opacity(isPaused ? 0.25 : 0.7))
-                            .frame(width: 3.5, height: barHeight(for: i))
+                // Waveform bars — hover dims bars and overlays stop icon
+                ZStack {
+                    HStack(spacing: 2.5) {
+                        ForEach(0..<5, id: \.self) { i in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(.white.opacity(isPaused ? 0.25 : 0.7))
+                                .frame(width: 3.5, height: barHeight(for: i))
+                        }
                     }
+                    .opacity(isHoveringWaveform ? 0.35 : 1)
+
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(.white.opacity(0.8))
+                        .frame(width: 10, height: 10)
+                        .opacity(isHoveringWaveform ? 1 : 0)
                 }
-                .opacity(isHoveringWaveform ? 0.35 : 1)
-
-                // Stop icon (fades in on hover, overlaid on dimmed bars)
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(.white.opacity(0.8))
-                    .frame(width: 10, height: 10)
-                    .opacity(isHoveringWaveform ? 1 : 0)
-            }
-            .frame(height: 20)
-            .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
-            .animation(.easeInOut(duration: 0.15), value: isHoveringWaveform)
-            .animation(.easeInOut(duration: 0.2), value: isPaused)
-            .contentShape(Rectangle())
-            .onHover { hovering in isHoveringWaveform = hovering }
-            .onTapGesture { appState.toggleRecording() }
-
-            // Pause / Resume button (right)
-            Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.4))
-                .frame(width: 16, height: 16)
+                .frame(height: 20)
+                .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
+                .animation(.easeInOut(duration: 0.15), value: isHoveringWaveform)
+                .animation(.easeInOut(duration: 0.2), value: isPaused)
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    if isPaused { appState.resumeRecording() }
-                    else { appState.pauseRecording() }
+                .onHover { hovering in isHoveringWaveform = hovering }
+                .onTapGesture { appState.toggleRecording() }
+
+                // Right button: pause (transcription) or clipboard toggle (instruction)
+                if appState.isInstructionMode {
+                    clipboardButton
+                } else {
+                    pauseButton
                 }
+            }
+
+            // Clipboard preview row (instruction mode only, fades in when attached)
+            if appState.isInstructionMode, let preview = appState.clipboardPreview {
+                HStack(spacing: 4) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.45))
+                    Text(preview)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
-        .overlayChrome()
+        .overlayChrome(instruction: appState.isInstructionMode)
+        .animation(.easeInOut(duration: 0.2), value: appState.clipboardPreview != nil)
+    }
+
+    private var pauseButton: some View {
+        Image(systemName: isPaused ? "play.fill" : "pause.fill")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.white.opacity(0.4))
+            .frame(width: 16, height: 16)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if isPaused { appState.resumeRecording() }
+                else { appState.pauseRecording() }
+            }
+    }
+
+    private var clipboardButton: some View {
+        let attached = appState.clipboardPreview != nil
+        return Image(systemName: "paperclip")
+            .font(.system(size: 11, weight: attached ? .semibold : .regular))
+            .foregroundStyle(.white.opacity(attached ? 0.75 : 0.35))
+            .frame(width: 16, height: 16)
+            .contentShape(Rectangle())
+            .onTapGesture { appState.toggleClipboardAttachment() }
     }
 
     private func barHeight(for index: Int) -> CGFloat {
@@ -109,18 +144,26 @@ struct OverlayView: View {
         .overlayChrome()
     }
 
-    // MARK: - Refining
+    // MARK: - Refining / Generating
 
     private var refiningView: some View {
         HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-
-            Text("Refining…")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.75))
+            if appState.isInstructionMode {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.6))
+                Text("Generating…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Refining…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
         }
-        .overlayChrome()
+        .overlayChrome(instruction: appState.isInstructionMode)
     }
 
     // MARK: - Result / Dismissing
@@ -131,7 +174,7 @@ struct OverlayView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.green)
 
-            Text("Copied to clipboard")
+            Text(appState.isInstructionMode ? "Generated" : "Copied to clipboard")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.75))
         }
@@ -151,6 +194,7 @@ struct OverlayView: View {
 
             Text(message)
                 .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
         }
         .overlayChrome()
     }
@@ -159,16 +203,24 @@ struct OverlayView: View {
 // MARK: - Overlay Chrome
 
 private extension View {
-    func overlayChrome() -> some View {
+    func overlayChrome(instruction: Bool = false) -> some View {
         self
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color.black.opacity(0.85))
+            .background(
+                instruction
+                    ? Color(red: 0.05, green: 0.08, blue: 0.18).opacity(0.92)
+                    : Color.black.opacity(0.85)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                    .strokeBorder(
+                        instruction
+                            ? Color.white.opacity(0.22)
+                            : Color.white.opacity(0.15),
+                        lineWidth: 1
+                    )
             )
     }
 }
-

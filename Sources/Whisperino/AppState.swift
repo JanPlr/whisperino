@@ -14,10 +14,21 @@ enum TranscriptionState: Equatable {
     case error(message: String)
 }
 
+/// What the clipboard attachment contains
+enum ClipboardContent {
+    case text(String)
+    case image(NSImage)
+}
+
 class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
     @Published var recordingStartTime: Date?
+    /// Non-nil when clipboard is attached in instruction mode; contains a short preview string
+    @Published var clipboardPreview: String? = nil
+    /// Whether we are currently in instruction mode (Shift+hotkey)
+    @Published var isInstructionMode: Bool = false
+
     private(set) var lastTranscriptionResult: String?
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
@@ -34,33 +45,42 @@ class AppState: ObservableObject {
     private var recordingTargetPID: pid_t?
     /// Text context extracted from the frontmost app for LLM context awareness
     private var extractedContext: String?
+    /// Clipboard content attached by user for instruction mode
+    private var clipboardContent: ClipboardContent? = nil
+
     var isSetUp: Bool { transcriber.isAvailable }
 
-    /// Toggle recording (used by menu bar click and waveform tap)
-    func toggleRecording() {
-        switch state {
-        case .idle, .result, .error, .dismissing:
-            startRecording()
-        case .recording, .paused:
-            stopRecording()
-        case .transcribing, .refining:
-            break
-        }
-    }
+    // MARK: - Hotkey handlers
 
-    /// Called when the hotkey is pressed down
     func hotkeyPressed() {
-        // Ignore key repeat events — only respond to the first press
         guard !isHotkeyHeld else { return }
         isHotkeyHeld = true
         hotkeyPressTime = Date()
+        handlePress(instruction: false)
+    }
+
+    func hotkeyReleased() {
+        isHotkeyHeld = false
+        handleRelease()
+    }
+
+    func instructionHotkeyPressed() {
+        guard !isHotkeyHeld else { return }
+        isHotkeyHeld = true
+        hotkeyPressTime = Date()
+        handlePress(instruction: true)
+    }
+
+    func instructionHotkeyReleased() {
+        isHotkeyHeld = false
+        handleRelease()
+    }
+
+    private func handlePress(instruction: Bool) {
         switch state {
         case .idle, .result, .error, .dismissing:
-            startRecording()
+            startRecording(instruction: instruction)
         case .recording:
-            // Require at least 300ms of recording before allowing a stop via hotkey.
-            // This prevents key bounce or a spurious repeat press from immediately
-            // stopping a recording that just started.
             guard let startTime = recordingStartTime,
                   Date().timeIntervalSince(startTime) >= 0.3 else { return }
             stopRecording()
@@ -71,19 +91,31 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Called when the hotkey is released — stops recording if held long enough (push-to-talk)
-    func hotkeyReleased() {
+    private func handleRelease() {
         isHotkeyHeld = false
         guard case .recording = state,
               let pressTime = hotkeyPressTime,
               Date().timeIntervalSince(pressTime) > pushToTalkThreshold else {
             return
         }
-        // Push-to-talk: held long enough, release stops recording
         stopRecording()
     }
 
-    /// Pause the current recording
+    // MARK: - Toggle Recording (waveform tap)
+
+    func toggleRecording() {
+        switch state {
+        case .idle, .result, .error, .dismissing:
+            startRecording(instruction: isInstructionMode)
+        case .recording, .paused:
+            stopRecording()
+        case .transcribing, .refining:
+            break
+        }
+    }
+
+    // MARK: - Pause / Resume
+
     func pauseRecording() {
         guard case .recording = state else { return }
         recorder.pause()
@@ -91,14 +123,14 @@ class AppState: ObservableObject {
         state = .paused
     }
 
-    /// Resume a paused recording
     func resumeRecording() {
         guard case .paused = state else { return }
         recorder.resume()
         state = .recording
     }
 
-    /// Cancel recording and discard audio
+    // MARK: - Cancel
+
     func cancelRecording() {
         if let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
@@ -107,24 +139,73 @@ class AppState: ObservableObject {
         recordingStartTime = nil
         recordingTargetPID = nil
         extractedContext = nil
+        resetInstructionMode()
         state = .idle
     }
 
-    private func startRecording() {
+    // MARK: - Clipboard Attachment (instruction mode only)
+
+    /// Toggle clipboard attachment on/off. Reads current clipboard content.
+    func toggleClipboardAttachment() {
+        if clipboardContent != nil {
+            // Detach
+            clipboardContent = nil
+            clipboardPreview = nil
+        } else {
+            // Attach from clipboard
+            let pb = NSPasteboard.general
+            if let image = NSImage(pasteboard: pb) {
+                clipboardContent = .image(image)
+                clipboardPreview = "Image"
+            } else if let text = pb.string(forType: .string), !text.isEmpty {
+                clipboardContent = .text(text)
+                let preview = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                clipboardPreview = String(preview.prefix(50))
+            }
+        }
+    }
+
+    // MARK: - Recording
+
+    private func startRecording(instruction: Bool) {
         guard isSetUp else {
             state = .error(message: "Run setup.sh first")
             autoDismiss(after: 4)
             return
         }
 
+        isInstructionMode = instruction
+
+        if instruction {
+            // In instruction mode, require LLM to be configured
+            let settings = store.settings
+            guard settings.llmRefinementEnabled && !settings.apiKey.isEmpty else {
+                state = .error(message: "Instruction mode requires LLM — enable in Settings")
+                autoDismiss(after: 4)
+                return
+            }
+            // Reset clipboard attachment from any previous session
+            clipboardContent = nil
+            clipboardPreview = nil
+        }
+
         // Capture the frontmost app so we can re-activate it before pasting
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
 
-        // Extract text context from the active app if enabled
+        // Extract text context (transcription mode only, when enabled)
         let settings = store.settings
-        if settings.contextAwarenessEnabled && settings.llmRefinementEnabled,
+        if !instruction && settings.contextAwarenessEnabled && settings.llmRefinementEnabled,
            let pid = recordingTargetPID {
             extractedContext = ContextExtractor.extractContext(from: pid)
+            let logDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".whisperino")
+            try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+            let msg = "[whisperino] Context extracted: \(extractedContext != nil ? "\(extractedContext!.prefix(300))…" : "nil")\n"
+            let logFile = logDir.appendingPathComponent("debug.log")
+            if let handle = try? FileHandle(forWritingTo: logFile) {
+                handle.seekToEndOfFile(); handle.write(msg.data(using: .utf8)!); handle.closeFile()
+            } else {
+                try? msg.write(to: logFile, atomically: true, encoding: .utf8)
+            }
         } else {
             extractedContext = nil
         }
@@ -152,7 +233,6 @@ class AppState: ObservableObject {
         let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
         recordingStartTime = nil
 
-        // Discard recordings shorter than 0.5s — likely a mis-tap or permission dialog timing
         guard duration >= 0.5 else {
             try? FileManager.default.removeItem(at: audioURL)
             state = .idle
@@ -160,6 +240,9 @@ class AppState: ObservableObject {
         }
 
         state = .transcribing
+
+        let instructionMode = isInstructionMode
+        let attachedClipboard = clipboardContent
 
         Task {
             do {
@@ -173,10 +256,18 @@ class AppState: ObservableObject {
                     self.state = .refining
                 }
 
-                // Optionally refine with LLM
                 let finalText: String
                 let settings = store.settings
-                if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
+
+                if instructionMode {
+                    // Instruction mode: send spoken text as instructions to LLM
+                    finalText = try await refiner.instruct(
+                        transcription: rawText,
+                        apiKey: settings.apiKey,
+                        clipboardContent: attachedClipboard
+                    )
+                } else if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
+                    // Transcription mode: clean up speech
                     do {
                         let terms = store.dictionary.map { $0.term }
                         finalText = try await refiner.refine(
@@ -198,26 +289,31 @@ class AppState: ObservableObject {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(finalText, forType: .string)
                     self.state = .result(text: finalText)
-
                     self.activateTargetAndPaste()
-
-                    // Animated dismiss sequence: result → dismissing → idle
                     self.startDismissSequence()
                 }
             } catch {
                 await MainActor.run {
-                    self.state = .error(message: "Transcription failed")
+                    self.state = .error(message: instructionMode ? "Instruction failed" : "Transcription failed")
                     self.autoDismiss(after: 3)
                 }
             }
         }
     }
 
-    /// Re-activate the app that was frontmost when recording started, then Cmd+V
+    private func resetInstructionMode() {
+        isInstructionMode = false
+        clipboardContent = nil
+        clipboardPreview = nil
+    }
+
+    // MARK: - Paste
+
     private func activateTargetAndPaste() {
         let targetPID = recordingTargetPID
         recordingTargetPID = nil
         extractedContext = nil
+        resetInstructionMode()
 
         if let pid = targetPID,
            let app = NSRunningApplication(processIdentifier: pid) {
@@ -227,13 +323,10 @@ class AppState: ObservableObject {
         pasteClipboard()
     }
 
-    /// Animated dismiss: show result briefly, then shrink away
     private func startDismissSequence() {
-        // Show "Copied to clipboard" for 1.2s
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             guard case .result = self?.state else { return }
             self?.state = .dismissing
-            // After shrink animation completes, fully hide
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard case .dismissing = self?.state else { return }
                 self?.state = .idle
@@ -241,7 +334,8 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Request accessibility permission (shows system prompt if not yet granted)
+    // MARK: - Accessibility
+
     static func ensureAccessibility() {
         if !AXIsProcessTrusted() {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
@@ -249,7 +343,6 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Paste clipboard content into the frontmost app via Cmd+V.
     private func pasteClipboard() {
         let source = CGEventSource(stateID: .combinedSessionState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
@@ -260,7 +353,6 @@ class AppState: ObservableObject {
         keyUp?.post(tap: .cghidEventTap)
     }
 
-    /// Copy snippet text to clipboard and paste it
     func insertSnippet(_ snippet: Snippet) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(snippet.text, forType: .string)
