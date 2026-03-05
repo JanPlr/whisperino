@@ -43,8 +43,6 @@ class AppState: ObservableObject {
     private let pushToTalkThreshold: TimeInterval = 0.4
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
-    /// Text context extracted from the frontmost app for LLM context awareness
-    private var extractedContext: String?
     /// Clipboard content attached by user for instruction mode
     private var clipboardContent: ClipboardContent? = nil
 
@@ -138,7 +136,6 @@ class AppState: ObservableObject {
         audioLevel = 0
         recordingStartTime = nil
         recordingTargetPID = nil
-        extractedContext = nil
         resetInstructionMode()
         state = .idle
     }
@@ -177,11 +174,16 @@ class AppState: ObservableObject {
         isInstructionMode = instruction
 
         if instruction {
-            // In instruction mode, require LLM to be configured
+            // In instruction mode, require API key + LLM to be configured
             let settings = store.settings
-            guard settings.llmRefinementEnabled && !settings.apiKey.isEmpty else {
-                state = .error(message: "Instruction mode requires LLM — enable in Settings")
-                autoDismiss(after: 4)
+            if settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                state = .error(message: "Add API key in Settings first")
+                autoDismiss(after: 3)
+                return
+            }
+            guard settings.llmRefinementEnabled else {
+                state = .error(message: "Enable LLM refinement in Settings first")
+                autoDismiss(after: 3)
                 return
             }
             // Reset clipboard attachment from any previous session
@@ -191,24 +193,6 @@ class AppState: ObservableObject {
 
         // Capture the frontmost app so we can re-activate it before pasting
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-
-        // Extract text context (transcription mode only, when enabled)
-        let settings = store.settings
-        if !instruction && settings.contextAwarenessEnabled && settings.llmRefinementEnabled,
-           let pid = recordingTargetPID {
-            extractedContext = ContextExtractor.extractContext(from: pid)
-            let logDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".whisperino")
-            try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
-            let msg = "[whisperino] Context extracted: \(extractedContext != nil ? "\(extractedContext!.prefix(300))…" : "nil")\n"
-            let logFile = logDir.appendingPathComponent("debug.log")
-            if let handle = try? FileHandle(forWritingTo: logFile) {
-                handle.seekToEndOfFile(); handle.write(msg.data(using: .utf8)!); handle.closeFile()
-            } else {
-                try? msg.write(to: logFile, atomically: true, encoding: .utf8)
-            }
-        } else {
-            extractedContext = nil
-        }
 
         do {
             try recorder.start { [weak self] level in
@@ -247,12 +231,17 @@ class AppState: ObservableObject {
         Task {
             do {
                 let rawText = try await transcriber.transcribe(audioURL: audioURL)
-                await MainActor.run {
-                    guard !rawText.isEmpty else {
+
+                guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    await MainActor.run {
                         self.state = .error(message: "No speech detected")
+                        self.resetInstructionMode()
                         self.autoDismiss(after: 2)
-                        return
                     }
+                    return
+                }
+
+                await MainActor.run {
                     self.state = .refining
                 }
 
@@ -273,8 +262,7 @@ class AppState: ObservableObject {
                         finalText = try await refiner.refine(
                             text: rawText,
                             apiKey: settings.apiKey,
-                            dictionaryTerms: terms,
-                            surroundingContext: self.extractedContext
+                            dictionaryTerms: terms
                         )
                     } catch {
                         print("[whisperino] LLM refinement failed — using raw text")
@@ -312,7 +300,6 @@ class AppState: ObservableObject {
     private func activateTargetAndPaste() {
         let targetPID = recordingTargetPID
         recordingTargetPID = nil
-        extractedContext = nil
         resetInstructionMode()
 
         if let pid = targetPID,

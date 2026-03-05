@@ -84,12 +84,12 @@ struct OverlayView: View {
             // Clipboard preview row (instruction mode only, fades in when attached)
             if appState.isInstructionMode, let preview = appState.clipboardPreview {
                 HStack(spacing: 4) {
-                    Image(systemName: "paperclip")
+                    Text("Clipboard context:")
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(.white.opacity(0.35))
                     Text(preview)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 0)
@@ -207,20 +207,46 @@ private extension View {
         self
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(
-                instruction
-                    ? Color(red: 0.05, green: 0.08, blue: 0.18).opacity(0.92)
-                    : Color.black.opacity(0.85)
-            )
+            .background(Color.black.opacity(0.85))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(
-                        instruction
-                            ? Color.white.opacity(0.22)
-                            : Color.white.opacity(0.15),
-                        lineWidth: 1
-                    )
+                Group {
+                    if instruction {
+                        AnimatedGradientBorder()
+                    } else {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                    }
+                }
             )
+    }
+}
+
+// MARK: - Animated gradient border for instruction mode
+
+private struct AnimatedGradientBorder: View {
+    @State private var angle: Double = 0
+
+    private let colors: [Color] = [
+        Color(red: 0.85, green: 0.35, blue: 0.65),
+        Color(red: 0.75, green: 0.45, blue: 0.9),
+        Color(red: 0.45, green: 0.7, blue: 1.0),
+        Color(red: 0.4, green: 0.55, blue: 1.0),
+        .clear, .clear, .clear, .clear,
+        Color(red: 0.85, green: 0.35, blue: 0.65),
+    ]
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(
+                AngularGradient(colors: colors, center: .center, angle: .degrees(angle)),
+                lineWidth: 1.5
+            )
+            .onAppear {
+                withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+                    angle = 360
+                }
+            }
+            .allowsHitTesting(false)
     }
 }

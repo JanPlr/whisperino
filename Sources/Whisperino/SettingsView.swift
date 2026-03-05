@@ -23,31 +23,20 @@ private struct GeneralTab: View {
     @ObservedObject private var store = SettingsStore.shared
     @State private var showAPIKey = false
 
+    private var hasAPIKey: Bool {
+        !store.settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         Form {
-            Section("Keyboard Shortcut") {
-                ShortcutRecorderView()
-                Text("Tap to toggle recording, hold to push-to-talk.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Section {
+                SectionHeader("Dictation")
+                ShortcutRow(keys: "⌥D", label: "Tap to start/stop, hold to push-to-talk")
+                ShortcutRow(keys: "⌥⌥", label: "Double-tap Option to start/stop")
             }
 
             Section {
-                Toggle("Enable LLM refinement", isOn: $store.settings.llmRefinementEnabled)
-                Text("Removes filler words, adds punctuation, corrects backtracking, and applies your dictionary terms using Claude Haiku via Langdock.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Toggle("Enable context awareness", isOn: $store.settings.contextAwarenessEnabled)
-                Text("Reads surrounding text from the active app to help the LLM better recognize names and technical terms.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .disabled(!store.settings.llmRefinementEnabled)
-
-            Section("Langdock API Key") {
+                SectionHeader("Langdock API Key")
                 HStack {
                     if showAPIKey {
                         TextField("Paste your API key", text: $store.settings.apiKey)
@@ -61,79 +50,70 @@ private struct GeneralTab: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                if store.settings.llmRefinementEnabled && store.settings.apiKey.isEmpty {
-                    Label("Enter an API key to enable refinement", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
+                Text("Required for LLM refinement and instruction mode.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+
+            Section {
+                Toggle("Enable LLM refinement", isOn: $store.settings.llmRefinementEnabled)
+                    .disabled(!hasAPIKey)
+                Text("Removes filler words, adds punctuation, corrects backtracking, and applies your dictionary terms using Claude Haiku via Langdock.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .opacity(hasAPIKey ? 1 : 0.5)
+
+            Section {
+                SectionHeader("Instruction Mode")
+                ShortcutRow(keys: "⇧⌥D", label: "Tap to start/stop, hold to push-to-talk")
+                ShortcutRow(keys: "⇧⌥⌥", label: "Hold Shift + double-tap Option to start/stop")
+                Text("Speak instructions and the LLM generates a response. Tap the paperclip to attach clipboard content (text or image).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .opacity(hasAPIKey && store.settings.llmRefinementEnabled ? 1 : 0.5)
         }
         .formStyle(.grouped)
         .padding(.vertical, 8)
+        .onChange(of: store.settings.apiKey) {
+            // Auto-disable refinement if API key is cleared
+            if !hasAPIKey && store.settings.llmRefinementEnabled {
+                store.settings.llmRefinementEnabled = false
+            }
+        }
     }
 }
 
-// MARK: - Shortcut Recorder
+// MARK: - Section Header
 
-private struct ShortcutRecorderView: View {
-    @ObservedObject private var store = SettingsStore.shared
-    @State private var isRecording = false
-    @State private var eventMonitor: Any?
+private struct SectionHeader: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.primary)
+    }
+}
+
+// MARK: - Shortcut Row
+
+private struct ShortcutRow: View {
+    let keys: String
+    let label: String
 
     var body: some View {
         HStack {
-            Text("Dictation shortcut")
-            Spacer()
-            Button(action: { startRecording() }) {
-                Text(isRecording ? "Press shortcut…" : store.settings.hotkey.displayString)
-                    .frame(minWidth: 100)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.bordered)
-            .foregroundColor(isRecording ? .secondary : .primary)
-
-            if store.settings.hotkey != .default {
-                Button("Reset") {
-                    store.settings.hotkey = .default
-                }
-                .buttonStyle(.borderless)
+            Text(keys)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.primary)
+                .frame(width: 48, alignment: .leading)
+            Text(label)
                 .font(.caption)
-            }
+                .foregroundStyle(.secondary)
         }
-    }
-
-    private func startRecording() {
-        guard !isRecording else { return }
-        isRecording = true
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
-            // Escape cancels
-            if event.keyCode == 53 {
-                stopRecording()
-                return nil
-            }
-            // Require at least one modifier key
-            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let hasModifier = mods.contains(.command) || mods.contains(.option)
-                || mods.contains(.control) || mods.contains(.shift)
-            guard hasModifier else { return event }
-
-            let carbonMods = HotkeyConfig.carbonModifiers(from: mods)
-            store.settings.hotkey = HotkeyConfig(
-                keyCode: UInt32(event.keyCode),
-                modifiers: carbonMods
-            )
-            stopRecording()
-            return nil
-        }
-    }
-
-    private func stopRecording() {
-        if let monitor = eventMonitor {
-            NSEvent.removeMonitor(monitor)
-            eventMonitor = nil
-        }
-        isRecording = false
     }
 }
 

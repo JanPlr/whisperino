@@ -74,26 +74,35 @@ class HotkeyManager {
 
     private func handleFlagsChanged(_ event: NSEvent) {
         let optionDown = event.modifierFlags.contains(.option)
-        // Only care about bare Option (no other modifiers)
-        let otherModifiers: NSEvent.ModifierFlags = [.command, .shift, .control]
-        let hasOtherModifiers = !event.modifierFlags.intersection(otherModifiers).isEmpty
+        let shiftDown = event.modifierFlags.contains(.shift)
+        // Allow Option alone or Shift+Option — block Command/Control
+        let blockedModifiers: NSEvent.ModifierFlags = [.command, .control]
+        let hasBlockedModifiers = !event.modifierFlags.intersection(blockedModifiers).isEmpty
 
-        if optionDown && !optionIsDown && !hasOtherModifiers {
-            // Option pressed
+        if optionDown && !optionIsDown && !hasBlockedModifiers {
+            // Option pressed (possibly with Shift)
             optionIsDown = true
         } else if !optionDown && optionIsDown {
             // Option released
             optionIsDown = false
 
-            if hasOtherModifiers { return }
+            if hasBlockedModifiers { return }
 
             let now = Date()
             if let lastRelease = lastOptionReleaseTime,
                now.timeIntervalSince(lastRelease) < doubleTapThreshold {
-                // Double-tap detected
+                // Double-tap detected — check if Shift is held for instruction mode
                 lastOptionReleaseTime = nil
+                let instruction = shiftDown
                 DispatchQueue.main.async { [weak self] in
-                    self?.onPress?()
+                    if instruction {
+                        self?.onInstructionPress?()
+                        // Immediately release so isHotkeyHeld resets (no hold event for double-tap)
+                        self?.onInstructionRelease?()
+                    } else {
+                        self?.onPress?()
+                        self?.onRelease?()
+                    }
                 }
             } else {
                 lastOptionReleaseTime = now
