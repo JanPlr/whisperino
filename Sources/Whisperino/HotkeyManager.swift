@@ -19,27 +19,21 @@ class HotkeyManager {
     private let doubleTapThreshold: TimeInterval = 0.35
     private var optionIsDown = false
 
-    // Escape to cancel
-    private var onCancel: (() -> Void)?
-    private var escapeMonitor: Any?
 
     func register(
         onPress: @escaping () -> Void,
         onRelease: @escaping () -> Void,
         onInstructionPress: @escaping () -> Void,
-        onInstructionRelease: @escaping () -> Void,
-        onCancel: @escaping () -> Void
+        onInstructionRelease: @escaping () -> Void
     ) {
         self.onPress = onPress
         self.onRelease = onRelease
         self.onInstructionPress = onInstructionPress
         self.onInstructionRelease = onInstructionRelease
-        self.onCancel = onCancel
         installEventHandlerOnce()
         let config = SettingsStore.shared.settings.hotkey
         registerHotKeys(keyCode: config.keyCode, modifiers: config.modifiers)
         installDoubleTapMonitor()
-        installEscapeMonitor()
     }
 
     func updateHotkey(config: HotkeyConfig) {
@@ -114,23 +108,6 @@ class HotkeyManager {
             } else {
                 lastOptionReleaseTime = now
             }
-        }
-    }
-
-    // MARK: - Escape to cancel
-
-    private func installEscapeMonitor() {
-        guard escapeMonitor == nil else { return }
-        escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 { // Escape
-                DispatchQueue.main.async { self?.onCancel?() }
-            }
-        }
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 {
-                DispatchQueue.main.async { self?.onCancel?() }
-            }
-            return event
         }
     }
 

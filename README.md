@@ -181,7 +181,6 @@ open /Applications/Whisperino.app
 
 **New features:**
 - **Instruction mode** — hold **Shift+Option+D** or **Shift+double-tap Option** to speak instructions to the LLM. It generates a response and pastes it directly. Attach clipboard content (text or images) with the paperclip icon.
-- **Escape to cancel** — press Esc to cancel any active recording.
 - **Double-tap Option to stop** — double-tap Option now toggles recording (start and stop), not just start.
 
 **Improvements:**
