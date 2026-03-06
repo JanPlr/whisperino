@@ -35,7 +35,7 @@ struct LLMRefiner {
 
     // MARK: - Instruction mode
 
-    func instruct(transcription: String, apiKey: String, clipboardContent: ClipboardContent?,
+    func instruct(transcription: String, apiKey: String, attachments: [AttachedContext],
                    dictionaryTerms: [String] = [], snippets: [(name: String, text: String)] = []) async throws -> String {
         var request = URLRequest(url: endpoint, timeoutInterval: timeout)
         request.httpMethod = "POST"
@@ -44,39 +44,8 @@ struct LLMRefiner {
 
         let systemPrompt = buildInstructSystemPrompt(dictionaryTerms: dictionaryTerms, snippets: snippets)
 
-        // Build message content — may include image if clipboard is an image
-        let messageContent: Any
-        switch clipboardContent {
-        case .text(let clipText):
-            let userMessage = """
-            <clipboard>
-            \(clipText)
-            </clipboard>
-
-            <instruction>
-            \(transcription)
-            </instruction>
-            """
-            messageContent = userMessage
-
-        case .image(let image):
-            guard let base64 = imageToBase64(image) else {
-                // Fallback: treat as text-only instruction
-                messageContent = "<instruction>\(transcription)</instruction>"
-                break
-            }
-            messageContent = [
-                ["type": "image", "source": [
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": base64
-                ]],
-                ["type": "text", "text": "<instruction>\(transcription)</instruction>"]
-            ]
-
-        case nil:
-            messageContent = "<instruction>\(transcription)</instruction>"
-        }
+        // Build message content — may include multiple text and image blocks
+        let messageContent: Any = buildMessageContent(transcription: transcription, attachments: attachments)
 
         let body: [String: Any] = [
             "model": model,
@@ -88,6 +57,62 @@ struct LLMRefiner {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         return try await send(request: request)
+    }
+
+    /// Build the user message content from attachments + instruction.
+    /// Returns a plain string when possible (text-only), or an array of content blocks when images are present.
+    private func buildMessageContent(transcription: String, attachments: [AttachedContext]) -> Any {
+        guard !attachments.isEmpty else {
+            return "<instruction>\(transcription)</instruction>"
+        }
+
+        let hasImages = attachments.contains { if case .image = $0.content { return true } else { return false } }
+
+        if !hasImages {
+            // Text-only: build a single string with indexed context tags
+            var parts: [String] = []
+            for (i, ctx) in attachments.enumerated() {
+                if case .text(let text) = ctx.content {
+                    parts.append("<context index=\"\(i + 1)\">\n\(text)\n</context>")
+                }
+            }
+            parts.append("\n<instruction>\n\(transcription)\n</instruction>")
+            return parts.joined(separator: "\n\n")
+        }
+
+        // Mixed content: build an array of content blocks (images + text)
+        var blocks: [[String: Any]] = []
+        var textParts: [String] = []
+
+        for (i, ctx) in attachments.enumerated() {
+            switch ctx.content {
+            case .text(let text):
+                textParts.append("<context index=\"\(i + 1)\">\n\(text)\n</context>")
+
+            case .image(let image):
+                // Flush any accumulated text before the image
+                if !textParts.isEmpty {
+                    blocks.append(["type": "text", "text": textParts.joined(separator: "\n\n")])
+                    textParts.removeAll()
+                }
+                if let base64 = imageToBase64(image) {
+                    blocks.append([
+                        "type": "image",
+                        "source": [
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": base64
+                        ] as [String: String]
+                    ])
+                }
+            }
+        }
+
+        // Append remaining text + the instruction
+        textParts.append("\n<instruction>\n\(transcription)\n</instruction>")
+        blocks.append(["type": "text", "text": textParts.joined(separator: "\n\n")])
+
+        return blocks
     }
 
     // MARK: - Shared request sender
@@ -182,7 +207,8 @@ struct LLMRefiner {
         Guidelines:
         - Output ONLY the result — no preamble, no explanation, no meta-commentary
         - Match the tone and format the user's context implies (e.g. email → write an email, code → write code)
-        - If clipboard content is provided, use it as the primary context for the instruction
+        - If context items are provided (in <context> tags or as images), use them as the primary context for the instruction
+        - Multiple context items may be provided — consider all of them together
         - Keep formatting clean — use plain text unless the instruction implies structured output
         """
 

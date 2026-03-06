@@ -8,6 +8,15 @@ struct OverlayView: View {
         return false
     }
 
+    /// Extra height for attachment rows + add-more button
+    private var attachmentExtraHeight: CGFloat {
+        let count = appState.attachedContexts.count
+        guard count > 0 else { return 0 }
+        let rows = CGFloat(min(count, AppState.maxAttachments)) * 32
+        let addButton: CGFloat = count < AppState.maxAttachments ? 36 : 0
+        return rows + addButton
+    }
+
     var body: some View {
         Group {
             switch appState.state {
@@ -27,8 +36,9 @@ struct OverlayView: View {
         }
         .frame(width: 380)
         .padding(.top, 90)
-        .frame(height: 180, alignment: .top)
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: appState.state)
+        .frame(height: 180 + attachmentExtraHeight, alignment: .top)
+        .animation(appState.suppressStateAnimation ? nil : .spring(response: 0.35, dampingFraction: 0.82), value: appState.state)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appState.attachedContexts.count)
     }
 
     @State private var isHoveringPill = false
@@ -37,12 +47,18 @@ struct OverlayView: View {
     // MARK: - Recording
 
     private var recordingView: some View {
-        let hasPreview = appState.isInstructionMode && appState.clipboardPreview != nil
+        let hasAttachments = appState.isInstructionMode && !appState.attachedContexts.isEmpty
 
         return ZStack(alignment: .topTrailing) {
             // Main pill — click anywhere to stop recording
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
+                    // Invisible counterweight to balance the paperclip on the right
+                    if hasAttachments {
+                        Spacer(minLength: 0)
+                        Color.clear.frame(width: 20, height: 1)
+                    }
+
                     HStack(spacing: 3) {
                         ForEach(0..<9, id: \.self) { i in
                             RoundedRectangle(cornerRadius: 2.5)
@@ -55,35 +71,37 @@ struct OverlayView: View {
                     if appState.isInstructionMode {
                         clipboardButton
                     }
+
+                    if hasAttachments { Spacer(minLength: 0) }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
 
-                // Clipboard preview — expands the pill downward
-                if hasPreview, let preview = appState.clipboardPreview {
+                // Attachment list — expands the pill downward
+                if hasAttachments {
                     Rectangle()
                         .fill(.white.opacity(0.08))
                         .frame(height: 1)
                         .padding(.horizontal, 8)
 
-                    HStack(spacing: 4) {
-                        Text("Clipboard preview:")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.35))
-                            .fixedSize()
-                        Text(preview)
-                            .font(.system(size: 9))
-                            .foregroundStyle(.white.opacity(0.5))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                    VStack(spacing: 2) {
+                        ForEach(appState.attachedContexts) { ctx in
+                            attachmentRow(ctx)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+
+                        // "+ Add more" button
+                        if appState.attachedContexts.count < AppState.maxAttachments {
+                            addMoreButton
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .frame(width: hasPreview ? 300 : nil)
-            .background(Color.black.opacity(0.85))
+            .frame(width: hasAttachments ? 300 : nil)
+            .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(
                 Group {
@@ -101,7 +119,7 @@ struct OverlayView: View {
             )
             .contentShape(RoundedRectangle(cornerRadius: 14))
             .onTapGesture { appState.toggleRecording() }
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasPreview)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAttachments)
 
             // Cancel X — positioned outside pill corner via alignment guides
             Image(systemName: "xmark")
@@ -129,17 +147,45 @@ struct OverlayView: View {
         .onHover { isHoveringPill = $0 }
         .animation(.easeOut(duration: 0.06), value: appState.audioLevel)
         .animation(.easeInOut(duration: 0.2), value: isHoveringPill)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasPreview)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appState.attachedContexts.count)
+    }
+
+    private func attachmentRow(_ ctx: AttachedContext) -> some View {
+        AttachmentRowView(ctx: ctx, onRemove: { appState.removeAttachment(id: ctx.id) })
     }
 
     private var clipboardButton: some View {
-        let attached = appState.clipboardPreview != nil
+        let hasAttachments = !appState.attachedContexts.isEmpty
         return Image(systemName: "paperclip")
-            .font(.system(size: 11, weight: attached ? .semibold : .regular))
-            .foregroundStyle(.white.opacity(attached ? 0.75 : 0.35))
+            .font(.system(size: 11, weight: hasAttachments ? .semibold : .regular))
+            .foregroundStyle(.white.opacity(hasAttachments ? 0.75 : 0.35))
             .frame(width: 20, height: 20)
             .contentShape(Rectangle())
-            .onTapGesture { appState.toggleClipboardAttachment() }
+            .onTapGesture { appState.addClipboardAttachment() }
+    }
+
+    @State private var isHoveringAddMore = false
+
+    private var addMoreButton: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Image(systemName: "plus")
+                    .font(.system(size: 8, weight: .medium))
+                Text("Add more clipboard content")
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .foregroundStyle(.white.opacity(isHoveringAddMore ? 0.6 : 0.3))
+
+            Text("Copy more context or images to your clipboard and add them here")
+                .font(.system(size: 8))
+                .foregroundStyle(.white.opacity(isHoveringAddMore ? 0.35 : 0.18))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onHover { isHoveringAddMore = $0 }
+        .onTapGesture { appState.addClipboardAttachment() }
     }
 
     private func barHeight(for index: Int) -> CGFloat {
@@ -198,9 +244,9 @@ struct OverlayView: View {
                 .foregroundStyle(.white.opacity(0.75))
         }
         .overlayChrome()
-        .scaleEffect(isDismissing ? 0.88 : 1.0)
+        .scaleEffect(isDismissing ? 0.95 : 1.0)
         .opacity(isDismissing ? 0 : 1.0)
-        .animation(.easeOut(duration: 0.45), value: isDismissing)
+        .animation(.easeOut(duration: 0.3), value: isDismissing)
     }
 
     // MARK: - Error
@@ -226,7 +272,7 @@ private extension View {
         self
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color.black.opacity(0.85))
+            .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(
                 Group {
@@ -238,6 +284,74 @@ private extension View {
                     }
                 }
             )
+    }
+}
+
+// MARK: - Attachment row with image preview
+
+private struct AttachmentRowView: View {
+    let ctx: AttachedContext
+    let onRemove: () -> Void
+    @State private var showingPreview = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // Thumbnail or text icon
+            if case .image(let image) = ctx.content {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 24, height: 24)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(.white.opacity(showingPreview ? 0.4 : 0.15), lineWidth: 0.5)
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture { showingPreview.toggle() }
+                    .popover(isPresented: $showingPreview, arrowEdge: .top) {
+                        imagePreview(image)
+                    }
+            } else {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .frame(width: 24, height: 24)
+            }
+
+            Text(ctx.preview)
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 0)
+
+            // Remove button
+            Image(systemName: "xmark")
+                .font(.system(size: 7, weight: .medium))
+                .foregroundStyle(.white.opacity(0.3))
+                .frame(width: 16, height: 16)
+                .contentShape(Rectangle())
+                .onTapGesture { onRemove() }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+    }
+
+    private func imagePreview(_ image: NSImage) -> some View {
+        let maxWidth: CGFloat = 520
+        let maxHeight: CGFloat = 400
+        let aspect = image.size.width / max(image.size.height, 1)
+        let width = min(maxWidth, maxHeight * aspect)
+        let height = min(maxHeight, maxWidth / aspect)
+
+        return Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(width: width, height: height)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(8)
     }
 }
 
