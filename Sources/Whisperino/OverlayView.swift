@@ -129,6 +129,7 @@ struct OverlayView: View {
         .onHover { isHoveringPill = $0 }
         .animation(.easeOut(duration: 0.06), value: appState.audioLevel)
         .animation(.easeInOut(duration: 0.2), value: isHoveringPill)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasPreview)
     }
 
     private var clipboardButton: some View {
