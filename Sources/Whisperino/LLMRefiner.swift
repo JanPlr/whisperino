@@ -35,23 +35,14 @@ struct LLMRefiner {
 
     // MARK: - Instruction mode
 
-    func instruct(transcription: String, apiKey: String, clipboardContent: ClipboardContent?) async throws -> String {
+    func instruct(transcription: String, apiKey: String, clipboardContent: ClipboardContent?,
+                   dictionaryTerms: [String] = [], snippets: [(name: String, text: String)] = []) async throws -> String {
         var request = URLRequest(url: endpoint, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let systemPrompt = """
-        You are a helpful assistant integrated into a voice dictation app. The user will speak instructions \
-        to you. Your job is to carry them out and return the result as plain text ready to be pasted \
-        into whatever application the user is working in.
-
-        Guidelines:
-        - Output ONLY the result — no preamble, no explanation, no meta-commentary
-        - Match the tone and format the user's context implies (e.g. email → write an email, code → write code)
-        - If clipboard content is provided, use it as the primary context for the instruction
-        - Keep formatting clean — use plain text unless the instruction implies structured output
-        """
+        let systemPrompt = buildInstructSystemPrompt(dictionaryTerms: dictionaryTerms, snippets: snippets)
 
         // Build message content — may include image if clipboard is an image
         let messageContent: Any
@@ -175,6 +166,46 @@ struct LLMRefiner {
         Entries:
         """
             prompt += "\n" + dictionaryTerms.map { "- \($0)" }.joined(separator: "\n")
+        }
+
+        return prompt
+    }
+
+    // MARK: - Instruct system prompt
+
+    private func buildInstructSystemPrompt(dictionaryTerms: [String], snippets: [(name: String, text: String)]) -> String {
+        var prompt = """
+        You are a helpful assistant integrated into a voice dictation app. The user will speak instructions \
+        to you. Your job is to carry them out and return the result as plain text ready to be pasted \
+        into whatever application the user is working in.
+
+        Guidelines:
+        - Output ONLY the result — no preamble, no explanation, no meta-commentary
+        - Match the tone and format the user's context implies (e.g. email → write an email, code → write code)
+        - If clipboard content is provided, use it as the primary context for the instruction
+        - Keep formatting clean — use plain text unless the instruction implies structured output
+        """
+
+        if !dictionaryTerms.isEmpty {
+            prompt += """
+
+
+            DICTIONARY — always use these exact spellings for proper nouns and technical terms when they appear in your output:
+            """
+            prompt += "\n" + dictionaryTerms.map { "- \($0)" }.joined(separator: "\n")
+        }
+
+        if !snippets.isEmpty {
+            prompt += """
+
+
+            SAVED SNIPPETS — the user has saved these text snippets. If the user references a snippet by name \
+            (e.g. "use my email signature", "insert the project template"), use its content directly. \
+            Only use a snippet when the user clearly refers to it.
+            """
+            for snippet in snippets {
+                prompt += "\n\n<snippet name=\"\(snippet.name)\">\n\(snippet.text)\n</snippet>"
+            }
         }
 
         return prompt

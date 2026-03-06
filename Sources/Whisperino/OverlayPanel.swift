@@ -7,7 +7,7 @@ class OverlayPanel {
 
     init(appState: AppState) {
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 56),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 180),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -63,7 +63,7 @@ class OverlayPanel {
         let screenFrame = screen.visibleFrame
         let panelSize = panel.frame.size
         let x = screenFrame.midX - panelSize.width / 2
-        let y = screenFrame.minY + 40
+        let y = screenFrame.minY + 30
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }

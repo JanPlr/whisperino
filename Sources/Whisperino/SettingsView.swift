@@ -121,8 +121,10 @@ private struct ShortcutRow: View {
 
 private struct DictionaryTab: View {
     @ObservedObject private var store = SettingsStore.shared
-    @State private var newTerm = ""
+    @State private var termField = ""
     @State private var selectedID: UUID?
+
+    private var isEditing: Bool { selectedID != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -142,6 +144,7 @@ private struct DictionaryTab: View {
             }
             .listStyle(.inset(alternatesRowBackgrounds: true))
             .onDeleteCommand { deleteSelected() }
+            .onChange(of: selectedID) { loadSelected() }
 
             Divider()
 
@@ -154,20 +157,46 @@ private struct DictionaryTab: View {
 
                 Spacer()
 
-                TextField("e.g. Langdock  or  langdonk = Langdock", text: $newTerm)
+                TextField("e.g. Langdock  or  langdonk = Langdock", text: $termField)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { addTerm() }
+                    .onSubmit { isEditing ? saveSelected() : addTerm() }
 
-                Button("Add") { addTerm() }
-                    .disabled(newTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if isEditing {
+                    Button("Save") { saveSelected() }
+                        .disabled(termField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Cancel") {
+                        selectedID = nil
+                        termField = ""
+                    }
+                    .buttonStyle(.borderless)
+                } else {
+                    Button("Add") { addTerm() }
+                        .disabled(termField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
             .padding(12)
         }
     }
 
+    private func loadSelected() {
+        guard let id = selectedID,
+              let entry = store.dictionary.first(where: { $0.id == id }) else {
+            termField = ""
+            return
+        }
+        termField = entry.term
+    }
+
     private func addTerm() {
-        store.addDictionaryTerm(newTerm)
-        newTerm = ""
+        store.addDictionaryTerm(termField)
+        termField = ""
+    }
+
+    private func saveSelected() {
+        guard let id = selectedID else { return }
+        store.updateDictionaryTerm(id: id, term: termField)
+        selectedID = nil
+        termField = ""
     }
 
     private func deleteSelected() {
@@ -175,6 +204,7 @@ private struct DictionaryTab: View {
               let index = store.dictionary.firstIndex(where: { $0.id == id }) else { return }
         store.removeDictionaryTerms(at: [index])
         selectedID = nil
+        termField = ""
     }
 }
 
@@ -242,18 +272,19 @@ private struct SnippetsTab: View {
                         Spacer()
                         Button("Save") {
                             store.updateSnippet(id: snippet.id, name: editName, text: editText)
+                            selectedID = nil
                         }
                         .keyboardShortcut(.return, modifiers: .command)
                     }
                 }
                 .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 280, idealWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
                 .onChange(of: selectedID) { loadSelected() }
                 .onAppear { loadSelected() }
             } else {
                 Text("Select a snippet to edit")
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }

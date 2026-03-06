@@ -250,10 +250,14 @@ class AppState: ObservableObject {
 
                 if instructionMode {
                     // Instruction mode: send spoken text as instructions to LLM
+                    let terms = store.dictionary.map { $0.term }
+                    let snips = store.snippets.map { (name: $0.name, text: $0.text) }
                     finalText = try await refiner.instruct(
                         transcription: rawText,
                         apiKey: settings.apiKey,
-                        clipboardContent: attachedClipboard
+                        clipboardContent: attachedClipboard,
+                        dictionaryTerms: terms,
+                        snippets: snips
                     )
                 } else if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
                     // Transcription mode: clean up speech
@@ -281,6 +285,7 @@ class AppState: ObservableObject {
                     self.startDismissSequence()
                 }
             } catch {
+                print("[whisperino] \(instructionMode ? "Instruction" : "Transcription") error: \(error)")
                 await MainActor.run {
                     self.state = .error(message: instructionMode ? "Instruction failed" : "Transcription failed")
                     self.autoDismiss(after: 3)

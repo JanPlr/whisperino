@@ -8,11 +8,6 @@ struct OverlayView: View {
         return false
     }
 
-    private var isPaused: Bool {
-        if case .paused = appState.state { return true }
-        return false
-    }
-
     var body: some View {
         Group {
             switch appState.state {
@@ -21,94 +16,119 @@ struct OverlayView: View {
             case .recording, .paused:
                 recordingView
             case .transcribing:
-                transcribingView
+                transcribingView.padding(.top, 6)
             case .refining:
-                refiningView
+                refiningView.padding(.top, 6)
             case .result, .dismissing:
-                resultDismissView
+                resultDismissView.padding(.top, 6)
             case .error(let message):
-                errorView(message: message)
+                errorView(message: message).padding(.top, 6)
             }
         }
-        .frame(width: 320)
+        .frame(width: 380)
+        .padding(.top, 90)
+        .frame(height: 180, alignment: .top)
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: appState.state)
     }
 
-    @State private var isHoveringWaveform = false
+    @State private var isHoveringPill = false
+    @State private var isHoveringCancel = false
 
     // MARK: - Recording
 
     private var recordingView: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 10) {
-                // Cancel button (left)
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
-                    .onTapGesture { appState.cancelRecording() }
+        let hasPreview = appState.isInstructionMode && appState.clipboardPreview != nil
 
-                // Waveform bars — hover dims bars and overlays stop icon
-                ZStack {
-                    HStack(spacing: 2.5) {
-                        ForEach(0..<5, id: \.self) { i in
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(.white.opacity(isPaused ? 0.25 : 0.7))
-                                .frame(width: 3.5, height: barHeight(for: i))
+        return ZStack(alignment: .topTrailing) {
+            // Main pill — click anywhere to stop recording
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    HStack(spacing: 3) {
+                        ForEach(0..<9, id: \.self) { i in
+                            RoundedRectangle(cornerRadius: 2.5)
+                                .fill(.white.opacity(0.7))
+                                .frame(width: 4, height: barHeight(for: i))
                         }
                     }
-                    .opacity(isHoveringWaveform ? 0.35 : 1)
+                    .frame(height: 20)
 
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(.white.opacity(0.8))
-                        .frame(width: 10, height: 10)
-                        .opacity(isHoveringWaveform ? 1 : 0)
+                    if appState.isInstructionMode {
+                        clipboardButton
+                    }
                 }
-                .frame(height: 20)
-                .animation(.easeOut(duration: 0.08), value: appState.audioLevel)
-                .animation(.easeInOut(duration: 0.15), value: isHoveringWaveform)
-                .animation(.easeInOut(duration: 0.2), value: isPaused)
-                .contentShape(Rectangle())
-                .onHover { hovering in isHoveringWaveform = hovering }
-                .onTapGesture { appState.toggleRecording() }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
 
-                // Right button: pause (transcription) or clipboard toggle (instruction)
-                if appState.isInstructionMode {
-                    clipboardButton
-                } else {
-                    pauseButton
-                }
-            }
+                // Clipboard preview — expands the pill downward
+                if hasPreview, let preview = appState.clipboardPreview {
+                    Rectangle()
+                        .fill(.white.opacity(0.08))
+                        .frame(height: 1)
+                        .padding(.horizontal, 8)
 
-            // Clipboard preview row (instruction mode only)
-            if appState.isInstructionMode, let preview = appState.clipboardPreview {
-                HStack(spacing: 4) {
-                    Text("Clipboard context:")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.35))
-                    Text(preview)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
+                    HStack(spacing: 4) {
+                        Text("Clipboard preview:")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .fixedSize()
+                        Text(preview)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
+            .frame(width: hasPreview ? 300 : nil)
+            .background(Color.black.opacity(0.85))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                Group {
+                    if isHoveringCancel {
+                        GlowBorder(cornerRadius: 14, color: Color(red: 0.9, green: 0.25, blue: 0.25))
+                    } else if isHoveringPill {
+                        GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
+                    } else if appState.isInstructionMode {
+                        AnimatedGradientBorder(cornerRadius: 14)
+                    } else {
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                    }
+                }
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+            .onTapGesture { appState.toggleRecording() }
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasPreview)
+
+            // Cancel X — positioned outside pill corner via alignment guides
+            Image(systemName: "xmark")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white.opacity(isHoveringCancel ? 1 : 0.85))
+                .frame(width: 16, height: 16)
+                .background(
+                    Circle().fill(
+                        isHoveringCancel
+                            ? Color(red: 0.8, green: 0.2, blue: 0.2)
+                            : Color(white: 0.3)
+                    )
+                )
+                .clipShape(Circle())
+                .contentShape(Circle().scale(1.5))
+                .onHover { isHoveringCancel = $0 }
+                .onTapGesture { appState.cancelRecording() }
+                .opacity(isHoveringPill ? (isHoveringCancel ? 1 : 0.7) : 0)
+                .scaleEffect(isHoveringPill ? 1 : 0.4)
+                .alignmentGuide(.trailing) { d in d[.trailing] - 6 }
+                .alignmentGuide(.top) { d in d[.top] + 6 }
+                .animation(.easeOut(duration: 0.15), value: isHoveringPill)
+                .animation(.easeInOut(duration: 0.1), value: isHoveringCancel)
         }
-        .overlayChrome(instruction: appState.isInstructionMode)
-    }
-
-    private var pauseButton: some View {
-        Image(systemName: isPaused ? "play.fill" : "pause.fill")
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.white.opacity(0.4))
-            .frame(width: 16, height: 16)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if isPaused { appState.resumeRecording() }
-                else { appState.pauseRecording() }
-            }
+        .onHover { isHoveringPill = $0 }
+        .animation(.easeOut(duration: 0.06), value: appState.audioLevel)
+        .animation(.easeInOut(duration: 0.2), value: isHoveringPill)
     }
 
     private var clipboardButton: some View {
@@ -116,14 +136,14 @@ struct OverlayView: View {
         return Image(systemName: "paperclip")
             .font(.system(size: 11, weight: attached ? .semibold : .regular))
             .foregroundStyle(.white.opacity(attached ? 0.75 : 0.35))
-            .frame(width: 16, height: 16)
+            .frame(width: 20, height: 20)
             .contentShape(Rectangle())
             .onTapGesture { appState.toggleClipboardAttachment() }
     }
 
     private func barHeight(for index: Int) -> CGFloat {
         let level = CGFloat(appState.audioLevel)
-        let patterns: [CGFloat] = [0.5, 0.8, 1.0, 0.7, 0.4]
+        let patterns: [CGFloat] = [0.2, 0.45, 0.75, 0.95, 1.0, 0.9, 0.65, 0.4, 0.15]
         let barLevel = level * patterns[index]
         return max(3, barLevel * 20)
     }
@@ -206,14 +226,14 @@ private extension View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(Color.black.opacity(0.85))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(
                 Group {
                     if instruction {
-                        AnimatedGradientBorder()
+                        AnimatedGradientBorder(cornerRadius: 14)
                     } else {
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
                     }
                 }
             )
@@ -223,6 +243,7 @@ private extension View {
 // MARK: - Animated gradient border for instruction mode
 
 private struct AnimatedGradientBorder: View {
+    var cornerRadius: CGFloat = 12
     @State private var angle: Double = 0
 
     private let colors: [Color] = [
@@ -235,7 +256,7 @@ private struct AnimatedGradientBorder: View {
     ]
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 12)
+        RoundedRectangle(cornerRadius: cornerRadius)
             .strokeBorder(
                 AngularGradient(colors: colors, center: .center, angle: .degrees(angle)),
                 lineWidth: 1.5
@@ -246,5 +267,46 @@ private struct AnimatedGradientBorder: View {
                 }
             }
             .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Glow border with traveling shine for hover states
+
+private struct GlowBorder: View {
+    var cornerRadius: CGFloat = 14
+    var color: Color
+    @State private var appeared = false
+    @State private var shineAngle: Double = 0
+
+    var body: some View {
+        ZStack {
+            // Base border — fades in (strokeBorder stays inside bounds)
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .strokeBorder(color.opacity(appeared ? 0.5 : 0), lineWidth: 1.5)
+
+            // Traveling shine highlight (also inside bounds)
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .strokeBorder(
+                    AngularGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .clear, location: 0.35),
+                            .init(color: color.opacity(appeared ? 0.9 : 0), location: 0.5),
+                            .init(color: .clear, location: 0.65),
+                            .init(color: .clear, location: 1.0),
+                        ],
+                        center: .center,
+                        angle: .degrees(shineAngle)
+                    ),
+                    lineWidth: 1.5
+                )
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.25)) { appeared = true }
+            withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+                shineAngle = 360
+            }
+        }
+        .allowsHitTesting(false)
     }
 }

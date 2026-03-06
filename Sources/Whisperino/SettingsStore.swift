@@ -70,6 +70,13 @@ class SettingsStore: ObservableObject {
         dictionary.remove(atOffsets: offsets)
     }
 
+    func updateDictionaryTerm(id: UUID, term: String) {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = dictionary.firstIndex(where: { $0.id == id }) else { return }
+        dictionary[index].term = trimmed
+    }
+
     // MARK: - Snippets
 
     func addSnippet(name: String, text: String) {
