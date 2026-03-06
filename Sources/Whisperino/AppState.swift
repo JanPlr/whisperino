@@ -28,11 +28,16 @@ class AppState: ObservableObject {
     @Published var clipboardPreview: String? = nil
     /// Whether we are currently in instruction mode (Shift+hotkey)
     @Published var isInstructionMode: Bool = false
+    /// Whether the current request is routed to a Langdock Agent
+    @Published var isAgentMode: Bool = false
+    /// Dynamic status text during agent execution (e.g. "Searching the web…")
+    @Published var agentStatus: String? = nil
 
     private(set) var lastTranscriptionResult: String?
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
     private let refiner = LLMRefiner()
+    private let agentClient = AgentClient()
     private let store = SettingsStore.shared
 
     /// Timestamp when the hotkey was pressed (for push-to-talk detection)
@@ -248,7 +253,24 @@ class AppState: ObservableObject {
                 let finalText: String
                 let settings = store.settings
 
-                if instructionMode {
+                if instructionMode, let match = detectAgent(in: rawText), !settings.apiKey.isEmpty {
+                    // Agent mode: route to Langdock Agent API with streaming
+                    await MainActor.run {
+                        self.isAgentMode = true
+                        self.agentStatus = AgentPhase.thinking.displayText
+                    }
+                    finalText = try await agentClient.execute(
+                        agentId: match.agent.agentId,
+                        userMessage: match.cleanedText,
+                        apiKey: settings.apiKey,
+                        onStatusUpdate: { [weak self] phase in
+                            let text = phase.displayText
+                            DispatchQueue.main.async { [weak self] in
+                                self?.agentStatus = text
+                            }
+                        }
+                    )
+                } else if instructionMode {
                     // Instruction mode: send spoken text as instructions to LLM
                     let terms = store.dictionary.map { $0.term }
                     let snips = store.snippets.map { (name: $0.name, text: $0.text) }
@@ -296,8 +318,28 @@ class AppState: ObservableObject {
 
     private func resetInstructionMode() {
         isInstructionMode = false
+        isAgentMode = false
+        agentStatus = nil
         clipboardContent = nil
         clipboardPreview = nil
+    }
+
+    /// Check if the transcription mentions a configured agent name.
+    /// Returns the matched agent and instruction text with the agent name removed.
+    private func detectAgent(in transcription: String) -> (agent: AgentEntry, cleanedText: String)? {
+        let lowered = transcription.lowercased()
+        // Sort by name length descending so longer names match first (prevents substring conflicts)
+        let sorted = store.agents.sorted { $0.name.count > $1.name.count }
+        for agent in sorted {
+            let nameLower = agent.name.lowercased()
+            guard lowered.contains(nameLower) else { continue }
+            // Remove agent name from instruction and clean up
+            let cleaned = transcription
+                .replacingOccurrences(of: agent.name, with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (agent, cleaned.isEmpty ? transcription : cleaned)
+        }
+        return nil
     }
 
     // MARK: - Paste

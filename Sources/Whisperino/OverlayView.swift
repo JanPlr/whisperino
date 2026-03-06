@@ -167,22 +167,31 @@ struct OverlayView: View {
 
     private var refiningView: some View {
         HStack(spacing: 8) {
-            if appState.isInstructionMode {
+            if appState.isAgentMode {
                 Image(systemName: "sparkles")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.6))
-                Text("Generating…")
+                Text(appState.agentStatus ?? "Working\u{2026}")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .contentTransition(.numericText())
+                    .animation(.easeInOut(duration: 0.25), value: appState.agentStatus)
+            } else if appState.isInstructionMode {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.6))
+                Text("Generating\u{2026}")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
             } else {
                 ProgressView()
                     .controlSize(.small)
-                Text("Refining…")
+                Text("Refining\u{2026}")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
             }
         }
-        .overlayChrome(instruction: appState.isInstructionMode)
+        .overlayChrome(instruction: appState.isInstructionMode || appState.isAgentMode)
     }
 
     // MARK: - Result / Dismissing
