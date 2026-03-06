@@ -162,7 +162,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
             .sink { [weak self] state in
                 self?.updateStatusIcon(for: state)
                 switch state {
-                case .idle:
+                case .idle, .dismissing:
                     self?.overlayPanel.dismiss()
                 default:
                     self?.overlayPanel.present()

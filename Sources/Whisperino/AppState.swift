@@ -20,18 +20,30 @@ enum ClipboardContent {
     case image(NSImage)
 }
 
+/// A single attached context item (clipboard text or image)
+struct AttachedContext: Identifiable {
+    let id = UUID()
+    let content: ClipboardContent
+    let preview: String
+}
+
 class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
     @Published var recordingStartTime: Date?
-    /// Non-nil when clipboard is attached in instruction mode; contains a short preview string
-    @Published var clipboardPreview: String? = nil
+    /// Accumulated clipboard attachments for instruction mode
+    @Published var attachedContexts: [AttachedContext] = []
     /// Whether we are currently in instruction mode (Shift+hotkey)
     @Published var isInstructionMode: Bool = false
     /// Whether the current request is routed to a Langdock Agent
     @Published var isAgentMode: Bool = false
     /// Dynamic status text during agent execution (e.g. "Searching the web…")
     @Published var agentStatus: String? = nil
+    /// When true, the overlay skips state-change animation (used for cancel)
+    var suppressStateAnimation = false
+
+    /// Maximum number of attachments allowed
+    static let maxAttachments = 5
 
     private(set) var lastTranscriptionResult: String?
     private let recorder = AudioRecorder()
@@ -48,8 +60,6 @@ class AppState: ObservableObject {
     private let pushToTalkThreshold: TimeInterval = 0.4
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
-    /// Clipboard content attached by user for instruction mode
-    private var clipboardContent: ClipboardContent? = nil
 
     var isSetUp: Bool { transcriber.isAvailable }
 
@@ -142,29 +152,42 @@ class AppState: ObservableObject {
         recordingStartTime = nil
         recordingTargetPID = nil
         resetInstructionMode()
+
+        // Skip the SwiftUI spring animation — panel fade handles the exit
+        suppressStateAnimation = true
         state = .idle
+        DispatchQueue.main.async { [weak self] in
+            self?.suppressStateAnimation = false
+        }
     }
 
-    // MARK: - Clipboard Attachment (instruction mode only)
+    // MARK: - Clipboard Attachments (instruction mode only)
 
-    /// Toggle clipboard attachment on/off. Reads current clipboard content.
-    func toggleClipboardAttachment() {
-        if clipboardContent != nil {
-            // Detach
-            clipboardContent = nil
-            clipboardPreview = nil
-        } else {
-            // Attach from clipboard
-            let pb = NSPasteboard.general
-            if let image = NSImage(pasteboard: pb) {
-                clipboardContent = .image(image)
-                clipboardPreview = "Image"
-            } else if let text = pb.string(forType: .string), !text.isEmpty {
-                clipboardContent = .text(text)
-                let preview = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                clipboardPreview = String(preview.prefix(50))
-            }
+    /// Add current clipboard content as a new attachment. No-op if at max.
+    func addClipboardAttachment() {
+        guard attachedContexts.count < Self.maxAttachments else { return }
+
+        let pb = NSPasteboard.general
+        if let image = NSImage(pasteboard: pb) {
+            let w = Int(image.size.width)
+            let h = Int(image.size.height)
+            let ctx = AttachedContext(content: .image(image), preview: "Image (\(w)×\(h))")
+            attachedContexts.append(ctx)
+        } else if let text = pb.string(forType: .string), !text.isEmpty {
+            let preview = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(50))
+            let ctx = AttachedContext(content: .text(text), preview: preview)
+            attachedContexts.append(ctx)
         }
+    }
+
+    /// Remove a specific attachment by ID.
+    func removeAttachment(id: UUID) {
+        attachedContexts.removeAll { $0.id == id }
+    }
+
+    /// Clear all attachments.
+    private func clearAttachments() {
+        attachedContexts.removeAll()
     }
 
     // MARK: - Recording
@@ -191,9 +214,8 @@ class AppState: ObservableObject {
                 autoDismiss(after: 3)
                 return
             }
-            // Reset clipboard attachment from any previous session
-            clipboardContent = nil
-            clipboardPreview = nil
+            // Reset attachments from any previous session
+            clearAttachments()
         }
 
         // Capture the frontmost app so we can re-activate it before pasting
@@ -215,6 +237,7 @@ class AppState: ObservableObject {
 
     private func stopRecording() {
         guard let audioURL = recorder.stop() else {
+            resetInstructionMode()
             state = .idle
             return
         }
@@ -224,6 +247,7 @@ class AppState: ObservableObject {
 
         guard duration >= 0.5 else {
             try? FileManager.default.removeItem(at: audioURL)
+            resetInstructionMode()
             state = .idle
             return
         }
@@ -231,7 +255,13 @@ class AppState: ObservableObject {
         state = .transcribing
 
         let instructionMode = isInstructionMode
-        let attachedClipboard = clipboardContent
+        let attachments = attachedContexts
+
+        // Delay clearing attachments so the content cross-fades first,
+        // then the panel smoothly collapses to its base height
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.clearAttachments()
+        }
 
         Task {
             do {
@@ -277,7 +307,7 @@ class AppState: ObservableObject {
                     finalText = try await refiner.instruct(
                         transcription: rawText,
                         apiKey: settings.apiKey,
-                        clipboardContent: attachedClipboard,
+                        attachments: attachments,
                         dictionaryTerms: terms,
                         snippets: snips
                     )
@@ -320,8 +350,7 @@ class AppState: ObservableObject {
         isInstructionMode = false
         isAgentMode = false
         agentStatus = nil
-        clipboardContent = nil
-        clipboardPreview = nil
+        clearAttachments()
     }
 
     /// Check if the transcription mentions a configured agent name.
