@@ -11,6 +11,8 @@ struct SettingsView: View {
                 .tabItem { Label("Dictionary", systemImage: "text.book.closed") }
             SnippetsTab()
                 .tabItem { Label("Snippets", systemImage: "text.quote") }
+            AgentsTab()
+                .tabItem { Label("Agents", systemImage: "cpu") }
         }
         .frame(width: 480, height: 380)
         .padding(0)
@@ -307,5 +309,115 @@ private struct SnippetsTab: View {
               let index = store.snippets.firstIndex(where: { $0.id == id }) else { return }
         store.removeSnippets(at: [index])
         selectedID = nil
+    }
+}
+
+// MARK: - Agents Tab
+
+private struct AgentsTab: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @State private var nameField = ""
+    @State private var agentIdField = ""
+    @State private var selectedID: UUID?
+
+    private var isEditing: Bool { selectedID != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Add Langdock agents you want to use via voice. Say the agent\u{2019}s name during instruction mode to route your request to that agent instead of Claude.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+
+            Divider()
+
+            List(selection: $selectedID) {
+                ForEach(store.agents) { agent in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(agent.name)
+                            .font(.system(size: 13, weight: .medium))
+                        Text(agent.agentId)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .tag(agent.id)
+                }
+            }
+            .listStyle(.inset(alternatesRowBackgrounds: true))
+            .onDeleteCommand { deleteSelected() }
+            .onChange(of: selectedID) { loadSelected() }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Button(action: deleteSelected) {
+                    Image(systemName: "minus")
+                }
+                .buttonStyle(.borderless)
+                .disabled(selectedID == nil)
+
+                Spacer()
+
+                TextField("Agent name", text: $nameField)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 140)
+
+                TextField("Agent ID", text: $agentIdField)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 160)
+
+                if isEditing {
+                    Button("Save") { saveSelected() }
+                        .disabled(nameField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  || agentIdField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Cancel") {
+                        selectedID = nil
+                        nameField = ""
+                        agentIdField = ""
+                    }
+                    .buttonStyle(.borderless)
+                } else {
+                    Button("Add") { addAgent() }
+                        .disabled(nameField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  || agentIdField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func loadSelected() {
+        guard let id = selectedID,
+              let agent = store.agents.first(where: { $0.id == id }) else {
+            nameField = ""
+            agentIdField = ""
+            return
+        }
+        nameField = agent.name
+        agentIdField = agent.agentId
+    }
+
+    private func addAgent() {
+        store.addAgent(name: nameField, agentId: agentIdField)
+        nameField = ""
+        agentIdField = ""
+    }
+
+    private func saveSelected() {
+        guard let id = selectedID else { return }
+        store.updateAgent(id: id, name: nameField, agentId: agentIdField)
+        selectedID = nil
+        nameField = ""
+        agentIdField = ""
+    }
+
+    private func deleteSelected() {
+        guard let id = selectedID,
+              let index = store.agents.firstIndex(where: { $0.id == id }) else { return }
+        store.removeAgents(at: [index])
+        selectedID = nil
+        nameField = ""
+        agentIdField = ""
     }
 }

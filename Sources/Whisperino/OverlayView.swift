@@ -76,6 +76,8 @@ struct OverlayView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
+                .contentShape(Rectangle())
+                .onTapGesture { appState.toggleRecording() }
 
                 // Attachment list — expands the pill downward
                 if hasAttachments {
@@ -117,8 +119,6 @@ struct OverlayView: View {
                     }
                 }
             )
-            .contentShape(RoundedRectangle(cornerRadius: 14))
-            .onTapGesture { appState.toggleRecording() }
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAttachments)
 
             // Cancel X — positioned outside pill corner via alignment guides
@@ -161,7 +161,13 @@ struct OverlayView: View {
             .foregroundStyle(.white.opacity(hasAttachments ? 0.75 : 0.35))
             .frame(width: 20, height: 20)
             .contentShape(Rectangle())
-            .onTapGesture { appState.addClipboardAttachment() }
+            .onTapGesture {
+                if hasAttachments {
+                    appState.clearAllAttachments()
+                } else {
+                    appState.addClipboardAttachment()
+                }
+            }
     }
 
     @State private var isHoveringAddMore = false
@@ -213,22 +219,33 @@ struct OverlayView: View {
 
     private var refiningView: some View {
         HStack(spacing: 8) {
-            if appState.isInstructionMode {
+            if appState.isAgentMode {
                 Image(systemName: "sparkles")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.6))
-                Text("Generating…")
+                Text("\(appState.activeAgentName ?? "Agent"): \(appState.agentStatus ?? "Working\u{2026}")")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .contentTransition(.numericText())
+                    .animation(.easeInOut(duration: 0.25), value: appState.agentStatus)
+            } else if appState.isInstructionMode {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.6))
+                Text("Generating\u{2026}")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
             } else {
                 ProgressView()
                     .controlSize(.small)
-                Text("Refining…")
+                Text("Refining\u{2026}")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
             }
         }
-        .overlayChrome(instruction: appState.isInstructionMode)
+        .overlayChrome(instruction: appState.isInstructionMode || appState.isAgentMode)
     }
 
     // MARK: - Result / Dismissing
@@ -239,7 +256,9 @@ struct OverlayView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.green)
 
-            Text(appState.isInstructionMode ? "Generated" : "Copied to clipboard")
+            Text(appState.isAgentMode
+                ? "\(appState.activeAgentName ?? "Agent") responded"
+                : appState.isInstructionMode ? "Generated" : "Copied to clipboard")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.75))
         }

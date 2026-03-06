@@ -88,6 +88,18 @@ struct DictionaryEntry: Codable, Identifiable, Equatable {
     }
 }
 
+struct AgentEntry: Codable, Identifiable, Equatable {
+    let id: UUID
+    var name: String
+    var agentId: String
+
+    init(id: UUID = UUID(), name: String, agentId: String) {
+        self.id = id
+        self.name = name
+        self.agentId = agentId
+    }
+}
+
 struct Snippet: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     var name: String

@@ -8,6 +8,7 @@ class SettingsStore: ObservableObject {
     private let settingsFile: URL
     private let dictionaryFile: URL
     private let snippetsFile: URL
+    private let agentsFile: URL
 
     @Published var settings: AppSettings {
         didSet {
@@ -23,6 +24,9 @@ class SettingsStore: ObservableObject {
     @Published var snippets: [Snippet] {
         didSet { save(snippets, to: snippetsFile) }
     }
+    @Published var agents: [AgentEntry] {
+        didSet { save(agents, to: agentsFile) }
+    }
 
     private init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -30,6 +34,7 @@ class SettingsStore: ObservableObject {
         settingsFile = baseDir.appendingPathComponent("settings.json")
         dictionaryFile = baseDir.appendingPathComponent("dictionary.json")
         snippetsFile = baseDir.appendingPathComponent("snippets.json")
+        agentsFile = baseDir.appendingPathComponent("agents.json")
 
         // Ensure directory exists
         try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
@@ -38,6 +43,7 @@ class SettingsStore: ObservableObject {
         settings = Self.load(from: settingsFile) ?? AppSettings()
         dictionary = Self.load(from: dictionaryFile) ?? []
         snippets = Self.load(from: snippetsFile) ?? []
+        agents = Self.load(from: agentsFile) ?? []
     }
 
     // MARK: - Persistence
@@ -91,5 +97,24 @@ class SettingsStore: ObservableObject {
         guard let index = snippets.firstIndex(where: { $0.id == id }) else { return }
         snippets[index].name = name
         snippets[index].text = text
+    }
+
+    // MARK: - Agents
+
+    func addAgent(name: String, agentId: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedId.isEmpty else { return }
+        agents.append(AgentEntry(name: trimmedName, agentId: trimmedId))
+    }
+
+    func removeAgents(at offsets: IndexSet) {
+        agents.remove(atOffsets: offsets)
+    }
+
+    func updateAgent(id: UUID, name: String, agentId: String) {
+        guard let index = agents.firstIndex(where: { $0.id == id }) else { return }
+        agents[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        agents[index].agentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
