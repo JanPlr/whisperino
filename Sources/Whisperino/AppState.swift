@@ -2,6 +2,9 @@ import AppKit
 import Carbon
 import Combine
 import CoreGraphics
+import os
+
+private let appLog = Logger(subsystem: "com.whisperino.app", category: "appstate")
 
 enum TranscriptionState: Equatable {
     case idle
@@ -39,6 +42,8 @@ class AppState: ObservableObject {
     @Published var isAgentMode: Bool = false
     /// Dynamic status text during agent execution (e.g. "Searching the web…")
     @Published var agentStatus: String? = nil
+    /// Name of the currently active agent (shown in overlay)
+    @Published var activeAgentName: String? = nil
     /// When true, the overlay skips state-change animation (used for cancel)
     var suppressStateAnimation = false
 
@@ -185,8 +190,8 @@ class AppState: ObservableObject {
         attachedContexts.removeAll { $0.id == id }
     }
 
-    /// Clear all attachments.
-    private func clearAttachments() {
+    /// Clear all attachments (used internally on reset and by the overlay toggle).
+    func clearAllAttachments() {
         attachedContexts.removeAll()
     }
 
@@ -215,7 +220,7 @@ class AppState: ObservableObject {
                 return
             }
             // Reset attachments from any previous session
-            clearAttachments()
+            clearAllAttachments()
         }
 
         // Capture the frontmost app so we can re-activate it before pasting
@@ -260,7 +265,7 @@ class AppState: ObservableObject {
         // Delay clearing attachments so the content cross-fades first,
         // then the panel smoothly collapses to its base height
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.clearAttachments()
+            self?.clearAllAttachments()
         }
 
         Task {
@@ -283,15 +288,17 @@ class AppState: ObservableObject {
                 let finalText: String
                 let settings = store.settings
 
-                if instructionMode, let match = detectAgent(in: rawText), !settings.apiKey.isEmpty {
+                if instructionMode, !settings.apiKey.isEmpty, let match = await detectAgent(in: rawText, apiKey: settings.apiKey) {
                     // Agent mode: route to Langdock Agent API with streaming
                     await MainActor.run {
                         self.isAgentMode = true
+                        self.activeAgentName = match.agent.name
                         self.agentStatus = AgentPhase.thinking.displayText
                     }
                     finalText = try await agentClient.execute(
                         agentId: match.agent.agentId,
                         userMessage: match.cleanedText,
+                        attachments: attachments,
                         apiKey: settings.apiKey,
                         onStatusUpdate: { [weak self] phase in
                             let text = phase.displayText
@@ -339,7 +346,8 @@ class AppState: ObservableObject {
             } catch {
                 print("[whisperino] \(instructionMode ? "Instruction" : "Transcription") error: \(error)")
                 await MainActor.run {
-                    self.state = .error(message: instructionMode ? "Instruction failed" : "Transcription failed")
+                    self.resetInstructionMode()
+                    self.state = .error(message: error.localizedDescription)
                     self.autoDismiss(after: 3)
                 }
             }
@@ -350,25 +358,93 @@ class AppState: ObservableObject {
         isInstructionMode = false
         isAgentMode = false
         agentStatus = nil
-        clearAttachments()
+        activeAgentName = nil
+        clearAllAttachments()
     }
 
-    /// Check if the transcription mentions a configured agent name.
-    /// Returns the matched agent and instruction text with the agent name removed.
-    private func detectAgent(in transcription: String) -> (agent: AgentEntry, cleanedText: String)? {
-        let lowered = transcription.lowercased()
-        // Sort by name length descending so longer names match first (prevents substring conflicts)
-        let sorted = store.agents.sorted { $0.name.count > $1.name.count }
-        for agent in sorted {
-            let nameLower = agent.name.lowercased()
-            guard lowered.contains(nameLower) else { continue }
-            // Remove agent name from instruction and clean up
-            let cleaned = transcription
-                .replacingOccurrences(of: agent.name, with: "", options: .caseInsensitive)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Check if the transcription mentions a configured agent.
+    /// Triggers when the word "agent" appears in the transcription, then uses an LLM call
+    /// to fuzzy-match the intended agent name against the configured list.
+    private func detectAgent(in transcription: String, apiKey: String) async -> (agent: AgentEntry, cleanedText: String)? {
+        let agents = store.agents
+        guard !agents.isEmpty else { return nil }
+
+        // Only attempt detection when the user says "agent"
+        guard transcription.lowercased().contains("agent") else { return nil }
+
+        let agentNames = agents.map { $0.name }.joined(separator: ", ")
+        let systemPrompt = """
+            You are an agent-name matcher for a voice dictation app. The user spoke an instruction \
+            that contains the word "agent". Determine if they want to INVOKE a configured agent, \
+            or if they are merely TALKING ABOUT agents in general.
+
+            Available agents: \(agentNames)
+
+            Rules:
+            - Only match if the user clearly wants to USE/INVOKE/ASK one of the available agents \
+              (e.g., "use the X agent to...", "ask the X agent...", "have the X agent...")
+            - Do NOT match if the user is talking ABOUT agents in general \
+              (e.g., "fix the agent code", "the agent framework needs...", "improve agent detection")
+            - Match even if the transcription misspells or slightly alters the agent name
+            - Reply with EXACTLY two lines and nothing else:
+              Line 1: The exact agent name from the list above (or NONE if no match)
+              Line 2: The user's instruction with the agent reference removed (the clean task)
+            - If no agent is being invoked, reply with just: NONE
+            """
+
+        do {
+            var request = URLRequest(url: URL(string: "https://api.langdock.com/anthropic/eu/v1/messages")!,
+                                     timeoutInterval: 10)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            let body: [String: Any] = [
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 256,
+                "temperature": 0,
+                "system": systemPrompt,
+                "messages": [["role": "user", "content": transcription]]
+            ]
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+            print("[whisperino] agent detection: transcription=\"\(transcription.prefix(100))…\", agents=[\(agentNames)]")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let first = content.first,
+                  let text = first["text"] as? String else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                print("[whisperino] agent detection API error: HTTP \(statusCode)")
+                return nil
+            }
+
+            print("[whisperino] agent detection LLM response: \(text)")
+
+            let lines = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+
+            guard let matchedName = lines.first, matchedName != "NONE" else {
+                print("[whisperino] agent detection: no match (NONE)")
+                return nil
+            }
+
+            // Find the agent whose name matches the LLM response (case-insensitive)
+            guard let agent = agents.first(where: { $0.name.lowercased() == matchedName.lowercased() }) else {
+                print("[whisperino] agent detection: LLM returned '\(matchedName)' but no configured agent matches")
+                return nil
+            }
+
+            let cleaned = lines.count > 1 ? lines[1] : transcription
+            print("[whisperino] agent detection: matched '\(agent.name)', cleaned=\"\(cleaned.prefix(100))\"")
             return (agent, cleaned.isEmpty ? transcription : cleaned)
+        } catch {
+            print("[whisperino] agent detection LLM call failed: \(error)")
+            return nil
         }
-        return nil
     }
 
     // MARK: - Paste
