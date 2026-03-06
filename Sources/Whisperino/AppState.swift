@@ -2,10 +2,6 @@ import AppKit
 import Carbon
 import Combine
 import CoreGraphics
-import os
-
-private let appLog = Logger(subsystem: "com.whisperino.app", category: "appstate")
-
 enum TranscriptionState: Equatable {
     case idle
     case recording
@@ -328,7 +324,6 @@ class AppState: ObservableObject {
                             dictionaryTerms: terms
                         )
                     } catch {
-                        print("[whisperino] LLM refinement failed — using raw text")
                         finalText = rawText
                     }
                 } else {
@@ -344,7 +339,6 @@ class AppState: ObservableObject {
                     self.startDismissSequence()
                 }
             } catch {
-                print("[whisperino] \(instructionMode ? "Instruction" : "Transcription") error: \(error)")
                 await MainActor.run {
                     self.resetInstructionMode()
                     self.state = .error(message: error.localizedDescription)
@@ -408,19 +402,14 @@ class AppState: ObservableObject {
             ]
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-            print("[whisperino] agent detection: transcription=\"\(transcription.prefix(100))…\", agents=[\(agentNames)]")
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let content = json["content"] as? [[String: Any]],
                   let first = content.first,
                   let text = first["text"] as? String else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                print("[whisperino] agent detection API error: HTTP \(statusCode)")
                 return nil
             }
-
-            print("[whisperino] agent detection LLM response: \(text)")
 
             let lines = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 .components(separatedBy: .newlines)
@@ -428,21 +417,17 @@ class AppState: ObservableObject {
                 .filter { !$0.isEmpty }
 
             guard let matchedName = lines.first, matchedName != "NONE" else {
-                print("[whisperino] agent detection: no match (NONE)")
                 return nil
             }
 
             // Find the agent whose name matches the LLM response (case-insensitive)
             guard let agent = agents.first(where: { $0.name.lowercased() == matchedName.lowercased() }) else {
-                print("[whisperino] agent detection: LLM returned '\(matchedName)' but no configured agent matches")
                 return nil
             }
 
             let cleaned = lines.count > 1 ? lines[1] : transcription
-            print("[whisperino] agent detection: matched '\(agent.name)', cleaned=\"\(cleaned.prefix(100))\"")
             return (agent, cleaned.isEmpty ? transcription : cleaned)
         } catch {
-            print("[whisperino] agent detection LLM call failed: \(error)")
             return nil
         }
     }

@@ -1,8 +1,5 @@
 import AppKit
 import Foundation
-import os
-
-private let agentLog = Logger(subsystem: "com.whisperino.app", category: "agent")
 
 /// Current phase of agent execution, displayed in the overlay
 enum AgentPhase: Equatable {
@@ -104,15 +101,10 @@ struct AgentClient {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        print("[whisperino] agent request: agentId=\(agentId), message=\(fullMessage.prefix(100))…")
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
 
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            // Try to read error body
-            var errorBody = ""
-            for try await line in bytes.lines { errorBody += line; if errorBody.count > 500 { break } }
-            print("[whisperino] ❌ agent API HTTP \(statusCode): \(errorBody.prefix(500))")
             throw AgentError.httpError(statusCode)
         }
 
@@ -130,7 +122,6 @@ struct AgentClient {
             guard let data = payload.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = json["type"] as? String else {
-                print("[whisperino] ⚠️ failed to parse SSE: \(trimmed.prefix(300))")
                 continue
             }
 
@@ -141,7 +132,6 @@ struct AgentClient {
                     if currentPhase != .generating {
                         currentPhase = .generating
                         onStatusUpdate(currentPhase)
-                        print("[whisperino] phase → generating")
                     }
                 }
 
@@ -151,7 +141,6 @@ struct AgentClient {
                     if newPhase != currentPhase {
                         currentPhase = newPhase
                         onStatusUpdate(currentPhase)
-                        print("[whisperino] phase → tool: \(toolName)")
                     }
                 }
 
@@ -160,18 +149,13 @@ struct AgentClient {
                 if currentPhase != .thinking {
                     currentPhase = .thinking
                     onStatusUpdate(currentPhase)
-                    print("[whisperino] phase → thinking (tool done)")
                 }
-
-            case "finish":
-                print("[whisperino] stream finished: \(json["finishReason"] ?? "unknown")")
 
             default:
                 break
             }
         }
 
-        print("[whisperino] agent result: \(collectedText.count) chars collected")
         // Strip Langdock citation markers like 【...】
         let cleaned = collectedText.replacingOccurrences(
             of: "【[^】]*】",
@@ -180,7 +164,6 @@ struct AgentClient {
         )
         let result = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else {
-            print("[whisperino] ❌ empty response — no text deltas collected")
             throw AgentError.emptyResponse
         }
         return result
