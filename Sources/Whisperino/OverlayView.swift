@@ -17,13 +17,22 @@ struct OverlayView: View {
         return rows + addButton
     }
 
+    /// Extra height reserved for the input device picker.
+    /// Always included (even when picker is closed) so the panel and body frame
+    /// never resize for picker open/close — SwiftUI handles the visual animation.
+    /// Must match OverlayPanel.pickerExtraHeight exactly.
+    private var pickerExtraHeight: CGFloat {
+        let deviceCount = max(appState.inputDevices.count, 1)
+        return 28 + CGFloat(deviceCount) * 26 + 12 + 1
+    }
+
     var body: some View {
         Group {
             switch appState.state {
             case .idle:
                 Color.clear.frame(width: 0, height: 0)
             case .recording, .paused:
-                recordingView
+                recordingView.padding(.top, 6)
             case .transcribing:
                 transcribingView.padding(.top, 6)
             case .refining:
@@ -35,93 +44,115 @@ struct OverlayView: View {
             }
         }
         .frame(width: 380)
-        .padding(.top, 90)
-        .frame(height: 180 + attachmentExtraHeight, alignment: .top)
+        .padding(.bottom, 44)
+        .frame(height: 180 + attachmentExtraHeight + pickerExtraHeight, alignment: .bottom)
         .animation(appState.suppressStateAnimation ? nil : .spring(response: 0.35, dampingFraction: 0.82), value: appState.state)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appState.attachedContexts.count)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appState.showingInputPicker)
     }
 
     @State private var isHoveringPill = false
     @State private var isHoveringCancel = false
+    @State private var isHoveringMic = false
+    @State private var isHoveringWaveform = false
 
     // MARK: - Recording
 
     private var recordingView: some View {
         let hasAttachments = appState.isInstructionMode && !appState.attachedContexts.isEmpty
 
-        return ZStack(alignment: .topTrailing) {
-            // Main pill — click anywhere to stop recording
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    // Invisible counterweight to balance the paperclip on the right
-                    if hasAttachments {
-                        Spacer(minLength: 0)
-                        Color.clear.frame(width: 20, height: 1)
-                    }
+        // The pill — picker expands it upward, attachments expand it downward
+        return VStack(spacing: 0) {
+            // Input device picker — expands the pill upward.
+            // Panel always reserves picker height, so no NSPanel resize on toggle.
+            // SwiftUI handles the entire visual animation.
+            if appState.showingInputPicker {
+                InputDevicePicker(appState: appState, isPresented: $appState.showingInputPicker)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
 
-                    HStack(spacing: 3) {
-                        ForEach(0..<9, id: \.self) { i in
-                            RoundedRectangle(cornerRadius: 2.5)
-                                .fill(.white.opacity(0.7))
-                                .frame(width: 4, height: barHeight(for: i))
-                        }
-                    }
-                    .frame(height: 20)
-
-                    if appState.isInstructionMode {
-                        clipboardButton
-                    }
-
-                    if hasAttachments { Spacer(minLength: 0) }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
-                .onTapGesture { appState.toggleRecording() }
-
-                // Attachment list — expands the pill downward
-                if hasAttachments {
-                    Rectangle()
-                        .fill(.white.opacity(0.08))
-                        .frame(height: 1)
-                        .padding(.horizontal, 8)
-
-                    VStack(spacing: 2) {
-                        ForEach(appState.attachedContexts) { ctx in
-                            attachmentRow(ctx)
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-
-                        // "+ Add more" button
-                        if appState.attachedContexts.count < AppState.maxAttachments {
-                            addMoreButton
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-                    }
+                Rectangle()
+                    .fill(.white.opacity(0.08))
+                    .frame(height: 1)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .transition(.opacity)
+            }
+
+            HStack(spacing: 10) {
+                // Invisible counterweight to balance the paperclip on the right
+                if hasAttachments {
+                    Spacer(minLength: 0)
+                    Color.clear.frame(width: 20, height: 1)
+                }
+
+                HStack(spacing: 3) {
+                    ForEach(0..<9, id: \.self) { i in
+                        RoundedRectangle(cornerRadius: 2.5)
+                            .fill(.white.opacity(0.7))
+                            .frame(width: 4, height: barHeight(for: i))
+                    }
+                }
+                .frame(height: 20)
+
+                if appState.isInstructionMode {
+                    clipboardButton
+                }
+
+                if hasAttachments { Spacer(minLength: 0) }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+            .onHover { isHoveringWaveform = $0 }
+            .onTapGesture { appState.toggleRecording() }
+
+            // Attachment list — expands the pill downward
+            if hasAttachments {
+                Rectangle()
+                    .fill(.white.opacity(0.08))
+                    .frame(height: 1)
+                    .padding(.horizontal, 8)
+
+                VStack(spacing: 2) {
+                    ForEach(appState.attachedContexts) { ctx in
+                        attachmentRow(ctx)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    // "+ Add more" button
+                    if appState.attachedContexts.count < AppState.maxAttachments {
+                        addMoreButton
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+            }
+        }
+        .frame(width: (hasAttachments || appState.showingInputPicker) ? 300 : nil)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            Group {
+                if isHoveringCancel {
+                    GlowBorder(cornerRadius: 14, color: Color(red: 0.9, green: 0.25, blue: 0.25))
+                } else if isHoveringWaveform {
+                    // Green when hovering the waveform (tap-to-stop area), even if picker is open
+                    GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
+                } else if appState.showingInputPicker || isHoveringMic {
+                    GlowBorder(cornerRadius: 14, color: Color(red: 0.95, green: 0.55, blue: 0.15))
+                } else if isHoveringPill {
+                    GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
+                } else if appState.isInstructionMode {
+                    AnimatedGradientBorder(cornerRadius: 14)
+                } else {
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
                 }
             }
-            .frame(width: hasAttachments ? 300 : nil)
-            .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(
-                Group {
-                    if isHoveringCancel {
-                        GlowBorder(cornerRadius: 14, color: Color(red: 0.9, green: 0.25, blue: 0.25))
-                    } else if isHoveringPill {
-                        GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
-                    } else if appState.isInstructionMode {
-                        AnimatedGradientBorder(cornerRadius: 14)
-                    } else {
-                        RoundedRectangle(cornerRadius: 14)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-                    }
-                }
-            )
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAttachments)
-
-            // Cancel X — positioned outside pill corner via alignment guides
+        )
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAttachments)
+        // Cancel X — top-right, outside the pill
+        .overlay(alignment: .topTrailing) {
             Image(systemName: "xmark")
                 .font(.system(size: 7, weight: .bold))
                 .foregroundStyle(.white.opacity(isHoveringCancel ? 1 : 0.85))
@@ -139,14 +170,40 @@ struct OverlayView: View {
                 .onTapGesture { appState.cancelRecording() }
                 .opacity(isHoveringPill ? (isHoveringCancel ? 1 : 0.7) : 0)
                 .scaleEffect(isHoveringPill ? 1 : 0.4)
-                .alignmentGuide(.trailing) { d in d[.trailing] - 6 }
-                .alignmentGuide(.top) { d in d[.top] + 6 }
+                .offset(x: 6, y: -6)
                 .animation(.easeOut(duration: 0.15), value: isHoveringPill)
                 .animation(.easeInOut(duration: 0.1), value: isHoveringCancel)
         }
+        // Mic input selector — top-left, outside the pill
+        .overlay(alignment: .topLeading) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white.opacity(isHoveringMic ? 1 : 0.85))
+                .frame(width: 16, height: 16)
+                .background(
+                    Circle().fill(
+                        isHoveringMic
+                            ? Color(red: 0.95, green: 0.55, blue: 0.15)
+                            : Color(white: 0.3)
+                    )
+                )
+                .clipShape(Circle())
+                .contentShape(Circle().scale(1.5))
+                .onHover { isHoveringMic = $0 }
+                .onTapGesture {
+                    appState.refreshInputDevices()
+                    appState.showingInputPicker.toggle()
+                }
+                .opacity(isHoveringPill ? (isHoveringMic ? 1 : 0.7) : 0)
+                .scaleEffect(isHoveringPill ? 1 : 0.4)
+                .offset(x: -6, y: -6)
+                .animation(.easeOut(duration: 0.15), value: isHoveringPill)
+                .animation(.easeInOut(duration: 0.1), value: isHoveringMic)
+        }
         .onHover { isHoveringPill = $0 }
         .animation(.easeOut(duration: 0.06), value: appState.audioLevel)
-        .animation(.easeInOut(duration: 0.2), value: isHoveringPill)
+        .animation(.easeInOut(duration: 0.15), value: isHoveringPill)
+        .animation(.easeInOut(duration: 0.15), value: isHoveringMic)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appState.attachedContexts.count)
     }
 
@@ -371,6 +428,63 @@ private struct AttachmentRowView: View {
             .frame(width: width, height: height)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .padding(8)
+    }
+}
+
+// MARK: - Input Device Picker (inline overlay)
+
+private struct InputDevicePicker: View {
+    @ObservedObject var appState: AppState
+    @Binding var isPresented: Bool
+    @State private var hoveredDeviceUID: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Input Source")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+
+            if appState.inputDevices.isEmpty {
+                Text("No input devices found")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(Array(appState.inputDevices.enumerated()), id: \.element.uid) { _, device in
+                    let isSelected = appState.selectedInputDevice?.uid == device.uid
+                    HStack(spacing: 6) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(isSelected ? .green : .white.opacity(0.3))
+                            .frame(width: 14)
+
+                        Text(device.name)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(isSelected ? 0.9 : 0.6))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(hoveredDeviceUID == device.uid ? Color.white.opacity(0.08) : Color.clear)
+                    )
+                    .contentShape(Rectangle())
+                    .onHover { hovering in hoveredDeviceUID = hovering ? device.uid : nil }
+                    .onTapGesture {
+                        appState.selectInputDevice(device)
+                        isPresented = false
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

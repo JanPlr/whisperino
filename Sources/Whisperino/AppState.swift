@@ -40,6 +40,12 @@ class AppState: ObservableObject {
     @Published var agentStatus: String? = nil
     /// Name of the currently active agent (shown in overlay)
     @Published var activeAgentName: String? = nil
+    /// Available audio input devices
+    @Published var inputDevices: [AudioInputDevice] = []
+    /// Currently selected input device (nil = system default)
+    @Published var selectedInputDevice: AudioInputDevice?
+    /// Whether the input device picker is currently shown in the overlay
+    @Published var showingInputPicker = false
     /// When true, the overlay skips state-change animation (used for cancel)
     var suppressStateAnimation = false
 
@@ -63,6 +69,43 @@ class AppState: ObservableObject {
     private var recordingTargetPID: pid_t?
 
     var isSetUp: Bool { transcriber.isAvailable }
+
+    // MARK: - Input Device Management
+
+    /// Refresh the list of available input devices and mark the current default
+    func refreshInputDevices() {
+        inputDevices = AudioRecorder.availableInputDevices()
+        // If no explicit selection, highlight the system default
+        if selectedInputDevice == nil, let defaultID = AudioRecorder.defaultInputDeviceID() {
+            selectedInputDevice = inputDevices.first { $0.id == defaultID }
+        }
+        // If selected device disappeared, reset to default
+        if let selected = selectedInputDevice, !inputDevices.contains(where: { $0.id == selected.id }) {
+            if let defaultID = AudioRecorder.defaultInputDeviceID() {
+                selectedInputDevice = inputDevices.first { $0.id == defaultID }
+            } else {
+                selectedInputDevice = inputDevices.first
+            }
+        }
+    }
+
+    /// Select a specific input device for recording.
+    /// If currently recording, restarts the engine on the new device seamlessly.
+    func selectInputDevice(_ device: AudioInputDevice) {
+        selectedInputDevice = device
+
+        // If recording is active, hot-swap the input device by restarting the engine
+        guard case .recording = state else { return }
+        do {
+            try recorder.switchDevice(deviceID: device.id) { [weak self] level in
+                DispatchQueue.main.async {
+                    self?.audioLevel = level
+                }
+            }
+        } catch {
+            print("[whisperino] failed to switch device mid-recording: \(error)")
+        }
+    }
 
     // MARK: - Hotkey handlers
 
@@ -146,6 +189,7 @@ class AppState: ObservableObject {
     // MARK: - Cancel
 
     func cancelRecording() {
+        showingInputPicker = false
         if let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
@@ -223,7 +267,7 @@ class AppState: ObservableObject {
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
 
         do {
-            try recorder.start { [weak self] level in
+            try recorder.start(deviceID: selectedInputDevice?.id) { [weak self] level in
                 DispatchQueue.main.async {
                     self?.audioLevel = level
                 }
@@ -237,6 +281,7 @@ class AppState: ObservableObject {
     }
 
     private func stopRecording() {
+        showingInputPicker = false
         guard let audioURL = recorder.stop() else {
             resetInstructionMode()
             state = .idle

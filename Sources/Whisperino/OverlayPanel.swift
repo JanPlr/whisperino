@@ -7,7 +7,7 @@ class OverlayPanel {
     private var isVisible = false
     private var cancellable: AnyCancellable?
 
-    /// Base panel height with no attachments
+    /// Base panel height with no attachments or picker
     private static let baseHeight: CGFloat = 180
     /// Extra height per attachment row
     private static let rowHeight: CGFloat = 32
@@ -37,13 +37,20 @@ class OverlayPanel {
         hostingView.layer?.isOpaque = false
         panel.contentView = hostingView
 
-        // Resize panel when attachments change
-        cancellable = appState.$attachedContexts
-            .map(\.count)
-            .removeDuplicates()
-            .sink { [weak self] count in
-                self?.updatePanelHeight(attachmentCount: count)
-            }
+        // Resize panel whenever attachments, picker visibility, or device count changes.
+        // Uses the exact same height formula as OverlayView.pickerExtraHeight.
+        cancellable = Publishers.CombineLatest3(
+            appState.$attachedContexts.map(\.count).removeDuplicates(),
+            appState.$showingInputPicker.removeDuplicates(),
+            appState.$inputDevices.map(\.count).removeDuplicates()
+        )
+        .sink { [weak self] attachmentCount, pickerShowing, deviceCount in
+            self?.updatePanelHeight(
+                attachmentCount: attachmentCount,
+                pickerShowing: pickerShowing,
+                deviceCount: deviceCount
+            )
+        }
     }
 
     func present() {
@@ -72,7 +79,6 @@ class OverlayPanel {
             guard let self else { return }
             self.panel.orderOut(nil)
 
-            // Reset to base height so next present() starts clean
             let baseFrame = NSRect(
                 x: self.panel.frame.origin.x,
                 y: self.panel.frame.minY,
@@ -83,16 +89,33 @@ class OverlayPanel {
         })
     }
 
-    private func panelHeight(attachmentCount: Int) -> CGFloat {
-        guard attachmentCount > 0 else { return Self.baseHeight }
-        let rows = CGFloat(min(attachmentCount, AppState.maxAttachments)) * Self.rowHeight
-        let addButton: CGFloat = attachmentCount < AppState.maxAttachments ? 36 : 0
-        return Self.baseHeight + rows + addButton
+    /// Must match OverlayView.pickerExtraHeight exactly
+    private static func pickerExtraHeight(deviceCount: Int) -> CGFloat {
+        let count = max(deviceCount, 1)
+        return 28 + CGFloat(count) * 26 + 12 + 1
     }
 
-    private func updatePanelHeight(attachmentCount: Int) {
+    private func panelHeight(attachmentCount: Int, pickerShowing: Bool, deviceCount: Int) -> CGFloat {
+        var height = Self.baseHeight
+        if attachmentCount > 0 {
+            let rows = CGFloat(min(attachmentCount, AppState.maxAttachments)) * Self.rowHeight
+            let addButton: CGFloat = attachmentCount < AppState.maxAttachments ? 36 : 0
+            height += rows + addButton
+        }
+        // Always include picker height so the panel never resizes for picker
+        // open/close. SwiftUI handles the visual animation within the fixed panel.
+        // This eliminates NSPanel ↔ SwiftUI animation desync entirely.
+        height += Self.pickerExtraHeight(deviceCount: deviceCount)
+        return height
+    }
+
+    private func updatePanelHeight(attachmentCount: Int, pickerShowing: Bool, deviceCount: Int) {
         guard isVisible else { return }
-        let newHeight = panelHeight(attachmentCount: attachmentCount)
+        let newHeight = panelHeight(
+            attachmentCount: attachmentCount,
+            pickerShowing: pickerShowing,
+            deviceCount: deviceCount
+        )
         guard abs(panel.frame.height - newHeight) > 1 else { return }
 
         let isCollapsing = newHeight < panel.frame.height
@@ -107,10 +130,9 @@ class OverlayPanel {
         )
 
         NSAnimationContext.runAnimationGroup { context in
-            // Collapsing uses a longer, gentler curve; expanding is snappier
             context.duration = isCollapsing ? 0.35 : 0.25
             context.timingFunction = CAMediaTimingFunction(
-                controlPoints: 0.25, 0.1, 0.25, 1.0  // ease-out curve
+                controlPoints: 0.25, 0.1, 0.25, 1.0
             )
             panel.animator().setFrame(newFrame, display: true)
         }
