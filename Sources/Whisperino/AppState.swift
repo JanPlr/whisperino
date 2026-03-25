@@ -139,7 +139,7 @@ class AppState: ObservableObject {
             startRecording(instruction: instruction)
         case .recording:
             guard let startTime = recordingStartTime,
-                  Date().timeIntervalSince(startTime) >= 0.3 else { return }
+                  Date().timeIntervalSince(startTime) >= 0.5 else { return }
             stopRecording()
         case .paused:
             stopRecording()

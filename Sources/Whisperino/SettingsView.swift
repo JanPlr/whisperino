@@ -33,8 +33,7 @@ private struct GeneralTab: View {
         Form {
             Section {
                 SectionHeader("Dictation")
-                ShortcutRow(keys: "⌥D", label: "Tap to start/stop, hold to push-to-talk")
-                ShortcutRow(keys: "⌥⌥", label: "Double-tap Option to start/stop")
+                ShortcutRow(keys: "fn fn", label: "Double-tap Fn to start/stop")
             }
 
             Section {
@@ -68,8 +67,7 @@ private struct GeneralTab: View {
 
             Section {
                 SectionHeader("Instruction Mode")
-                ShortcutRow(keys: "⇧⌥D", label: "Tap to start/stop, hold to push-to-talk")
-                ShortcutRow(keys: "⇧⌥⌥", label: "Hold Shift + double-tap Option to start/stop")
+                ShortcutRow(keys: "fn+⇧⇧", label: "Hold Fn + double-tap Shift to start/stop")
                 Text("Speak instructions and the LLM generates a response. Tap the paperclip to attach clipboard content (text or image).")
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -4,18 +4,17 @@ import Foundation
 
 struct HotkeyConfig: Codable, Equatable {
     var keyCode: UInt32 = UInt32(kVK_ANSI_D)
-    var modifiers: UInt32 = UInt32(optionKey)
+    var modifiers: UInt32 = 0  // Fn — not a Carbon modifier, handled via NSEvent
 
     static let `default` = HotkeyConfig()
 
     var displayString: String {
-        var parts: [String] = []
+        var parts: [String] = ["fn"]
         if modifiers & UInt32(controlKey) != 0 { parts.append("⌃") }
-        if modifiers & UInt32(optionKey) != 0 { parts.append("⌥") }
         if modifiers & UInt32(shiftKey) != 0 { parts.append("⇧") }
         if modifiers & UInt32(cmdKey) != 0 { parts.append("⌘") }
         parts.append(Self.keyName(for: keyCode))
-        return parts.joined()
+        return parts.joined(separator: "+")
     }
 
     static func keyName(for keyCode: UInt32) -> String {
@@ -56,7 +55,6 @@ struct HotkeyConfig: Codable, Equatable {
     static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
         var carbon: UInt32 = 0
         if flags.contains(.control) { carbon |= UInt32(controlKey) }
-        if flags.contains(.option) { carbon |= UInt32(optionKey) }
         if flags.contains(.shift) { carbon |= UInt32(shiftKey) }
         if flags.contains(.command) { carbon |= UInt32(cmdKey) }
         return carbon

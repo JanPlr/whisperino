@@ -1,24 +1,24 @@
 import AppKit
-import Carbon
 import Foundation
 
 class HotkeyManager {
     static let shared = HotkeyManager()
 
-    private var hotKeyRef: EventHotKeyRef?
-    private var instructionHotKeyRef: EventHotKeyRef?
-    private var eventHandlerRef: EventHandlerRef?
     private var onPress: (() -> Void)?
     private var onRelease: (() -> Void)?
     private var onInstructionPress: (() -> Void)?
     private var onInstructionRelease: (() -> Void)?
 
-    // Double-tap Option detection
+    // Double-tap Fn detection (regular dictation)
     private var flagsMonitor: Any?
-    private var lastOptionReleaseTime: Date?
+    private var localFlagsMonitor: Any?
+    private var lastFnReleaseTime: Date?
     private let doubleTapThreshold: TimeInterval = 0.35
-    private var optionIsDown = false
+    private var fnIsDown = false
 
+    // Fn + double-tap Shift detection (instruction/AI mode)
+    private var shiftIsDown = false
+    private var lastShiftReleaseTime: Date?
 
     func register(
         onPress: @escaping () -> Void,
@@ -30,15 +30,7 @@ class HotkeyManager {
         self.onRelease = onRelease
         self.onInstructionPress = onInstructionPress
         self.onInstructionRelease = onInstructionRelease
-        installEventHandlerOnce()
-        let config = SettingsStore.shared.settings.hotkey
-        registerHotKeys(keyCode: config.keyCode, modifiers: config.modifiers)
-        installDoubleTapMonitor()
-    }
-
-    func updateHotkey(config: HotkeyConfig) {
-        unregisterHotKeys()
-        registerHotKeys(keyCode: config.keyCode, modifiers: config.modifiers)
+        installFlagsMonitor()
     }
 
     func handleHotkeyPress(instruction: Bool) {
@@ -57,148 +49,79 @@ class HotkeyManager {
         }
     }
 
-    // MARK: - Double-tap Option
+    // MARK: - Modifier Flags Monitor (double-tap Fn & Fn+double-tap Shift)
 
-    /// Monitors modifier key changes globally to detect double-tap Option.
-    /// This works independently of the configurable hotkey — it's always active.
-    private func installDoubleTapMonitor() {
+    private func installFlagsMonitor() {
         guard flagsMonitor == nil else { return }
         flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.handleFlagsChanged(event)
         }
-        // Also monitor locally (when our own windows are focused)
-        NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.handleFlagsChanged(event)
             return event
         }
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        let optionDown = event.modifierFlags.contains(.option)
+        let fnDown = event.modifierFlags.contains(.function)
         let shiftDown = event.modifierFlags.contains(.shift)
-        // Allow Option alone or Shift+Option — block Command/Control
-        let blockedModifiers: NSEvent.ModifierFlags = [.command, .control]
+        // Block Command/Control/Option
+        let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
         let hasBlockedModifiers = !event.modifierFlags.intersection(blockedModifiers).isEmpty
 
-        if optionDown && !optionIsDown && !hasBlockedModifiers {
-            // Option pressed (possibly with Shift)
-            optionIsDown = true
-        } else if !optionDown && optionIsDown {
-            // Option released
-            optionIsDown = false
+        // --- Fn + double-tap Shift (instruction/AI mode) ---
+        // Only track Shift taps while Fn is held
+        if fnDown && !hasBlockedModifiers {
+            if shiftDown && !shiftIsDown {
+                // Shift pressed while Fn held
+                shiftIsDown = true
+            } else if !shiftDown && shiftIsDown {
+                // Shift released while Fn held
+                shiftIsDown = false
+                let now = Date()
+                if let lastRelease = lastShiftReleaseTime,
+                   now.timeIntervalSince(lastRelease) < doubleTapThreshold {
+                    // Double-tap Shift detected while Fn held → instruction mode
+                    lastShiftReleaseTime = nil
+                    // Clear Fn double-tap state so releasing Fn doesn't also fire dictation
+                    lastFnReleaseTime = nil
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onInstructionPress?()
+                        self?.onInstructionRelease?()
+                    }
+                } else {
+                    lastShiftReleaseTime = now
+                }
+            }
+        } else {
+            // Fn not held or blocked modifiers — reset Shift tracking
+            if shiftIsDown && !shiftDown { shiftIsDown = false }
+            lastShiftReleaseTime = nil
+        }
 
-            if hasBlockedModifiers { return }
+        // --- Double-tap Fn (regular dictation) ---
+        if fnDown && !fnIsDown && !hasBlockedModifiers && !shiftDown {
+            fnIsDown = true
+        } else if !fnDown && fnIsDown {
+            fnIsDown = false
+            shiftIsDown = false
+            lastShiftReleaseTime = nil
+
+            if hasBlockedModifiers || shiftDown { return }
 
             let now = Date()
-            if let lastRelease = lastOptionReleaseTime,
+            if let lastRelease = lastFnReleaseTime,
                now.timeIntervalSince(lastRelease) < doubleTapThreshold {
-                // Double-tap detected — check if Shift is held for instruction mode
-                lastOptionReleaseTime = nil
-                let instruction = shiftDown
+                // Double-tap Fn → regular dictation
+                lastFnReleaseTime = nil
                 DispatchQueue.main.async { [weak self] in
-                    if instruction {
-                        self?.onInstructionPress?()
-                        // Immediately release so isHotkeyHeld resets (no hold event for double-tap)
-                        self?.onInstructionRelease?()
-                    } else {
-                        self?.onPress?()
-                        self?.onRelease?()
-                    }
+                    self?.onPress?()
+                    self?.onRelease?()
                 }
             } else {
-                lastOptionReleaseTime = now
+                lastFnReleaseTime = now
             }
         }
     }
 
-    // MARK: - Carbon Hotkey
-
-    /// Install the Carbon event handler once (handles both press and release)
-    private func installEventHandlerOnce() {
-        guard eventHandlerRef == nil else { return }
-
-        var eventTypes = [
-            EventTypeSpec(
-                eventClass: OSType(kEventClassKeyboard),
-                eventKind: UInt32(kEventHotKeyPressed)
-            ),
-            EventTypeSpec(
-                eventClass: OSType(kEventClassKeyboard),
-                eventKind: UInt32(kEventHotKeyReleased)
-            ),
-        ]
-
-        let handlerRef = Unmanaged.passUnretained(self).toOpaque()
-
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            carbonHotkeyHandler,
-            2,
-            &eventTypes,
-            handlerRef,
-            &eventHandlerRef
-        )
-    }
-
-    private func registerHotKeys(keyCode: UInt32, modifiers: UInt32) {
-        // Primary hotkey (e.g. Option+D)
-        let hotKeyID = EventHotKeyID(signature: OSType(0x5746), id: 1)
-        RegisterEventHotKey(
-            keyCode, modifiers, hotKeyID,
-            GetApplicationEventTarget(), 0, &hotKeyRef
-        )
-
-        // Instruction hotkey: same key + Shift (e.g. Shift+Option+D)
-        let instructionID = EventHotKeyID(signature: OSType(0x5746), id: 2)
-        RegisterEventHotKey(
-            keyCode, modifiers | UInt32(shiftKey), instructionID,
-            GetApplicationEventTarget(), 0, &instructionHotKeyRef
-        )
-    }
-
-    private func unregisterHotKeys() {
-        if let ref = hotKeyRef {
-            UnregisterEventHotKey(ref)
-            hotKeyRef = nil
-        }
-        if let ref = instructionHotKeyRef {
-            UnregisterEventHotKey(ref)
-            instructionHotKeyRef = nil
-        }
-    }
-}
-
-// Carbon event handler (must be a plain function, not a closure)
-private func carbonHotkeyHandler(
-    nextHandler: EventHandlerCallRef?,
-    event: EventRef?,
-    userData: UnsafeMutableRawPointer?
-) -> OSStatus {
-    guard let userData = userData, let event = event else {
-        return OSStatus(eventNotHandledErr)
-    }
-    let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
-    let eventKind = GetEventKind(event)
-
-    // Determine which hotkey fired by checking the hotkey ID
-    var hotkeyID = EventHotKeyID()
-    GetEventParameter(
-        event,
-        EventParamName(kEventParamDirectObject),
-        EventParamType(typeEventHotKeyID),
-        nil,
-        MemoryLayout<EventHotKeyID>.size,
-        nil,
-        &hotkeyID
-    )
-    let isInstruction = hotkeyID.id == 2
-
-    DispatchQueue.main.async {
-        if eventKind == UInt32(kEventHotKeyPressed) {
-            manager.handleHotkeyPress(instruction: isInstruction)
-        } else if eventKind == UInt32(kEventHotKeyReleased) {
-            manager.handleHotkeyRelease(instruction: isInstruction)
-        }
-    }
-    return noErr
 }

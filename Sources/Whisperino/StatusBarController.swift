@@ -63,8 +63,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let config = store.settings.hotkey
-        let shortcutItem = NSMenuItem(title: "\(config.displayString) — tap to toggle, hold to push-to-talk", action: nil, keyEquivalent: "")
+        let shortcutItem = NSMenuItem(title: "fn fn — double-tap to toggle", action: nil, keyEquivalent: "")
         shortcutItem.isEnabled = false
         menu.addItem(shortcutItem)
 
@@ -74,15 +73,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
             setupItem.isEnabled = false
             menu.addItem(setupItem)
         }
-
-        menu.addItem(.separator())
-
-        let saveSnippetItem = NSMenuItem(title: "Save Last as Snippet…", action: #selector(saveLastAsSnippet), keyEquivalent: "")
-        saveSnippetItem.target = self
-        menu.addItem(saveSnippetItem)
-
-        let insertSnippetItem = NSMenuItem(title: "Insert Snippet", action: nil, keyEquivalent: "")
-        menu.addItem(insertSnippetItem)
 
         menu.addItem(.separator())
 
@@ -98,35 +88,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        // Update shortcut hint label
-        if let shortcutItem = menu.items.first(where: { $0.title.contains("tap to toggle") }) {
-            let config = store.settings.hotkey
-            shortcutItem.title = "\(config.displayString) — tap to toggle, hold to push-to-talk"
-        }
-
-        // Update "Save Last as Snippet…" enabled state
-        if let saveItem = menu.items.first(where: { $0.action == #selector(saveLastAsSnippet) }) {
-            saveItem.isEnabled = appState.lastTranscriptionResult != nil
-        }
-
-        // Rebuild Insert Snippet submenu
-        if let insertItem = menu.items.first(where: { $0.title == "Insert Snippet" }) {
-            let snippets = store.snippets
-            if snippets.isEmpty {
-                insertItem.submenu = nil
-                insertItem.isEnabled = false
-            } else {
-                let submenu = NSMenu()
-                for snippet in snippets {
-                    let item = NSMenuItem(title: snippet.name, action: #selector(insertSnippet(_:)), keyEquivalent: "")
-                    item.target = self
-                    item.representedObject = snippet
-                    submenu.addItem(item)
-                }
-                insertItem.submenu = submenu
-                insertItem.isEnabled = true
-            }
-        }
     }
 
     func menuDidClose(_ menu: NSMenu) {

@@ -3,8 +3,9 @@ import Foundation
 
 struct LLMRefiner {
     private let endpoint = URL(string: "https://api.langdock.com/anthropic/eu/v1/messages")!
-    private let model = "claude-haiku-4-5-20251001"
-    private let timeout: TimeInterval = 30
+    private let refinementModel = "claude-haiku-4-5-20251001"
+    private let instructModel = "claude-sonnet-4-6-default"
+    private let timeout: TimeInterval = 120
 
     // MARK: - Transcription refinement
 
@@ -16,7 +17,7 @@ struct LLMRefiner {
 
         let systemPrompt = buildRefineSystemPrompt(dictionaryTerms: dictionaryTerms)
         let body: [String: Any] = [
-            "model": model,
+            "model": refinementModel,
             "max_tokens": 4096,
             "temperature": 0.1,
             "system": systemPrompt,
@@ -48,15 +49,16 @@ struct LLMRefiner {
         let messageContent: Any = buildMessageContent(transcription: transcription, attachments: attachments)
 
         let body: [String: Any] = [
-            "model": model,
+            "model": instructModel,
             "max_tokens": 4096,
             "temperature": 0.5,
+            "stream": true,
             "system": systemPrompt,
             "messages": [["role": "user", "content": messageContent]]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        return try await send(request: request)
+        return try await sendStreaming(request: request)
     }
 
     /// Build the user message content from attachments + instruction.
@@ -135,6 +137,45 @@ struct LLMRefiner {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - Streaming request sender (Anthropic SSE format)
+
+    private func sendStreaming(request: URLRequest) async throws -> String {
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw RefinerError.httpError(statusCode)
+        }
+
+        var collectedText = ""
+
+        for try await line in bytes.lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("data:") else { continue }
+            let payload = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { continue }
+
+            guard let data = payload.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = json["type"] as? String else {
+                continue
+            }
+
+            // Anthropic streaming: content_block_delta with delta.text
+            if type == "content_block_delta",
+               let delta = json["delta"] as? [String: Any],
+               let text = delta["text"] as? String {
+                collectedText += text
+            }
+        }
+
+        let result = collectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !result.isEmpty else {
+            throw RefinerError.parseError
+        }
+        return result
+    }
+
     // MARK: - Image helper
 
     private func imageToBase64(_ image: NSImage) -> String? {
@@ -206,10 +247,14 @@ struct LLMRefiner {
 
         Guidelines:
         - Output ONLY the result — no preamble, no explanation, no meta-commentary
-        - Match the tone and format the user's context implies (e.g. email → write an email, code → write code)
+        - NEVER use formatted text (no markdown, no bullet points, no headers, no bold/italic) unless the user \
+        explicitly asks for formatting. Always default to plain text with line breaks for paragraphs.
+        - NEVER use em-dashes (—) in your output. Use commas, periods, or rewrite the sentence instead.
+        - Closely match the tone and style of how the user speaks. If they are casual, be casual. If they are formal, \
+        be formal. Mirror their voice.
+        - Follow any specific instructions the user gives about tone, style, length, or format exactly as stated.
         - If context items are provided (in <context> tags or as images), use them as the primary context for the instruction
         - Multiple context items may be provided — consider all of them together
-        - Keep formatting clean — use plain text unless the instruction implies structured output
         """
 
         if !dictionaryTerms.isEmpty {

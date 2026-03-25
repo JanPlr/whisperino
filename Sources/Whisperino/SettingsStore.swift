@@ -13,9 +13,6 @@ class SettingsStore: ObservableObject {
     @Published var settings: AppSettings {
         didSet {
             save(settings, to: settingsFile)
-            if oldValue.hotkey != settings.hotkey {
-                HotkeyManager.shared.updateHotkey(config: settings.hotkey)
-            }
         }
     }
     @Published var dictionary: [DictionaryEntry] {
