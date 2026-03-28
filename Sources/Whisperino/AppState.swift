@@ -2,6 +2,7 @@ import AppKit
 import Carbon
 import Combine
 import CoreGraphics
+import SwiftUI
 enum TranscriptionState: Equatable {
     case idle
     case recording
@@ -10,6 +11,7 @@ enum TranscriptionState: Equatable {
     case refining
     case result(text: String)
     case dismissing
+    case cancelled
     case error(message: String)
 }
 
@@ -59,12 +61,6 @@ class AppState: ObservableObject {
     private let agentClient = AgentClient()
     private let store = SettingsStore.shared
 
-    /// Timestamp when the hotkey was pressed (for push-to-talk detection)
-    private var hotkeyPressTime: Date?
-    /// Whether the hotkey is currently held (to ignore key repeat events)
-    private var isHotkeyHeld = false
-    /// Hold longer than this to activate push-to-talk mode
-    private let pushToTalkThreshold: TimeInterval = 0.4
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
 
@@ -109,33 +105,17 @@ class AppState: ObservableObject {
 
     // MARK: - Hotkey handlers
 
-    func hotkeyPressed() {
-        guard !isHotkeyHeld else { return }
-        isHotkeyHeld = true
-        hotkeyPressTime = Date()
-        handlePress(instruction: false)
+    func hotkeyToggle() {
+        toggleRecording(instruction: false)
     }
 
-    func hotkeyReleased() {
-        isHotkeyHeld = false
-        handleRelease()
+    func instructionHotkeyToggle() {
+        toggleRecording(instruction: true)
     }
 
-    func instructionHotkeyPressed() {
-        guard !isHotkeyHeld else { return }
-        isHotkeyHeld = true
-        hotkeyPressTime = Date()
-        handlePress(instruction: true)
-    }
-
-    func instructionHotkeyReleased() {
-        isHotkeyHeld = false
-        handleRelease()
-    }
-
-    private func handlePress(instruction: Bool) {
+    private func toggleRecording(instruction: Bool) {
         switch state {
-        case .idle, .result, .error, .dismissing:
+        case .idle, .result, .error, .dismissing, .cancelled:
             startRecording(instruction: instruction)
         case .recording:
             guard let startTime = recordingStartTime,
@@ -148,27 +128,10 @@ class AppState: ObservableObject {
         }
     }
 
-    private func handleRelease() {
-        isHotkeyHeld = false
-        guard case .recording = state,
-              let pressTime = hotkeyPressTime,
-              Date().timeIntervalSince(pressTime) > pushToTalkThreshold else {
-            return
-        }
-        stopRecording()
-    }
-
     // MARK: - Toggle Recording (waveform tap)
 
     func toggleRecording() {
-        switch state {
-        case .idle, .result, .error, .dismissing:
-            startRecording(instruction: isInstructionMode)
-        case .recording, .paused:
-            stopRecording()
-        case .transcribing, .refining:
-            break
-        }
+        toggleRecording(instruction: isInstructionMode)
     }
 
     // MARK: - Pause / Resume
@@ -198,12 +161,7 @@ class AppState: ObservableObject {
         recordingTargetPID = nil
         resetInstructionMode()
 
-        // Skip the SwiftUI spring animation — panel fade handles the exit
-        suppressStateAnimation = true
-        state = .idle
-        DispatchQueue.main.async { [weak self] in
-            self?.suppressStateAnimation = false
-        }
+        state = .cancelled
     }
 
     // MARK: - Clipboard Attachments (instruction mode only)

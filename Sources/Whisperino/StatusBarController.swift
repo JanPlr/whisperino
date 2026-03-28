@@ -123,8 +123,24 @@ class StatusBarController: NSObject, NSMenuDelegate {
             .sink { [weak self] state in
                 self?.updateStatusIcon(for: state)
                 switch state {
-                case .idle, .dismissing:
+                case .idle:
                     self?.overlayPanel.dismiss()
+                case .dismissing:
+                    self?.overlayPanel.dismiss()
+                case .cancelled:
+                    // Let cancel animation play, then dismiss, then go idle
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in
+                        self?.overlayPanel.dismiss()
+                        // Set idle after panel is fully gone
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            guard case .cancelled = self?.appState.state else { return }
+                            self?.appState.suppressStateAnimation = true
+                            self?.appState.state = .idle
+                            DispatchQueue.main.async {
+                                self?.appState.suppressStateAnimation = false
+                            }
+                        }
+                    }
                 default:
                     self?.overlayPanel.present()
                 }

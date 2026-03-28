@@ -5,6 +5,7 @@ import SwiftUI
 class OverlayPanel {
     private let panel: NSPanel
     private var isVisible = false
+    private var dismissGeneration = 0
     private var cancellable: AnyCancellable?
 
     /// Base panel height with no attachments or picker
@@ -56,6 +57,7 @@ class OverlayPanel {
     func present() {
         guard !isVisible else { return }
         isVisible = true
+        dismissGeneration += 1
         positionAtBottomCenter()
         panel.alphaValue = 0
         panel.orderFront(nil)
@@ -70,13 +72,15 @@ class OverlayPanel {
     func dismiss() {
         guard isVisible else { return }
         isVisible = false
+        dismissGeneration += 1
+        let gen = dismissGeneration
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.3
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            guard let self else { return }
+            guard let self, self.dismissGeneration == gen else { return }
             self.panel.orderOut(nil)
 
             let baseFrame = NSRect(

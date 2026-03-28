@@ -13,10 +13,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarController = StatusBarController(appState: appState)
 
         HotkeyManager.shared.register(
-            onPress: { [weak self] in self?.appState.hotkeyPressed() },
-            onRelease: { [weak self] in self?.appState.hotkeyReleased() },
-            onInstructionPress: { [weak self] in self?.appState.instructionHotkeyPressed() },
-            onInstructionRelease: { [weak self] in self?.appState.instructionHotkeyReleased() }
+            onToggle: { [weak self] in self?.appState.hotkeyToggle() },
+            onInstructionToggle: { [weak self] in self?.appState.instructionHotkeyToggle() },
+            onCancel: { [weak self] in self?.appState.cancelRecording() },
+            isRecording: { [weak self] in
+                guard let state = self?.appState.state else { return false }
+                switch state {
+                case .recording, .paused: return true
+                default: return false
+                }
+            }
         )
     }
 }

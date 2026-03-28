@@ -8,6 +8,11 @@ struct OverlayView: View {
         return false
     }
 
+    private var isCancelled: Bool {
+        if case .cancelled = appState.state { return true }
+        return false
+    }
+
     /// Extra height for attachment rows + add-more button
     private var attachmentExtraHeight: CGFloat {
         let count = appState.attachedContexts.count
@@ -31,7 +36,7 @@ struct OverlayView: View {
             switch appState.state {
             case .idle:
                 Color.clear.frame(width: 0, height: 0)
-            case .recording, .paused:
+            case .recording, .paused, .cancelled:
                 recordingView.padding(.top, 6)
             case .transcribing:
                 transcribingView.padding(.top, 6)
@@ -58,153 +63,212 @@ struct OverlayView: View {
 
     // MARK: - Recording
 
+    // Cancel animation — two layers: pill fades, badge appears/spins/pops
+    @State private var cancelProgress: Int = 0  // 0=ready, 1=badge visible, 2=spinning down, 3=popped
+    @State private var sparkle = false
+
     private var recordingView: some View {
         let hasAttachments = appState.isInstructionMode && !appState.attachedContexts.isEmpty
+        let cancelled = isCancelled
+        let cp = cancelProgress
 
-        // The pill — picker expands it upward, attachments expand it downward
-        return VStack(spacing: 0) {
-            // Input device picker — expands the pill upward.
-            // Panel always reserves picker height, so no NSPanel resize on toggle.
-            // SwiftUI handles the entire visual animation.
-            if appState.showingInputPicker {
-                InputDevicePicker(appState: appState, isPresented: $appState.showingInputPicker)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-
-                Rectangle()
-                    .fill(.white.opacity(0.08))
-                    .frame(height: 1)
-                    .padding(.horizontal, 8)
-                    .transition(.opacity)
-            }
-
-            HStack(spacing: 10) {
-                // Invisible counterweight to balance the paperclip on the right
-                if hasAttachments {
-                    Spacer(minLength: 0)
-                    Color.clear.frame(width: 20, height: 1)
-                }
-
-                HStack(spacing: 3) {
-                    ForEach(0..<9, id: \.self) { i in
-                        RoundedRectangle(cornerRadius: 2.5)
-                            .fill(.white.opacity(0.7))
-                            .frame(width: 4, height: barHeight(for: i))
-                    }
-                }
-                .frame(height: 20)
-
-                if appState.isInstructionMode {
-                    clipboardButton
-                }
-
-                if hasAttachments { Spacer(minLength: 0) }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-            .onHover { isHoveringWaveform = $0 }
-            .onTapGesture { appState.toggleRecording() }
-
-            // Attachment list — expands the pill downward
-            if hasAttachments {
-                Rectangle()
-                    .fill(.white.opacity(0.08))
-                    .frame(height: 1)
-                    .padding(.horizontal, 8)
-
-                VStack(spacing: 2) {
-                    ForEach(appState.attachedContexts) { ctx in
-                        attachmentRow(ctx)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-
-                    // "+ Add more" button
-                    if appState.attachedContexts.count < AppState.maxAttachments {
-                        addMoreButton
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-            }
-        }
-        .frame(width: (hasAttachments || appState.showingInputPicker) ? 300 : nil)
-        .background(Color.black)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            Group {
-                if isHoveringCancel {
-                    GlowBorder(cornerRadius: 14, color: Color(red: 0.9, green: 0.25, blue: 0.25))
-                } else if isHoveringWaveform {
-                    // Green when hovering the waveform (tap-to-stop area), even if picker is open
-                    GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
-                } else if appState.showingInputPicker || isHoveringMic {
-                    GlowBorder(cornerRadius: 14, color: Color(red: 0.95, green: 0.55, blue: 0.15))
-                } else if isHoveringPill {
-                    GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
-                } else if appState.isInstructionMode {
-                    AnimatedGradientBorder(cornerRadius: 14)
-                } else {
-                    RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-                }
-            }
-        )
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAttachments)
-        // Cancel X — top-right, outside the pill
-        .overlay(alignment: .topTrailing) {
-            Image(systemName: "xmark")
-                .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(.white.opacity(isHoveringCancel ? 1 : 0.85))
-                .frame(width: 16, height: 16)
-                .background(
-                    Circle().fill(
-                        isHoveringCancel
-                            ? Color(red: 0.8, green: 0.2, blue: 0.2)
-                            : Color(white: 0.3)
+        return ZStack {
+            // === Sparkle particles — burst outward when badge vanishes ===
+            ForEach(0..<6, id: \.self) { i in
+                Circle()
+                    .fill(Color(red: 0.85, green: 0.2, blue: 0.2))
+                    .frame(width: sparkle ? 1.5 : 3, height: sparkle ? 1.5 : 3)
+                    .offset(
+                        x: sparkle ? cos(Double(i) * .pi / 3) * 14 : 0,
+                        y: sparkle ? sin(Double(i) * .pi / 3) * 14 : 0
                     )
+                    .opacity(sparkle ? 0 : 0.85)
+            }
+
+            // === Cancel badge: red circle with white X ===
+            Circle()
+                .fill(Color(red: 0.85, green: 0.2, blue: 0.2))
+                .frame(width: 28, height: 28)
+                .overlay(
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
                 )
-                .clipShape(Circle())
-                .contentShape(Circle().scale(1.5))
-                .onHover { isHoveringCancel = $0 }
-                .onTapGesture { appState.cancelRecording() }
-                .opacity(isHoveringPill ? (isHoveringCancel ? 1 : 0.7) : 0)
-                .scaleEffect(isHoveringPill ? 1 : 0.4)
-                .offset(x: 6, y: -6)
-                .animation(.easeOut(duration: 0.15), value: isHoveringPill)
-                .animation(.easeInOut(duration: 0.1), value: isHoveringCancel)
-        }
-        // Mic input selector — top-left, outside the pill
-        .overlay(alignment: .topLeading) {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(.white.opacity(isHoveringMic ? 1 : 0.85))
-                .frame(width: 16, height: 16)
-                .background(
-                    Circle().fill(
-                        isHoveringMic
-                            ? Color(red: 0.95, green: 0.55, blue: 0.15)
-                            : Color(white: 0.3)
-                    )
-                )
-                .clipShape(Circle())
-                .contentShape(Circle().scale(1.5))
-                .onHover { isHoveringMic = $0 }
-                .onTapGesture {
-                    appState.refreshInputDevices()
-                    appState.showingInputPicker.toggle()
+                .rotationEffect(.degrees(cp >= 2 ? 540 : 0))
+                .scaleEffect(cp == 1 ? 1.0 : cp == 2 ? 0.15 : 0.01)
+                .opacity(cp == 1 || cp == 2 ? 1 : 0)
+
+            // === The pill ===
+            VStack(spacing: 0) {
+                if appState.showingInputPicker && !cancelled {
+                    InputDevicePicker(appState: appState, isPresented: $appState.showingInputPicker)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+
+                    Rectangle()
+                        .fill(.white.opacity(0.08))
+                        .frame(height: 1)
+                        .padding(.horizontal, 8)
+                        .transition(.opacity)
                 }
-                .opacity(isHoveringPill ? (isHoveringMic ? 1 : 0.7) : 0)
-                .scaleEffect(isHoveringPill ? 1 : 0.4)
-                .offset(x: -6, y: -6)
-                .animation(.easeOut(duration: 0.15), value: isHoveringPill)
-                .animation(.easeInOut(duration: 0.1), value: isHoveringMic)
+
+                HStack(spacing: 10) {
+                    if hasAttachments && !cancelled {
+                        Spacer(minLength: 0)
+                        Color.clear.frame(width: 20, height: 1)
+                    }
+
+                    HStack(spacing: 3) {
+                        ForEach(0..<9, id: \.self) { i in
+                            RoundedRectangle(cornerRadius: 2.5)
+                                .fill(.white.opacity(0.7))
+                                .frame(width: 4, height: barHeight(for: i))
+                        }
+                    }
+                    .frame(height: 20)
+
+                    if appState.isInstructionMode && !cancelled {
+                        clipboardButton
+                    }
+
+                    if hasAttachments && !cancelled { Spacer(minLength: 0) }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+                .onHover { isHoveringWaveform = $0 }
+                .onTapGesture { appState.toggleRecording() }
+
+                if hasAttachments && !cancelled {
+                    Rectangle()
+                        .fill(.white.opacity(0.08))
+                        .frame(height: 1)
+                        .padding(.horizontal, 8)
+
+                    VStack(spacing: 2) {
+                        ForEach(appState.attachedContexts) { ctx in
+                            attachmentRow(ctx)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+
+                        if appState.attachedContexts.count < AppState.maxAttachments {
+                            addMoreButton
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                }
+            }
+            .frame(width: (!cancelled && (hasAttachments || appState.showingInputPicker)) ? 300 : nil)
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                Group {
+                    if cancelled {
+                        EmptyView()
+                    } else if isHoveringCancel {
+                        GlowBorder(cornerRadius: 14, color: Color(red: 0.9, green: 0.25, blue: 0.25))
+                    } else if isHoveringWaveform {
+                        GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
+                    } else if appState.showingInputPicker || isHoveringMic {
+                        GlowBorder(cornerRadius: 14, color: Color(red: 0.95, green: 0.55, blue: 0.15))
+                    } else if isHoveringPill {
+                        GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
+                    } else if appState.isInstructionMode {
+                        AnimatedGradientBorder(cornerRadius: 14)
+                    } else {
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                    }
+                }
+            )
+            .scaleEffect(cancelled ? 0.01 : 1.0)
+            .opacity(cancelled ? 0 : 1)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAttachments)
+            // Cancel X button — top-right
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.white.opacity(isHoveringCancel ? 1 : 0.85))
+                    .frame(width: 16, height: 16)
+                    .background(
+                        Circle().fill(
+                            isHoveringCancel
+                                ? Color(red: 0.8, green: 0.2, blue: 0.2)
+                                : Color(white: 0.3)
+                        )
+                    )
+                    .clipShape(Circle())
+                    .contentShape(Circle().scale(1.5))
+                    .onHover { isHoveringCancel = $0 }
+                    .onTapGesture { appState.cancelRecording() }
+                    .opacity(isHoveringPill && !cancelled ? (isHoveringCancel ? 1 : 0.7) : 0)
+                    .scaleEffect(isHoveringPill && !cancelled ? 1 : 0.4)
+                    .offset(x: 6, y: -6)
+                    .animation(.easeOut(duration: 0.15), value: isHoveringPill)
+                    .animation(.easeInOut(duration: 0.1), value: isHoveringCancel)
+            }
+            // Mic button — top-left
+            .overlay(alignment: .topLeading) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.white.opacity(isHoveringMic ? 1 : 0.85))
+                    .frame(width: 16, height: 16)
+                    .background(
+                        Circle().fill(
+                            isHoveringMic
+                                ? Color(red: 0.95, green: 0.55, blue: 0.15)
+                                : Color(white: 0.3)
+                        )
+                    )
+                    .clipShape(Circle())
+                    .contentShape(Circle().scale(1.5))
+                    .onHover { isHoveringMic = $0 }
+                    .onTapGesture {
+                        appState.refreshInputDevices()
+                        appState.showingInputPicker.toggle()
+                    }
+                    .opacity(isHoveringPill && !cancelled ? (isHoveringMic ? 1 : 0.7) : 0)
+                    .scaleEffect(isHoveringPill && !cancelled ? 1 : 0.4)
+                    .offset(x: -6, y: -6)
+                    .animation(.easeOut(duration: 0.15), value: isHoveringPill)
+                    .animation(.easeInOut(duration: 0.1), value: isHoveringMic)
+            }
         }
         .onHover { isHoveringPill = $0 }
         .animation(.easeOut(duration: 0.06), value: appState.audioLevel)
         .animation(.easeInOut(duration: 0.15), value: isHoveringPill)
         .animation(.easeInOut(duration: 0.15), value: isHoveringMic)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appState.attachedContexts.count)
+        .onReceive(appState.$state) { newState in
+            if case .cancelled = newState {
+                cancelProgress = 0
+                sparkle = false
+                // Step 1: pill shrinks, badge appears
+                withAnimation(.easeOut(duration: 0.18)) {
+                    cancelProgress = 1
+                }
+                // Step 2: spin + shrink small
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                    withAnimation(.easeIn(duration: 0.28)) {
+                        cancelProgress = 2
+                    }
+                }
+                // Step 3: vanish + sparkle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        cancelProgress = 3
+                    }
+                    sparkle = false
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        sparkle = true
+                    }
+                }
+            } else if case .recording = newState {
+                cancelProgress = 0
+                sparkle = false
+            }
+        }
     }
 
     private func attachmentRow(_ ctx: AttachedContext) -> some View {
