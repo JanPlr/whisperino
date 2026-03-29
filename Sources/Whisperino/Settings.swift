@@ -65,7 +65,6 @@ struct AppSettings: Codable, Equatable {
     var llmRefinementEnabled: Bool = false
     var apiKey: String = ""
     var hotkey: HotkeyConfig = .default
-
     init() {}
 
     init(from decoder: Decoder) throws {

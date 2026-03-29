@@ -335,10 +335,8 @@ class AppState: ObservableObject {
 
                 await MainActor.run {
                     self.lastTranscriptionResult = finalText
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(finalText, forType: .string)
                     self.state = .result(text: finalText)
-                    self.activateTargetAndPaste()
+                    self.insertResult(finalText)
                     self.startDismissSequence()
                 }
             } catch {
@@ -437,7 +435,7 @@ class AppState: ObservableObject {
 
     // MARK: - Paste
 
-    private func activateTargetAndPaste() {
+    private func insertResult(_ text: String) {
         let targetPID = recordingTargetPID
         recordingTargetPID = nil
         resetInstructionMode()
@@ -447,7 +445,32 @@ class AppState: ObservableObject {
             app.activate()
         }
 
+        // Save current clipboard, paste transcription, then restore
+        let savedItems = NSPasteboard.general.pasteboardItems?.compactMap { item -> [String: Data]? in
+            var dict = [String: Data]()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    dict[type.rawValue] = data
+                }
+            }
+            return dict.isEmpty ? nil : dict
+        } ?? []
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
         pasteClipboard()
+
+        // Restore previous clipboard after paste completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NSPasteboard.general.clearContents()
+            for itemDict in savedItems {
+                let item = NSPasteboardItem()
+                for (type, data) in itemDict {
+                    item.setData(data, forType: NSPasteboard.PasteboardType(type))
+                }
+                NSPasteboard.general.writeObjects([item])
+            }
+        }
     }
 
     private func startDismissSequence() {
