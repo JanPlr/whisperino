@@ -76,6 +76,12 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let copyLastItem = NSMenuItem(title: "Copy Last Transcription", action: #selector(copyLastTranscription), keyEquivalent: "")
+        copyLastItem.target = self
+        menu.addItem(copyLastItem)
+
+        menu.addItem(.separator())
+
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -99,6 +105,12 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    @objc private func copyLastTranscription() {
+        guard let text = store.history.first?.text else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     @objc private func openSettings() {

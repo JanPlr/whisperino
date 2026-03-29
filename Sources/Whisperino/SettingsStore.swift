@@ -9,6 +9,9 @@ class SettingsStore: ObservableObject {
     private let dictionaryFile: URL
     private let snippetsFile: URL
     private let agentsFile: URL
+    private let historyFile: URL
+
+    static let maxHistoryEntries = 50
 
     @Published var settings: AppSettings {
         didSet {
@@ -24,6 +27,9 @@ class SettingsStore: ObservableObject {
     @Published var agents: [AgentEntry] {
         didSet { save(agents, to: agentsFile) }
     }
+    @Published var history: [TranscriptEntry] {
+        didSet { save(history, to: historyFile) }
+    }
 
     private init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -32,6 +38,7 @@ class SettingsStore: ObservableObject {
         dictionaryFile = baseDir.appendingPathComponent("dictionary.json")
         snippetsFile = baseDir.appendingPathComponent("snippets.json")
         agentsFile = baseDir.appendingPathComponent("agents.json")
+        historyFile = baseDir.appendingPathComponent("history.json")
 
         // Ensure directory exists
         try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
@@ -41,6 +48,7 @@ class SettingsStore: ObservableObject {
         dictionary = Self.load(from: dictionaryFile) ?? []
         snippets = Self.load(from: snippetsFile) ?? []
         agents = Self.load(from: agentsFile) ?? []
+        history = Self.load(from: historyFile) ?? []
     }
 
     // MARK: - Persistence
@@ -94,6 +102,21 @@ class SettingsStore: ObservableObject {
         guard let index = snippets.firstIndex(where: { $0.id == id }) else { return }
         snippets[index].name = name
         snippets[index].text = text
+    }
+
+    // MARK: - History
+
+    func addTranscript(_ text: String, isInstruction: Bool = false) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        history.insert(TranscriptEntry(text: trimmed, isInstruction: isInstruction), at: 0)
+        if history.count > Self.maxHistoryEntries {
+            history = Array(history.prefix(Self.maxHistoryEntries))
+        }
+    }
+
+    func clearHistory() {
+        history.removeAll()
     }
 
     // MARK: - Agents

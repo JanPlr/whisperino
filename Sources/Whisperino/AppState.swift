@@ -335,6 +335,7 @@ class AppState: ObservableObject {
 
                 await MainActor.run {
                     self.lastTranscriptionResult = finalText
+                    self.store.addTranscript(finalText, isInstruction: instructionMode)
                     self.state = .result(text: finalText)
                     self.insertResult(finalText)
                     self.startDismissSequence()

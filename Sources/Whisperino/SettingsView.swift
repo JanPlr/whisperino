@@ -11,6 +11,8 @@ struct SettingsView: View {
                 .tabItem { Label("Dictionary", systemImage: "text.book.closed") }
             SnippetsTab()
                 .tabItem { Label("Snippets", systemImage: "text.quote") }
+            HistoryTab()
+                .tabItem { Label("History", systemImage: "clock") }
             AgentsTab()
                 .tabItem { Label("Agents", systemImage: "cpu") }
         }
@@ -307,6 +309,77 @@ private struct SnippetsTab: View {
               let index = store.snippets.firstIndex(where: { $0.id == id }) else { return }
         store.removeSnippets(at: [index])
         selectedID = nil
+    }
+}
+
+// MARK: - History Tab
+
+private struct HistoryTab: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @State private var selectedID: UUID?
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if store.history.isEmpty {
+                Spacer()
+                Text("No transcriptions yet")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                List(selection: $selectedID) {
+                    ForEach(store.history) { entry in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 4) {
+                                if entry.isInstruction {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.purple)
+                                }
+                                Text(Self.timeFormatter.string(from: entry.createdAt))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(entry.text)
+                                .font(.system(size: 12))
+                                .lineLimit(2)
+                                .truncationMode(.tail)
+                        }
+                        .padding(.vertical, 2)
+                        .tag(entry.id)
+                    }
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+            }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Button("Copy") {
+                    if let id = selectedID,
+                       let entry = store.history.first(where: { $0.id == id }) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(entry.text, forType: .string)
+                    }
+                }
+                .disabled(selectedID == nil)
+
+                Spacer()
+
+                Button("Clear All") {
+                    store.clearHistory()
+                    selectedID = nil
+                }
+                .disabled(store.history.isEmpty)
+            }
+            .padding(12)
+        }
     }
 }
 

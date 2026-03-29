@@ -97,6 +97,20 @@ struct AgentEntry: Codable, Identifiable, Equatable {
     }
 }
 
+struct TranscriptEntry: Codable, Identifiable, Equatable {
+    let id: UUID
+    var text: String
+    var createdAt: Date
+    var isInstruction: Bool
+
+    init(id: UUID = UUID(), text: String, isInstruction: Bool = false, createdAt: Date = Date()) {
+        self.id = id
+        self.text = text
+        self.isInstruction = isInstruction
+        self.createdAt = createdAt
+    }
+}
+
 struct Snippet: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     var name: String
