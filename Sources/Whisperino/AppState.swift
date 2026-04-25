@@ -31,6 +31,10 @@ struct AttachedContext: Identifiable {
 class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
+    /// Rolling buffer of recent audio levels for the waveform display.
+    /// Index 0 = oldest, last index = newest. Updated at a fixed rate so
+    /// the visual rolls smoothly even when the recorder callback bursts.
+    @Published var audioSamples: [Float] = Array(repeating: 0, count: AppState.waveformBarCount)
     @Published var recordingStartTime: Date?
     /// Accumulated clipboard attachments for instruction mode
     @Published var attachedContexts: [AttachedContext] = []
@@ -54,6 +58,9 @@ class AppState: ObservableObject {
     /// Maximum number of attachments allowed
     static let maxAttachments = 5
 
+    /// Number of bars shown in the waveform display.
+    static let waveformBarCount = 9
+
     private(set) var lastTranscriptionResult: String?
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
@@ -63,6 +70,16 @@ class AppState: ObservableObject {
 
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
+
+    /// Drives the waveform sampler.
+    private var sampleTimer: Timer?
+    /// Running sum of audio levels seen since the last sampler tick. Averaged
+    /// at tick time — averages are far smoother than peaks.
+    private var sampleAccumulator: Float = 0
+    private var sampleCount: Int = 0
+    /// Last published sample, used to exponentially blend new samples for
+    /// additional temporal smoothness (fast rise, slower decay).
+    private var lastSmoothedSample: Float = 0
 
     var isSetUp: Bool { transcriber.isAvailable }
 
@@ -156,12 +173,57 @@ class AppState: ObservableObject {
         if let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
+        stopWaveformSampling()
         audioLevel = 0
         recordingStartTime = nil
         recordingTargetPID = nil
         resetInstructionMode()
 
         state = .cancelled
+    }
+
+    // MARK: - Waveform sampling
+
+    private func startWaveformSampling() {
+        sampleAccumulator = 0
+        sampleCount = 0
+        lastSmoothedSample = 0
+        audioSamples = Array(repeating: 0, count: Self.waveformBarCount)
+        sampleTimer?.invalidate()
+        // 10 Hz — newest sample enters on the right and rolls leftward over
+        // time, so a voice burst appears, peaks in the middle (where the
+        // shape mask is largest), then fades out to the left as it ages.
+        sampleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 10.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            // Average the levels seen this tick — much smoother than peaks.
+            let avg = self.sampleCount > 0
+                ? self.sampleAccumulator / Float(self.sampleCount)
+                : 0
+            self.sampleAccumulator = 0
+            self.sampleCount = 0
+
+            // Asymmetric blend: rise toward voice quickly enough to feel
+            // reactive, but not so fast that single-tick plosives whip the
+            // bars. Decay is slower so the wave glides out gently.
+            let mix: Float = avg > self.lastSmoothedSample ? 0.55 : 0.30
+            let smoothed = self.lastSmoothedSample + mix * (avg - self.lastSmoothedSample)
+            self.lastSmoothedSample = smoothed
+
+            // Roll the buffer: oldest drops off the left, newest enters right.
+            var s = self.audioSamples
+            s.removeFirst()
+            s.append(smoothed)
+            self.audioSamples = s
+        }
+    }
+
+    private func stopWaveformSampling() {
+        sampleTimer?.invalidate()
+        sampleTimer = nil
+        sampleAccumulator = 0
+        sampleCount = 0
+        lastSmoothedSample = 0
+        audioSamples = Array(repeating: 0, count: Self.waveformBarCount)
     }
 
     // MARK: - Clipboard Attachments (instruction mode only)
@@ -227,9 +289,14 @@ class AppState: ObservableObject {
         do {
             try recorder.start(deviceID: selectedInputDevice?.id) { [weak self] level in
                 DispatchQueue.main.async {
-                    self?.audioLevel = level
+                    guard let self = self else { return }
+                    self.audioLevel = level
+                    self.sampleAccumulator += level
+                    self.sampleCount += 1
                 }
             }
+            startWaveformSampling()
+            SoundEffects.playStart()
             recordingStartTime = Date()
             state = .recording
         } catch {
@@ -241,10 +308,13 @@ class AppState: ObservableObject {
     private func stopRecording() {
         showingInputPicker = false
         guard let audioURL = recorder.stop() else {
+            stopWaveformSampling()
             resetInstructionMode()
             state = .idle
             return
         }
+        stopWaveformSampling()
+        SoundEffects.playStop()
         audioLevel = 0
         let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
         recordingStartTime = nil

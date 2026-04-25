@@ -110,6 +110,22 @@ class AudioRecorder {
         return status == noErr
     }
 
+    /// Map raw RMS dB → 0..1 level for the meter, with a noise gate so
+    /// ambient room noise doesn't make the bars dance.
+    /// - dB scaling: -50 dB = 0, -15 dB = 1
+    /// - Anything below the noise gate is forced to 0
+    /// - Above the gate, a sub-linear curve boosts mid-range so normal
+    ///   conversational voice produces a satisfying excursion
+    private static func gatedLevel(db: Float) -> Float {
+        let raw = max(0, min(1, (db + 50) / 35))
+        let gate: Float = 0.14  // soft threshold ~ -45 dB
+        if raw < gate { return 0 }
+        let scaled = (raw - gate) / (1 - gate)
+        // pow(x, 0.65) — pulls mid-range values up (0.5 → 0.63, 0.3 → 0.45)
+        // so normal voice reads as a strong, visible swing.
+        return pow(scaled, 0.65)
+    }
+
     func start(deviceID: AudioDeviceID? = nil, levelCallback: @escaping (Float) -> Void) throws {
         let tempDir = FileManager.default.temporaryDirectory
         let url = tempDir.appendingPathComponent("whisperino_\(UUID().uuidString).wav")
@@ -150,16 +166,14 @@ class AudioRecorder {
                 }
                 let rms = sqrt(sum / max(Float(frames), 1))
 
-                // Convert to decibels, then normalize to 0..1
-                // More sensitive: -60dB=0, -15dB=1
                 let db = 20 * log10(max(rms, 1e-6))
-                let normalized = max(0, min(1, (db + 60) / 45))
+                let level = Self.gatedLevel(db: db)
 
-                // Smooth: fast attack, slow decay
-                let attack: Float = 0.7
-                let decay: Float = 0.2
-                let factor = normalized > self.smoothedLevel ? attack : decay
-                self.smoothedLevel += factor * (normalized - self.smoothedLevel)
+                // Smooth: moderate attack, slow decay
+                let attack: Float = 0.55
+                let decay: Float = 0.18
+                let factor = level > self.smoothedLevel ? attack : decay
+                self.smoothedLevel += factor * (level - self.smoothedLevel)
 
                 levelCallback(self.smoothedLevel)
             }
@@ -214,9 +228,9 @@ class AudioRecorder {
                 }
                 let rms = sqrt(sum / max(Float(frames), 1))
                 let db = 20 * log10(max(rms, 1e-6))
-                let normalized = max(0, min(1, (db + 60) / 45))
-                let factor = normalized > self.smoothedLevel ? Float(0.7) : Float(0.2)
-                self.smoothedLevel += factor * (normalized - self.smoothedLevel)
+                let level = Self.gatedLevel(db: db)
+                let factor = level > self.smoothedLevel ? Float(0.55) : Float(0.18)
+                self.smoothedLevel += factor * (level - self.smoothedLevel)
                 levelCallback(self.smoothedLevel)
             }
 

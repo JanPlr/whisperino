@@ -65,6 +65,7 @@ struct AppSettings: Codable, Equatable {
     var llmRefinementEnabled: Bool = false
     var apiKey: String = ""
     var hotkey: HotkeyConfig = .default
+    var soundEffectsEnabled: Bool = false
     init() {}
 
     init(from decoder: Decoder) throws {
@@ -72,6 +73,7 @@ struct AppSettings: Codable, Equatable {
         llmRefinementEnabled = try container.decodeIfPresent(Bool.self, forKey: .llmRefinementEnabled) ?? false
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         hotkey = try container.decodeIfPresent(HotkeyConfig.self, forKey: .hotkey) ?? .default
+        soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
     }
 }
 

@@ -63,41 +63,11 @@ struct OverlayView: View {
 
     // MARK: - Recording
 
-    // Cancel animation — two layers: pill fades, badge appears/spins/pops
-    @State private var cancelProgress: Int = 0  // 0=ready, 1=badge visible, 2=spinning down, 3=popped
-    @State private var sparkle = false
-
     private var recordingView: some View {
         let hasAttachments = appState.isInstructionMode && !appState.attachedContexts.isEmpty
         let cancelled = isCancelled
-        let cp = cancelProgress
 
         return ZStack {
-            // === Sparkle particles — burst outward when badge vanishes ===
-            ForEach(0..<6, id: \.self) { i in
-                Circle()
-                    .fill(Color(red: 0.85, green: 0.2, blue: 0.2))
-                    .frame(width: sparkle ? 1.5 : 3, height: sparkle ? 1.5 : 3)
-                    .offset(
-                        x: sparkle ? cos(Double(i) * .pi / 3) * 14 : 0,
-                        y: sparkle ? sin(Double(i) * .pi / 3) * 14 : 0
-                    )
-                    .opacity(sparkle ? 0 : 0.85)
-            }
-
-            // === Cancel badge: red circle with white X ===
-            Circle()
-                .fill(Color(red: 0.85, green: 0.2, blue: 0.2))
-                .frame(width: 28, height: 28)
-                .overlay(
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white)
-                )
-                .rotationEffect(.degrees(cp >= 2 ? 540 : 0))
-                .scaleEffect(cp == 1 ? 1.0 : cp == 2 ? 0.15 : 0.01)
-                .opacity(cp == 1 || cp == 2 ? 1 : 0)
-
             // === The pill ===
             VStack(spacing: 0) {
                 if appState.showingInputPicker && !cancelled {
@@ -118,13 +88,13 @@ struct OverlayView: View {
                     }
 
                     HStack(spacing: 3) {
-                        ForEach(0..<9, id: \.self) { i in
-                            RoundedRectangle(cornerRadius: 2.5)
-                                .fill(.white.opacity(0.7))
-                                .frame(width: 4, height: barHeight(for: i))
+                        ForEach(0..<AppState.waveformBarCount, id: \.self) { i in
+                            Capsule()
+                                .fill(.white.opacity(0.78))
+                                .frame(width: 3.5, height: barHeight(for: i))
                         }
                     }
-                    .frame(height: 20)
+                    .frame(height: 22)
 
                     if appState.isInstructionMode && !cancelled {
                         clipboardButton
@@ -132,8 +102,8 @@ struct OverlayView: View {
 
                     if hasAttachments && !cancelled { Spacer(minLength: 0) }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
                 .contentShape(Rectangle())
                 .onHover { isHoveringWaveform = $0 }
                 .onTapGesture { appState.toggleRecording() }
@@ -161,29 +131,32 @@ struct OverlayView: View {
             }
             .frame(width: (!cancelled && (hasAttachments || appState.showingInputPicker)) ? 300 : nil)
             .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 4)
             .overlay(
                 Group {
                     if cancelled {
                         EmptyView()
                     } else if isHoveringCancel {
-                        GlowBorder(cornerRadius: 14, color: Color(red: 0.9, green: 0.25, blue: 0.25))
+                        GlowBorder(cornerRadius: 18, color: Color(red: 0.9, green: 0.25, blue: 0.25))
                     } else if isHoveringWaveform {
-                        GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
+                        GlowBorder(cornerRadius: 18, color: Color(red: 0.25, green: 0.78, blue: 0.45))
                     } else if appState.showingInputPicker || isHoveringMic {
-                        GlowBorder(cornerRadius: 14, color: Color(red: 0.95, green: 0.55, blue: 0.15))
+                        GlowBorder(cornerRadius: 18, color: Color(red: 0.95, green: 0.55, blue: 0.15))
                     } else if isHoveringPill {
-                        GlowBorder(cornerRadius: 14, color: Color(red: 0.25, green: 0.78, blue: 0.45))
+                        GlowBorder(cornerRadius: 18, color: Color(red: 0.25, green: 0.78, blue: 0.45))
                     } else if appState.isInstructionMode {
-                        AnimatedGradientBorder(cornerRadius: 14)
+                        AnimatedGradientBorder(cornerRadius: 18)
                     } else {
-                        RoundedRectangle(cornerRadius: 14)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
                     }
                 }
             )
-            .scaleEffect(cancelled ? 0.01 : 1.0)
+            .scaleEffect(cancelled ? 0.92 : 1.0)
             .opacity(cancelled ? 0 : 1)
+            .blur(radius: cancelled ? 4 : 0)
+            .animation(.easeOut(duration: 0.22), value: cancelled)
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasAttachments)
             // Cancel X button — top-right
             .overlay(alignment: .topTrailing) {
@@ -236,39 +209,10 @@ struct OverlayView: View {
             }
         }
         .onHover { isHoveringPill = $0 }
-        .animation(.easeOut(duration: 0.06), value: appState.audioLevel)
+        .animation(.easeInOut(duration: 0.18), value: appState.audioSamples)
         .animation(.easeInOut(duration: 0.15), value: isHoveringPill)
         .animation(.easeInOut(duration: 0.15), value: isHoveringMic)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appState.attachedContexts.count)
-        .onReceive(appState.$state) { newState in
-            if case .cancelled = newState {
-                cancelProgress = 0
-                sparkle = false
-                // Step 1: pill shrinks, badge appears
-                withAnimation(.easeOut(duration: 0.18)) {
-                    cancelProgress = 1
-                }
-                // Step 2: spin + shrink small
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                    withAnimation(.easeIn(duration: 0.28)) {
-                        cancelProgress = 2
-                    }
-                }
-                // Step 3: vanish + sparkle
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        cancelProgress = 3
-                    }
-                    sparkle = false
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        sparkle = true
-                    }
-                }
-            } else if case .recording = newState {
-                cancelProgress = 0
-                sparkle = false
-            }
-        }
     }
 
     private func attachmentRow(_ ctx: AttachedContext) -> some View {
@@ -315,11 +259,26 @@ struct OverlayView: View {
         .onTapGesture { appState.addClipboardAttachment() }
     }
 
+    /// Center-emphasizing shape mask: bars at the edges are visually muted so
+    /// the wave reads as a centered crest. Voice samples enter on the right
+    /// (small), grow as they roll into the middle (peak), then fade as they
+    /// continue left and exit.
+    private static let barShape: [CGFloat] = [
+        0.45, 0.65, 0.85, 0.95, 1.0, 0.95, 0.85, 0.65, 0.45
+    ]
+
     private func barHeight(for index: Int) -> CGFloat {
-        let level = CGFloat(appState.audioLevel)
-        let patterns: [CGFloat] = [0.2, 0.45, 0.75, 0.95, 1.0, 0.9, 0.65, 0.4, 0.15]
-        let barLevel = level * patterns[index]
-        return max(3, barLevel * 20)
+        let samples = appState.audioSamples
+        guard samples.indices.contains(index) else { return 4 }
+        // Spatial smoothing — blend each sample with its neighbours [1,2,1]/4
+        // so a single-tick spike in one buffer position gets diluted into a
+        // smooth crest instead of a jagged jump.
+        let curr = CGFloat(samples[index])
+        let prev = index > 0 ? CGFloat(samples[index - 1]) : curr
+        let next = index < samples.count - 1 ? CGFloat(samples[index + 1]) : curr
+        let smoothed = (prev + curr * 2 + next) / 4
+        let shape = Self.barShape.indices.contains(index) ? Self.barShape[index] : 1.0
+        return max(4, 4 + smoothed * shape * 16)
     }
 
     // MARK: - Transcribing
@@ -411,16 +370,17 @@ private extension View {
     func overlayChrome(instruction: Bool = false) -> some View {
         self
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
             .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 4)
             .overlay(
                 Group {
                     if instruction {
-                        AnimatedGradientBorder(cornerRadius: 14)
+                        AnimatedGradientBorder(cornerRadius: 18)
                     } else {
-                        RoundedRectangle(cornerRadius: 14)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
                     }
                 }
             )

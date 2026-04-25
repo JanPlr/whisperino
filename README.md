@@ -2,19 +2,23 @@
 
 Local voice transcription for macOS. Lives in your menu bar, runs fully on-device using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with Metal GPU acceleration.
 
-Press **Option+D**, double-tap **Option**, or click the menu bar icon to record. When you stop, the transcribed text is automatically pasted into your focused text field and copied to the clipboard.
+**Double-tap Fn** to start recording. Speak. **Single-tap Fn** to stop. The transcribed text is automatically pasted into your focused text field and copied to the clipboard.
 
 ## Features
 
-- **Fully local** — all transcription happens on-device. No audio leaves your machine.
+- **Fully local transcription** — all audio is processed on-device. No audio ever leaves your machine.
 - **Multilingual** — automatic language detection. Switch languages mid-sentence and it picks up both.
-- **Push-to-talk** — hold Option+D to record, release to transcribe. Or tap to toggle.
-- **Double-tap Option** — quickly press Option twice to start recording (always active).
-- **Configurable shortcut** — change the keyboard shortcut in Settings.
-- **LLM refinement** (optional) — cleans up filler words, adds punctuation, corrects backtracking, and applies your custom dictionary. Uses Claude Haiku via Langdock. Disabled by default; requires an API key.
-- **Custom dictionary** — teach the LLM the correct spelling of names, products, and jargon that Whisper frequently mishears.
-- **Snippets** — save and quickly insert frequently used text blocks from the menu bar.
-- **Minimal overlay** — a small waveform appears at the bottom of your screen while recording. Hover over it to see a stop button. It never steals focus from your current app.
+- **Three modes**:
+  - **Dictation** — fast, accurate transcription
+  - **Refinement** (optional) — Claude Haiku 4.5 cleans up filler words, adds punctuation, corrects backtracking, and applies your dictionary
+  - **Instruction mode** — speak a request and Claude Sonnet 4.6 generates a response inline. Attach clipboard text or images for context.
+  - **Agent mode** — say a configured agent's name during instruction mode to route the request to a Langdock Agent (with streaming status updates)
+- **Animated overlay** — a small pill at the bottom of your screen shows a live waveform while you speak. Hover for cancel + mic-picker buttons. Never steals focus.
+- **Audio input device picker** — switch microphones inline from the overlay. Hot-swap mid-recording.
+- **Custom dictionary** — teach the LLM the correct spelling of names, products, and jargon Whisper frequently mishears.
+- **Snippets** — save reusable text blocks for quick access.
+- **Transcript history** — the last 50 transcriptions are saved locally and browsable from Settings.
+- **Soft chime sounds** (off by default) — pleasant low-register tones when recording starts and ends.
 
 ## Requirements
 
@@ -48,68 +52,99 @@ The install script does the following automatically:
 
 Once both permissions are granted, you're ready to go.
 
-## Usage
+## Shortcuts
 
-| Action | What it does |
-|--------|-------------|
-| **Option+D** (tap) | Toggle recording on/off |
-| **Option+D** (hold > 0.4s) | Push-to-talk — records while held, transcribes on release |
-| **Double-tap Option** | Start recording (always works, even with a custom shortcut) |
-| **Left-click** menu bar icon | Toggle recording |
-| **Right-click** menu bar icon | Open the options menu |
+| Shortcut | What it does |
+|----------|-------------|
+| **Double-tap Fn** | Start recording (or stop, if already recording) |
+| **Fn** (single tap, while recording) | Stop and transcribe |
+| **Esc** (while recording) | Cancel — recording is discarded |
+| **Return** (while recording) | Stop and transcribe |
+| **Fn + double-tap Shift** | Start **instruction mode** — speak a request, the LLM responds |
+| **Fn + Shift** (single tap, while in instruction mode) | Stop and submit |
+| Click overlay waveform | Toggle recording |
+| Click menu bar icon | Show menu (toggle, copy last, settings, quit) |
 
-### Recording flow
+> The overlay also has a small **×** button (top-right on hover) to cancel and a **mic** button (top-left on hover) to switch input devices.
 
-1. Start recording with Option+D, double-tap Option, or by clicking the menu bar icon. The icon turns **red** and a waveform overlay appears.
-2. Speak. The overlay shows your audio level in real time.
-3. Stop recording — tap the shortcut again, release if holding, click the waveform (hover to see a stop icon), or click the menu bar icon. The icon turns **gray** while transcribing.
-4. The transcribed text is placed on your clipboard and automatically pasted (Cmd+V) into whatever text field has focus.
-5. The overlay briefly shows the result, then fades away.
+## How it works
 
-### Menu bar options (right-click)
+### Dictation flow
 
-- **Toggle Recording** — same as left-click
-- **Save Last as Snippet** — saves your most recent transcription as a reusable snippet
-- **Insert Snippet** — paste a saved snippet into the focused text field
-- **Settings** — open the settings window
+1. Double-tap Fn anywhere — the menu bar icon turns **red** and the waveform pill appears at the bottom of your screen.
+2. Speak. The pill's center wave pulses with your voice.
+3. Stop with single Fn, Return, the pill click, or the menu bar icon. Icon turns **gray** while transcribing.
+4. The transcribed text is placed on your clipboard and pasted (Cmd+V) into the previously focused text field.
+5. The pill briefly confirms "Copied to clipboard", then fades away.
+
+### Instruction mode
+
+Hold **Fn** and double-tap **Shift** to enter instruction mode. The pill border turns into an animated rainbow gradient.
+
+1. Speak a request, e.g. "Reply to this email politely declining the meeting." or "Summarise this for me in one sentence."
+2. (Optional) Click the **paperclip** in the pill to attach clipboard contents — text or image. You can stack up to 5 attachments.
+3. Stop with Fn+Shift, Return, or by clicking the pill.
+4. The LLM generates a response and pastes it into your focused text field.
+
+### Agent mode
+
+If you've added Langdock agents in Settings → Agents, mention an agent's name during instruction mode (e.g. "Ask **researcher** about…") and the request is routed to that agent instead of the default Sonnet model. The pill shows live status updates ("Searching the web…", "Reading documents…") streamed from the agent.
+
+## Menu bar menu
+
+Click the menu bar waveform icon to open:
+
+- **Toggle Recording** — same as the keyboard shortcut
+- *fn fn — double-tap to toggle* (informational label)
+- **Copy Last Transcription** — copy the most recent transcription back to your clipboard
+- **Settings…** (Cmd+,)
 - **Quit Whisperino**
 
 ## Settings
 
-Right-click the menu bar icon and select **Settings**, or use the keyboard shortcut **Cmd+,** while the menu is open.
+Open via the menu bar icon → **Settings…**.
 
 ### General
 
-- **Dictation shortcut** — click the shortcut button and press your desired key combination (must include at least one modifier key like Option, Cmd, Shift, or Ctrl). Default is Option+D. Double-tap Option always works as an additional trigger regardless of this setting.
-- **Enable LLM refinement** — when turned on, transcriptions are post-processed by Claude Haiku (via Langdock) to remove filler words ("um", "uh", "like"), add punctuation and capitalization, handle spoken corrections ("scratch that", "actually"), and apply your dictionary terms.
-- **Langdock API Key** — required for LLM refinement. Paste your API key from [Langdock](https://langdock.com). The key is stored locally in `~/.whisperino/settings.json`.
+- **Launch at login**
+- **Sound effects** — soft chime when recording starts and stops. Off by default.
+- **Dictation shortcut** — `fn fn` (fixed)
+- **Langdock API Key** — required for LLM refinement, instruction mode, and agents. Paste your key from [Langdock](https://langdock.com). Stored locally in `~/.whisperino/settings.json`.
+- **Enable LLM refinement** — when on, transcriptions are post-processed by Claude Haiku via Langdock to remove filler words, add punctuation/capitalization, handle spoken corrections ("scratch that", "actually"), and apply your dictionary.
+- **Instruction mode shortcut** — `fn + ⇧⇧` (fixed)
 
 ### Dictionary
 
-Add terms the LLM should always spell correctly. This is useful for proper nouns, product names, and technical jargon that Whisper frequently mishears.
+Add terms the LLM should always spell correctly. Useful for proper nouns, product names, technical jargon.
 
 Two formats:
-- **Single term** — e.g. `Langdock` — corrects any phonetically similar mishearing to this spelling
-- **Phonetic mapping** — e.g. `langdonk = Langdock` — maps what Whisper hears (left) to the correct spelling (right)
+- **Single term** — `Langdock` corrects any phonetically similar mishearing to this spelling
+- **Phonetic mapping** — `langdonk = Langdock` maps what Whisper hears (left) to the correct spelling (right)
 
 Dictionary corrections only apply when LLM refinement is enabled.
 
 ### Snippets
 
-Create reusable text blocks you can quickly insert from the menu bar. Use the **+** button to add a snippet, give it a name, and write or paste the text. Insert any snippet via right-click > Insert Snippet.
+Reusable text blocks. Use the **+** to add a snippet, name it, and paste in the text. (Snippet insertion is currently from the Settings UI; menu-bar insertion was simplified out.)
 
-You can also save your last transcription as a snippet directly from the menu bar.
+### History
+
+Last 50 transcriptions, with timestamps. Sparkles icon marks instruction-mode entries. Select an entry and click **Copy** to put it back on the clipboard, or **Clear All** to wipe history.
+
+### Agents
+
+Define Langdock agents you want to invoke by voice. Each entry has a **name** (what you say) and an **agent ID** (from Langdock). Mention the name during instruction mode to route there.
 
 ## Data & privacy
 
-- **Transcription is 100% local.** Audio is processed on-device by whisper.cpp. No audio or text is sent anywhere.
-- **LLM refinement is opt-in and off by default.** When enabled, only the transcribed text (not audio) is sent to `api.langdock.com` (EU endpoint) for cleanup. This is the only network call the app makes.
+- **Transcription is 100% local.** Audio is processed on-device by whisper.cpp. No audio leaves your machine.
+- **LLM refinement / instruction mode / agents are opt-in.** When enabled, only the transcribed text (not audio) is sent to `api.langdock.com` (EU endpoint). For agents, the agent's response is streamed back.
 - **No telemetry, no analytics, no tracking.**
-- Settings, dictionary, and snippets are stored as JSON files in `~/.whisperino/`.
+- All settings, dictionary, snippets, agents, and history are stored as JSON files in `~/.whisperino/`.
 
 ## Model
 
-The default model is `medium` (1.5 GB) — multilingual with strong accuracy and language detection. For different speed/quality tradeoffs, edit `MODEL_NAME` in `setup.sh` and re-run setup:
+The default Whisper model is `medium` (1.5 GB) — multilingual with strong accuracy and language detection. To change it, edit `MODEL_NAME` in `setup.sh` and re-run setup:
 
 | Model | Size | Speed | Quality |
 |-------|------|-------|---------|
@@ -128,7 +163,7 @@ git pull
 ./build.sh
 ```
 
-After the build, macOS revokes Accessibility permission because the code signature changes. System Settings opens automatically — find Whisperino, toggle it **OFF**, then **ON** again. Then relaunch:
+After the build, macOS revokes Accessibility permission because the code signature changes. System Settings opens automatically — find Whisperino, toggle it **OFF** then **ON**. Then relaunch:
 
 ```bash
 open /Applications/Whisperino.app
@@ -142,20 +177,20 @@ If the update includes whisper.cpp changes, re-run the full install instead:
 
 ## Troubleshooting
 
-**"Swift 5.9+ is required"** — your Xcode Command Line Tools are outdated. Update them:
+**"Swift 5.9+ is required"** — your Xcode Command Line Tools are outdated:
 
 ```bash
 sudo rm -rf /Library/Developer/CommandLineTools
 xcode-select --install
 ```
 
-**Paste doesn't work** — make sure Accessibility is enabled for Whisperino in System Settings > Privacy & Security > Accessibility. Toggle it off and on again after each rebuild.
+**Paste doesn't work** — make sure Accessibility is enabled for Whisperino in System Settings → Privacy & Security → Accessibility. Toggle it off and on again after each rebuild.
 
-**App doesn't appear in Accessibility list** — launch the app first (`open /Applications/Whisperino.app`), then check the list again.
+**App doesn't appear in Accessibility list** — launch it first (`open /Applications/Whisperino.app`), then check the list again.
+
+**Fn key not detected** — Whisperino watches the globe/Fn key via `NSEvent`. If your Fn key is remapped (System Settings → Keyboard → "Press 🌐 key to…"), double-tap detection may fail. Set it to "Do Nothing" or "Show Emoji & Symbols".
 
 ## Manual setup
-
-If you prefer to run the steps individually:
 
 ```bash
 ./setup.sh    # Build whisper.cpp + download model + install cmake
@@ -170,55 +205,77 @@ open /Applications/Whisperino.app
 ~/.whisperino/
 ├── bin/whisper-cli          # whisper.cpp binary
 ├── models/ggml-medium.bin   # Whisper model
-├── settings.json            # App settings (LLM toggle, API key, shortcut)
+├── settings.json            # App settings (LLM toggle, API key, sound effects)
 ├── dictionary.json          # Custom dictionary terms
-└── snippets.json            # Saved snippets
+├── snippets.json            # Saved snippets
+├── agents.json              # Configured Langdock agents
+└── history.json             # Last 50 transcriptions
 ```
 
 ## Changelog
 
+### 2026-04-25
+
+**New features:**
+- **Sound effects** — optional soft chimes when recording starts (descending A3→F3) and stops (ascending F3→A3). Synthesized in-memory, low-register, ~9% amplitude. Off by default; toggle in Settings → General.
+- **Modernised waveform animation** — rolling 9-bar wave with center emphasis. New samples enter on the right, peak in the middle, fade out on the left. Heavy temporal + spatial smoothing so it reads as a continuous crest, not a jittery oscilloscope.
+- **Noise gate** — bars stay flat at silence. Ambient room noise no longer makes the wave dance.
+- **More visible recording pill** — brighter border, soft floating drop shadow, capsule-shaped corners.
+- **Minimal close animation** — pill fades + slightly shrinks + blurs out. Removed the spinning red badge and sparkle particles.
+
+### 2026-03-15
+
+**New features:**
+- **Agent mode** — invoke configured Langdock agents by name during instruction mode. Agent runs streamed inline with status updates ("Searching the web…").
+- **Instruction-mode model upgrade** — switched to Claude Sonnet 4.6 for higher-quality responses.
+- **Multi-attachment instruction mode** — stack up to 5 clipboard attachments (text or images) per session via the paperclip icon.
+- **Inline input device picker** — mic button on the overlay shows available input devices. Hot-swappable mid-recording.
+- **Transcript history** — last 50 transcriptions browsable in Settings → History.
+
+**Improvements:**
+- **Shortcuts simplified** — switched from Option+D / double-tap Option to **double-tap Fn** for dictation and **Fn + double-tap Shift** for instruction mode.
+- **Single Fn stops recording** — once started, a single Fn tap stops and transcribes.
+- **Enter / Esc keys** — Return stops and submits, Esc cancels.
+- **Cleaner overlay hover** — × in the top right cancels, mic in the top left switches input device.
+- **Clipboard preserved on paste** — your clipboard is restored after the auto-paste so you don't lose what was on it.
+
 ### 2026-03-05
 
 **New features:**
-- **Instruction mode** — hold **Shift+Option+D** or **Shift+double-tap Option** to speak instructions to the LLM. It generates a response and pastes it directly. Attach clipboard content (text or images) with the paperclip icon.
-- **Double-tap Option to stop** — double-tap Option now toggles recording (start and stop), not just start.
+- **Instruction mode** — speak instructions to the LLM and get a generated response pasted directly. Attach clipboard text or images via the paperclip icon.
 
 **Improvements:**
-- **Redesigned settings** — all shortcuts shown clearly in the General tab. API key is now a prerequisite: LLM refinement and instruction mode are disabled until a key is set.
-- **Animated overlay border** — instruction mode shows a colorful rotating gradient border to distinguish it from normal dictation.
-- **Empty transcription handling** — if no speech is detected, the LLM is no longer called in either mode.
+- **Redesigned settings** — shortcuts shown clearly in General tab. API key is a prerequisite for LLM features.
+- **Animated overlay border** — instruction mode shows a colorful rotating gradient border.
+- **Empty transcription handling** — LLM is no longer called when no speech is detected.
 
 **Removed:**
-- **Context awareness** — removed (didn't work reliably for browser-based apps like Gmail).
-- **Custom shortcut recorder** — removed in favor of fixed, documented shortcuts.
+- **Context awareness** — didn't work reliably for browser-based apps.
+- **Custom shortcut recorder** — replaced with fixed, documented shortcuts.
 
 ### 2026-03-04
 
 **Fixes:**
-- **Menu bar behavior** — left and right click now both show the standard macOS menu (with pin/unpin). Recording is started via hotkey only.
-- **Overlay colors** — switched from system `.primary` to explicit white so text and icons are always visible regardless of macOS light/dark mode.
-- **Paste now works reliably from Spotlight / Applications** — fixed an issue where auto-paste silently failed when launching from Spotlight or /Applications. Root cause: stale Accessibility (TCC) entries from ad-hoc code signing. The build script now resets TCC entries automatically on each build.
-- **Overlay visible on all backgrounds** — added a subtle white border so the dark overlay is visible on black wallpapers.
-- **Overlay hover redesign** — hovering the waveform now dims the bars and overlays a stop icon instead of swapping them out. Cleaner look, stop action is clearly visible.
-- **No more duplicate Spotlight results** — the local build directory is now excluded from Spotlight indexing.
-- **Build script improvements** — automatically installs to /Applications, launches the app, resets Accessibility permissions, and opens System Settings. No manual steps needed beyond toggling Accessibility ON.
-- **Fixed deprecated whisper.cpp cmake flag** — updated `WHISPER_METAL` to `GGML_METAL`.
-- **Added Swift 5.9+ version check** — build and install scripts now check your Swift version upfront and tell you how to update if needed.
+- **Menu bar behavior** — left and right click both show the menu.
+- **Overlay colors** — explicit white text/icons regardless of macOS light/dark mode.
+- **Paste reliability from Spotlight / Applications** — fixed stale Accessibility (TCC) entries from ad-hoc code signing. Build script now resets TCC entries automatically.
+- **Overlay visibility on dark wallpapers** — added subtle white border.
+- **Build script improvements** — auto-installs to /Applications, launches the app, resets Accessibility, opens System Settings.
+- **Updated whisper.cpp cmake flag** — `WHISPER_METAL` → `GGML_METAL`.
+- **Swift 5.9+ version check** — build/install scripts check upfront and explain how to update.
 
-### 2025-03-03
+### 2026-03-03
 
 **New features:**
-- **Configurable keyboard shortcut** — change the dictation hotkey in Settings > General. Click the shortcut button, press your desired key combo (requires at least one modifier), and it takes effect immediately. Persists across restarts.
-- **Double-tap Option** — quickly press the Option key twice to start recording. Always active regardless of the configured shortcut.
-- **Hover stop indicator** — hovering over the waveform overlay during recording shows a stop icon. Click to stop and transcribe.
-- **LLM refinement** — optional post-processing via Claude Haiku (Langdock) to clean up filler words, add punctuation, and apply dictionary corrections.
-- **Custom dictionary** — add terms and phonetic mappings so the LLM always spells names, products, and jargon correctly.
-- **Snippets** — save frequently used text blocks and insert them from the menu bar.
+- **Configurable keyboard shortcut** *(later removed in favor of fixed shortcuts)*.
+- **Hover stop indicator** on the overlay during recording.
+- **LLM refinement** — Claude Haiku post-processing.
+- **Custom dictionary** — phonetic mappings.
+- **Snippets** — reusable text blocks.
 
 **Fixes:**
-- **Dictionary delete/edit** — delete button now works on macOS (replaced swipe-to-delete with selection + minus button and keyboard Delete key).
-- **Snippet delete/edit** — fixed selection binding issue in SwiftUI List on macOS.
-- **Paste reliability** — text now reliably pastes into the previously focused app by re-activating it before sending Cmd+V.
-- **Settings text fields** — Cmd+V, Cmd+C, Cmd+X, and Cmd+A now work in Settings text fields (API key, dictionary, snippets).
-- **Dynamic menu label** — the right-click menu shows the current shortcut instead of hardcoded "Option+D".
-- **Backward-compatible settings** — existing `settings.json` files without the `hotkey` field load without errors (defaults to Option+D).
+- **Dictionary delete/edit** — replaced swipe-to-delete with selection + minus button.
+- **Snippet delete/edit** — fixed selection binding in SwiftUI List on macOS.
+- **Paste reliability** — text reliably pastes into the previously focused app by re-activating it before Cmd+V.
+- **Settings text fields** — Cmd+V/C/X/A now work.
+- **Backward-compatible settings** — existing `settings.json` files load without errors.

@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
@@ -26,6 +27,7 @@ struct SettingsView: View {
 private struct GeneralTab: View {
     @ObservedObject private var store = SettingsStore.shared
     @State private var showAPIKey = false
+    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     private var hasAPIKey: Bool {
         !store.settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -33,6 +35,26 @@ private struct GeneralTab: View {
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Launch at login", isOn: Binding(
+                    get: { launchAtLogin },
+                    set: { newValue in
+                        do {
+                            if newValue {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                        } catch {}
+                        launchAtLogin = SMAppService.mainApp.status == .enabled
+                    }
+                ))
+                Toggle("Sound effects", isOn: $store.settings.soundEffectsEnabled)
+                Text("Plays a soft chime when recording starts and stops.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 SectionHeader("Dictation")
                 ShortcutRow(keys: "fn fn", label: "Double-tap Fn to start/stop")
