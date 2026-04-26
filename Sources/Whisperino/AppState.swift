@@ -131,8 +131,8 @@ class AppState: ObservableObject {
         case .idle, .result, .error, .dismissing, .cancelled:
             startRecording(instruction: instruction)
         case .recording:
-            guard let startTime = recordingStartTime,
-                  Date().timeIntervalSince(startTime) >= 0.5 else { return }
+            // No min-duration gate here — push-to-talk users may briefly
+            // tap Fn. stopRecording() discards anything <0.5s itself.
             stopRecording()
         case .paused:
             stopRecording()

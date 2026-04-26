@@ -57,7 +57,9 @@ private struct GeneralTab: View {
 
             Section {
                 SectionHeader("Dictation")
-                ShortcutRow(keys: "fn fn", label: "Double-tap Fn to start/stop")
+                ShortcutRow(keys: "hold fn", label: "Hold Fn to dictate, release to submit")
+                ShortcutRow(keys: "esc", label: "Cancel while recording")
+                ShortcutRow(keys: "↩", label: "Submit while recording")
             }
 
             Section {
@@ -91,8 +93,8 @@ private struct GeneralTab: View {
 
             Section {
                 SectionHeader("Instruction Mode")
-                ShortcutRow(keys: "fn+⇧⇧", label: "Hold Fn + double-tap Shift to start/stop")
-                Text("Speak instructions and the LLM generates a response. Tap the paperclip to attach clipboard content (text or image).")
+                ShortcutRow(keys: "fn+⇧", label: "Hold Fn + Shift to dictate, release to submit")
+                Text("Speak instructions and the LLM generates a response. Tap the paperclip to attach clipboard content (text or image). Press Shift before Fn to ensure instruction mode is selected.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -133,7 +135,7 @@ private struct ShortcutRow: View {
             Text(keys)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.primary)
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 64, alignment: .leading)
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)

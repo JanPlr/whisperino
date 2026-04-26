@@ -74,5 +74,8 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 
 echo "  Look for Whisperino in the Accessibility list and toggle it ON."
 echo ""
-echo "  Then: Option+D to record  |  Right-click menu bar icon for Settings"
+echo "  Then: Hold Fn to record, release to submit"
+echo "        Hold Fn+Shift for instruction mode (LLM)"
+echo "        Esc to cancel while recording"
+echo "        Click the menu bar icon for Settings"
 echo ""

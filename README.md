@@ -2,7 +2,7 @@
 
 Local voice transcription for macOS. Lives in your menu bar, runs fully on-device using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with Metal GPU acceleration.
 
-**Double-tap Fn** to start recording. Speak. **Single-tap Fn** to stop. The transcribed text is automatically pasted into your focused text field and copied to the clipboard.
+**Hold Fn** to record. Speak. **Release Fn** to auto-submit. The transcribed text is pasted into your focused text field and copied to the clipboard. That's it — no toggling, no double-tapping.
 
 ## Features
 
@@ -56,35 +56,39 @@ Once both permissions are granted, you're ready to go.
 
 | Shortcut | What it does |
 |----------|-------------|
-| **Double-tap Fn** | Start recording (or stop, if already recording) |
-| **Fn** (single tap, while recording) | Stop and transcribe |
+| **Hold Fn** | Record while held, **auto-submit on release** |
+| **Hold Fn + Shift** | Record in **instruction mode** (LLM responds), submit on release |
 | **Esc** (while recording) | Cancel — recording is discarded |
-| **Return** (while recording) | Stop and transcribe |
-| **Fn + double-tap Shift** | Start **instruction mode** — speak a request, the LLM responds |
-| **Fn + Shift** (single tap, while in instruction mode) | Stop and submit |
-| Click overlay waveform | Toggle recording |
+| **Return** (while recording) | Submit immediately (without releasing Fn) |
+| Click overlay waveform | Submit recording |
 | Click menu bar icon | Show menu (toggle, copy last, settings, quit) |
 
 > The overlay also has a small **×** button (top-right on hover) to cancel and a **mic** button (top-left on hover) to switch input devices.
+>
+> For instruction mode: press **Shift first**, then add **Fn** — that way the mode is set at the moment recording starts.
 
 ## How it works
 
 ### Dictation flow
 
-1. Double-tap Fn anywhere — the menu bar icon turns **red** and the waveform pill appears at the bottom of your screen.
-2. Speak. The pill's center wave pulses with your voice.
-3. Stop with single Fn, Return, the pill click, or the menu bar icon. Icon turns **gray** while transcribing.
+1. **Press and hold Fn** anywhere — the menu bar icon turns **red** and the waveform pill appears at the bottom of your screen, tracking your voice in real-time.
+2. Speak.
+3. **Release Fn** — recording stops and submits automatically. The icon turns **gray** while transcribing.
 4. The transcribed text is placed on your clipboard and pasted (Cmd+V) into the previously focused text field.
 5. The pill briefly confirms "Copied to clipboard", then fades away.
 
+That's the whole flow. No toggles, no double-taps, no remembering to stop.
+
 ### Instruction mode
 
-Hold **Fn** and double-tap **Shift** to enter instruction mode. The pill border turns into an animated rainbow gradient.
+**Press Shift, then add Fn** while still holding Shift. The pill border turns into an animated rainbow gradient.
 
 1. Speak a request, e.g. "Reply to this email politely declining the meeting." or "Summarise this for me in one sentence."
 2. (Optional) Click the **paperclip** in the pill to attach clipboard contents — text or image. You can stack up to 5 attachments.
-3. Stop with Fn+Shift, Return, or by clicking the pill.
+3. **Release Fn** — the request is sent.
 4. The LLM generates a response and pastes it into your focused text field.
+
+> Tip: brief Fn presses (<0.5s) are discarded automatically — so a quick accidental tap won't trigger anything.
 
 ### Agent mode
 
@@ -108,10 +112,10 @@ Open via the menu bar icon → **Settings…**.
 
 - **Launch at login**
 - **Sound effects** — soft chime when recording starts and stops. Off by default.
-- **Dictation shortcut** — `fn fn` (fixed)
+- **Dictation shortcut** — hold `fn` (fixed)
+- **Instruction mode shortcut** — hold `fn + shift` (fixed)
 - **Langdock API Key** — required for LLM refinement, instruction mode, and agents. Paste your key from [Langdock](https://langdock.com). Stored locally in `~/.whisperino/settings.json`.
 - **Enable LLM refinement** — when on, transcriptions are post-processed by Claude Haiku via Langdock to remove filler words, add punctuation/capitalization, handle spoken corrections ("scratch that", "actually"), and apply your dictionary.
-- **Instruction mode shortcut** — `fn + ⇧⇧` (fixed)
 
 ### Dictionary
 
@@ -213,6 +217,13 @@ open /Applications/Whisperino.app
 ```
 
 ## Changelog
+
+### 2026-04-26
+
+**New:**
+- **Push-to-talk hotkey** — *just hold Fn*. The app records while you hold, and submits the moment you release. No double-tap, no remembering to stop. `Fn + Shift` triggers instruction mode. This replaces the old double-tap-to-toggle flow.
+- **Real-time waveform** — bars now track your voice on every audio buffer (~12ms latency from voice to visible response). The wave actually rolls right-to-left across the pill with a gentle per-tick fade, instead of dancing in place or holding stale snapshots after you stop speaking.
+- **Smarter onset detection** — when rising from silence, the meter snaps directly to voice level (no exponential climb). The first word out of silence is captured at full intensity from the very first buffer.
 
 ### 2026-04-25
 

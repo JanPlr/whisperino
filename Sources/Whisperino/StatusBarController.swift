@@ -63,7 +63,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let shortcutItem = NSMenuItem(title: "fn fn — double-tap to toggle", action: nil, keyEquivalent: "")
+        let shortcutItem = NSMenuItem(title: "Hold fn to dictate · release to submit", action: nil, keyEquivalent: "")
         shortcutItem.isEnabled = false
         menu.addItem(shortcutItem)
 

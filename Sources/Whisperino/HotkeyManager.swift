@@ -1,6 +1,9 @@
 import AppKit
 import Foundation
 
+/// Push-to-talk hotkey: press and hold Fn to record, release to submit.
+/// Adding Shift while pressing Fn switches to instruction (LLM) mode.
+/// While recording, Return also submits and Esc cancels.
 class HotkeyManager {
     static let shared = HotkeyManager()
 
@@ -9,18 +12,12 @@ class HotkeyManager {
     private var onCancel: (() -> Void)?
     private var isRecordingCheck: (() -> Bool)?
 
-    // Double-tap Fn detection
+    // Modifier flags monitor — tracks Fn (and Shift) state changes
     private var flagsMonitor: Any?
     private var localFlagsMonitor: Any?
-    private var lastFnReleaseTime: Date?
-    private let doubleTapThreshold: TimeInterval = 0.4
     private var fnIsDown = false
 
-    // Fn + double-tap Shift detection (instruction/AI mode)
-    private var shiftIsDown = false
-    private var lastShiftReleaseTime: Date?
-
-    // Global key monitors for Enter/Esc during recording
+    // Global key monitors for Enter (submit) and Esc (cancel) during recording
     private var keyDownMonitor: Any?
     private var localKeyDownMonitor: Any?
 
@@ -38,7 +35,7 @@ class HotkeyManager {
         installKeyMonitor()
     }
 
-    // MARK: - Enter/Esc Key Monitor
+    // MARK: - Enter / Esc Key Monitor
 
     private func installKeyMonitor() {
         guard keyDownMonitor == nil else { return }
@@ -51,11 +48,9 @@ class HotkeyManager {
         }
     }
 
-    /// Returns true if the event was consumed.
     @discardableResult
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         guard isRecordingCheck?() == true else { return false }
-
         switch event.keyCode {
         case 36, 76: // Return, Enter (numpad)
             DispatchQueue.main.async { [weak self] in self?.onToggle?() }
@@ -68,7 +63,7 @@ class HotkeyManager {
         }
     }
 
-    // MARK: - Modifier Flags Monitor
+    // MARK: - Modifier Flags Monitor (Fn hold-to-talk)
 
     private func installFlagsMonitor() {
         guard flagsMonitor == nil else { return }
@@ -87,57 +82,28 @@ class HotkeyManager {
         let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
         let hasBlockedModifiers = !event.modifierFlags.intersection(blockedModifiers).isEmpty
 
-        // --- Fn + double-tap Shift (instruction/AI mode) ---
-        if fnDown && !hasBlockedModifiers {
-            if shiftDown && !shiftIsDown {
-                shiftIsDown = true
-            } else if !shiftDown && shiftIsDown {
-                shiftIsDown = false
-                let now = Date()
-                if let lastRelease = lastShiftReleaseTime,
-                   now.timeIntervalSince(lastRelease) < doubleTapThreshold {
-                    lastShiftReleaseTime = nil
-                    lastFnReleaseTime = nil
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onInstructionToggle?()
-                    }
-                } else {
-                    lastShiftReleaseTime = now
-                }
-            }
-        } else {
-            if shiftIsDown && !shiftDown { shiftIsDown = false }
-            lastShiftReleaseTime = nil
-        }
-
-        // --- Double-tap Fn to start, single tap Fn to stop ---
-        if fnDown && !fnIsDown && !hasBlockedModifiers && !shiftDown {
+        // Fn pressed (transition from up to down)
+        if fnDown && !fnIsDown {
             fnIsDown = true
-        } else if !fnDown && fnIsDown {
-            fnIsDown = false
-            shiftIsDown = false
-            lastShiftReleaseTime = nil
-
-            if hasBlockedModifiers || shiftDown { return }
-
-            if isRecordingCheck?() == true {
-                // Single tap while recording → stop
-                lastFnReleaseTime = nil
+            // Don't start if other modifiers are held or already recording
+            guard !hasBlockedModifiers, isRecordingCheck?() == false else { return }
+            // Mode is decided at the moment of press: Shift held → instruction
+            if shiftDown {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onInstructionToggle?()
+                }
+            } else {
                 DispatchQueue.main.async { [weak self] in
                     self?.onToggle?()
                 }
-            } else {
-                // Not recording → require double-tap to start
-                let now = Date()
-                if let lastRelease = lastFnReleaseTime,
-                   now.timeIntervalSince(lastRelease) < doubleTapThreshold {
-                    lastFnReleaseTime = nil
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onToggle?()
-                    }
-                } else {
-                    lastFnReleaseTime = now
-                }
+            }
+        }
+        // Fn released (transition from down to up) → submit if recording
+        else if !fnDown && fnIsDown {
+            fnIsDown = false
+            guard isRecordingCheck?() == true else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.onToggle?()
             }
         }
     }
