@@ -56,20 +56,19 @@ Once both permissions are granted, you're ready to go.
 
 | Shortcut | What it does |
 |----------|-------------|
-| **Hold Fn** | Record while held, **auto-submit on release** |
-| **Hold Fn + Shift** | Record in **instruction mode** (LLM responds), submit on release |
+| **Hold Fn** | Push-to-talk — record while held, **auto-submit on release** |
+| **Double-tap Fn** | Latched recording — keeps recording after you release. **Single tap Fn** stops and submits. |
+| **Hold Fn + Shift** | Record in **instruction mode** (LLM responds), submit on release. Press order doesn't matter. |
 | **Esc** (while recording) | Cancel — recording is discarded |
-| **Return** (while recording) | Submit immediately (without releasing Fn) |
+| **Return** (while recording) | Submit immediately |
 | Click overlay waveform | Submit recording |
 | Click menu bar icon | Show menu (toggle, copy last, settings, quit) |
 
 > The overlay also has a small **×** button (top-right on hover) to cancel and a **mic** button (top-left on hover) to switch input devices.
->
-> For instruction mode: press **Shift first**, then add **Fn** — that way the mode is set at the moment recording starts.
 
 ## How it works
 
-### Dictation flow
+### Dictation flow (push-to-talk)
 
 1. **Press and hold Fn** anywhere — the menu bar icon turns **red** and the waveform pill appears at the bottom of your screen, tracking your voice in real-time.
 2. Speak.
@@ -77,18 +76,26 @@ Once both permissions are granted, you're ready to go.
 4. The transcribed text is placed on your clipboard and pasted (Cmd+V) into the previously focused text field.
 5. The pill briefly confirms "Copied to clipboard", then fades away.
 
-That's the whole flow. No toggles, no double-taps, no remembering to stop.
+### Dictation flow (latched, hands-free)
+
+If you'd rather not hold the key for long dictation:
+
+1. **Double-tap Fn** — recording starts and stays running even after you release.
+2. Speak as long as you want.
+3. **Single-tap Fn** — recording stops and submits.
+
+This is the right gesture for longer recordings where you want your hands free.
 
 ### Instruction mode
 
-**Press Shift, then add Fn** while still holding Shift. The pill border turns into an animated rainbow gradient.
+**Hold Fn together with Shift** — order doesn't matter; a small (~18ms) mode-decision window catches near-simultaneous presses. The pill border turns into an animated rainbow gradient.
 
 1. Speak a request, e.g. "Reply to this email politely declining the meeting." or "Summarise this for me in one sentence."
 2. (Optional) Click the **paperclip** in the pill to attach clipboard contents — text or image. You can stack up to 5 attachments.
 3. **Release Fn** — the request is sent.
 4. The LLM generates a response and pastes it into your focused text field.
 
-> Tip: brief Fn presses (<0.5s) are discarded automatically — so a quick accidental tap won't trigger anything.
+> Tip: brief accidental Fn taps (<0.5s without follow-up) are discarded automatically — so a quick tap won't dump anything into your text field.
 
 ### Agent mode
 
@@ -221,7 +228,9 @@ open /Applications/Whisperino.app
 ### 2026-04-26
 
 **New:**
-- **Push-to-talk hotkey** — *just hold Fn*. The app records while you hold, and submits the moment you release. No double-tap, no remembering to stop. `Fn + Shift` triggers instruction mode. This replaces the old double-tap-to-toggle flow.
+- **Push-to-talk hotkey** — *just hold Fn*. The app records while you hold, and submits the moment you release. The simplest possible flow.
+- **Double-tap Fn (latched)** — alternative for hands-free / long dictation: double-tap to start a latched recording that survives release. A single Fn tap then stops and submits.
+- **Reliable instruction mode** — `Fn + Shift` works regardless of which order you press them. A tiny (~18ms) mode-decision window catches near-simultaneous presses.
 - **Real-time waveform** — bars now track your voice on every audio buffer (~12ms latency from voice to visible response). The wave actually rolls right-to-left across the pill with a gentle per-tick fade, instead of dancing in place or holding stale snapshots after you stop speaking.
 - **Smarter onset detection** — when rising from silence, the meter snaps directly to voice level (no exponential climb). The first word out of silence is captured at full intensity from the very first buffer.
 

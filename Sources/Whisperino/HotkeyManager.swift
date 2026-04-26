@@ -1,9 +1,15 @@
 import AppKit
 import Foundation
 
-/// Push-to-talk hotkey: press and hold Fn to record, release to submit.
-/// Adding Shift while pressing Fn switches to instruction (LLM) mode.
-/// While recording, Return also submits and Esc cancels.
+/// Hotkey behaviour:
+///
+/// 1. **Hold Fn** (push-to-talk) — press to record, release to submit.
+/// 2. **Double-tap Fn** (toggle) — quickly tap twice to enter a latched
+///    recording, then a single tap stops and submits. Useful for hands-free
+///    long dictation.
+/// 3. **Fn + Shift** — instruction mode (LLM responds). Works whether you
+///    press them in either order, thanks to a tiny mode-decision delay.
+/// 4. **Esc / Return** — cancel / submit while recording.
 class HotkeyManager {
     static let shared = HotkeyManager()
 
@@ -12,12 +18,32 @@ class HotkeyManager {
     private var onCancel: (() -> Void)?
     private var isRecordingCheck: (() -> Bool)?
 
-    // Modifier flags monitor — tracks Fn (and Shift) state changes
+    // Modifier flag monitors
     private var flagsMonitor: Any?
     private var localFlagsMonitor: Any?
     private var fnIsDown = false
+    private var fnPressTime: Date?
 
-    // Global key monitors for Enter (submit) and Esc (cancel) during recording
+    // Double-tap toggle support
+    private var isLatched = false
+    private var stopPending = false
+    private var latchTimeoutTask: DispatchWorkItem?
+
+    // Mode-decision delay — gives Shift a chance to register if pressed
+    // near-simultaneously with Fn. Below human perception threshold.
+    private var modeDecisionTask: DispatchWorkItem?
+    private let modeDecisionDelay: TimeInterval = 0.018
+
+    // A "tap" is anything shorter than this — hold-to-talk requires the
+    // press to last at least this long; otherwise the brief release
+    // becomes the first half of a possible double-tap.
+    private let shortTapThreshold: TimeInterval = 0.22
+
+    // How long to wait for a second tap before treating the recording
+    // as an accidental tap and discarding it.
+    private let doubleTapWindow: TimeInterval = 0.40
+
+    // Enter / Esc monitors (work during recording)
     private var keyDownMonitor: Any?
     private var localKeyDownMonitor: Any?
 
@@ -63,7 +89,7 @@ class HotkeyManager {
         }
     }
 
-    // MARK: - Modifier Flags Monitor (Fn hold-to-talk)
+    // MARK: - Modifier Flags Monitor
 
     private func installFlagsMonitor() {
         guard flagsMonitor == nil else { return }
@@ -78,33 +104,110 @@ class HotkeyManager {
 
     private func handleFlagsChanged(_ event: NSEvent) {
         let fnDown = event.modifierFlags.contains(.function)
-        let shiftDown = event.modifierFlags.contains(.shift)
         let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
         let hasBlockedModifiers = !event.modifierFlags.intersection(blockedModifiers).isEmpty
 
-        // Fn pressed (transition from up to down)
         if fnDown && !fnIsDown {
             fnIsDown = true
-            // Don't start if other modifiers are held or already recording
-            guard !hasBlockedModifiers, isRecordingCheck?() == false else { return }
-            // Mode is decided at the moment of press: Shift held → instruction
-            if shiftDown {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onInstructionToggle?()
-                }
+            handleFnPress(blocked: hasBlockedModifiers)
+        } else if !fnDown && fnIsDown {
+            fnIsDown = false
+            handleFnRelease()
+        }
+    }
+
+    private func handleFnPress(blocked: Bool) {
+        fnPressTime = Date()
+        guard !blocked else { return }
+
+        let isCurrentlyRecording = isRecordingCheck?() ?? false
+
+        // — Press during latched recording: prepare to stop on release —
+        if isCurrentlyRecording && isLatched {
+            stopPending = true
+            return
+        }
+
+        // — Press during latch-pending recording: this is the second tap
+        //   of a double-tap → upgrade to latched mode (don't auto-submit
+        //   on release any more) —
+        if isCurrentlyRecording && !isLatched {
+            latchTimeoutTask?.cancel()
+            latchTimeoutTask = nil
+            isLatched = true
+            return
+        }
+
+        // — Fresh press: start a new recording. Tiny delay so a Shift
+        //   pressed near-simultaneously is captured, picking instruction
+        //   mode. —
+        modeDecisionTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            // Re-check live modifier state at the moment we actually fire
+            let flags = NSEvent.modifierFlags
+            let stillFn = flags.contains(.function)
+            let nowShift = flags.contains(.shift)
+            let blockedNow = !flags.intersection([.command, .control, .option]).isEmpty
+            guard stillFn, !blockedNow else { return }
+            self.modeDecisionTask = nil
+            self.isLatched = false
+            self.stopPending = false
+            if nowShift {
+                self.onInstructionToggle?()
             } else {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onToggle?()
-                }
+                self.onToggle?()
             }
         }
-        // Fn released (transition from down to up) → submit if recording
-        else if !fnDown && fnIsDown {
-            fnIsDown = false
-            guard isRecordingCheck?() == true else { return }
-            DispatchQueue.main.async { [weak self] in
-                self?.onToggle?()
+        modeDecisionTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + modeDecisionDelay, execute: task)
+    }
+
+    private func handleFnRelease() {
+        // — If user released before the mode-decision fired, recording
+        //   never started; just discard the pending task —
+        if let task = modeDecisionTask {
+            task.cancel()
+            modeDecisionTask = nil
+            return
+        }
+
+        guard let pressTime = fnPressTime else { return }
+        let duration = Date().timeIntervalSince(pressTime)
+        let isCurrentlyRecording = isRecordingCheck?() ?? false
+        guard isCurrentlyRecording else { return }
+
+        if isLatched {
+            if stopPending {
+                // Single-tap during latched recording → submit on release
+                isLatched = false
+                stopPending = false
+                DispatchQueue.main.async { [weak self] in self?.onToggle?() }
             }
+            // Plain release while latched — no-op (latched recording stays)
+            return
+        }
+
+        if duration < shortTapThreshold {
+            // Brief tap — might be the first half of a double-tap. Keep the
+            // recording going for `doubleTapWindow`; if a second press
+            // arrives, we upgrade to latched. Otherwise, discard.
+            latchTimeoutTask?.cancel()
+            let task = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                self.latchTimeoutTask = nil
+                if self.isRecordingCheck?() ?? false && !self.isLatched {
+                    // No follow-up tap arrived → submit (stopRecording
+                    // discards anything <0.5s itself, so accidental brief
+                    // taps don't generate noise).
+                    DispatchQueue.main.async { self.onToggle?() }
+                }
+            }
+            latchTimeoutTask = task
+            DispatchQueue.main.asyncAfter(deadline: .now() + doubleTapWindow, execute: task)
+        } else {
+            // Held long enough — push-to-talk submit
+            DispatchQueue.main.async { [weak self] in self?.onToggle?() }
         }
     }
 }
