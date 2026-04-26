@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         HotkeyManager.shared.register(
             onToggle: { [weak self] in self?.appState.hotkeyToggle() },
             onInstructionToggle: { [weak self] in self?.appState.instructionHotkeyToggle() },
+            onUpgradeToInstruction: { [weak self] in self?.appState.upgradeToInstructionMode() },
             onCancel: { [weak self] in self?.appState.cancelRecording() },
             isRecording: { [weak self] in
                 guard let state = self?.appState.state else { return false }

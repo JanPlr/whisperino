@@ -132,6 +132,24 @@ class AppState: ObservableObject {
         toggleRecording(instruction: true)
     }
 
+    /// Upgrade an in-progress dictation session to instruction (AI) mode.
+    /// Called when the user adds Shift while already holding Fn and
+    /// recording. Validates the LLM is configured, flips the mode flag (so
+    /// the gradient border animates in via SwiftUI), and starts the
+    /// clipboard auto-capture so subsequent Cmd+C presses attach context.
+    func upgradeToInstructionMode() {
+        guard case .recording = state else { return }
+        guard !isInstructionMode else { return }
+
+        let settings = store.settings
+        // Require API key + LLM enabled, just like a fresh instruction-mode start
+        guard !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              settings.llmRefinementEnabled else { return }
+
+        isInstructionMode = true
+        startClipboardWatching()
+    }
+
     private func toggleRecording(instruction: Bool) {
         switch state {
         case .idle, .result, .error, .dismissing, .cancelled:
@@ -242,27 +260,6 @@ class AppState: ObservableObject {
     /// Clear all attachments (used internally on reset and by the overlay toggle).
     func clearAllAttachments() {
         attachedContexts.removeAll()
-    }
-
-    /// Capture the current main display as an image and attach it. Lets the
-    /// LLM "see your screen" alongside whatever you're saying. Requires
-    /// Screen Recording permission — macOS prompts on first invocation.
-    func addScreenshotAttachment() {
-        guard attachedContexts.count < Self.maxAttachments else { return }
-        let displayID = CGMainDisplayID()
-        guard let cgImage = CGDisplayCreateImage(displayID) else {
-            // Permission not granted yet — system prompt was just shown.
-            // Open Privacy & Security so the user can flip the toggle.
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
-            }
-            return
-        }
-        let size = NSSize(width: cgImage.width, height: cgImage.height)
-        let nsImage = NSImage(cgImage: cgImage, size: size)
-        let preview = "Screen (\(cgImage.width)×\(cgImage.height))"
-        let ctx = AttachedContext(content: .image(nsImage), preview: preview)
-        attachedContexts.append(ctx)
     }
 
     // MARK: - Pasteboard auto-capture (instruction mode only)

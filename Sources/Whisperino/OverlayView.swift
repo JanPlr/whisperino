@@ -82,10 +82,7 @@ struct OverlayView: View {
                 }
 
                 HStack(spacing: 10) {
-                    if hasAttachments && !cancelled {
-                        Spacer(minLength: 0)
-                        Color.clear.frame(width: 20, height: 1)
-                    }
+                    if hasAttachments && !cancelled { Spacer(minLength: 0) }
 
                     HStack(spacing: 3) {
                         ForEach(0..<AppState.waveformBarCount, id: \.self) { i in
@@ -96,10 +93,7 @@ struct OverlayView: View {
                     }
                     .frame(height: 22)
 
-                    if appState.isInstructionMode && !cancelled {
-                        clipboardButton
-                        screenshotButton
-                    }
+                    // No buttons — Cmd+C anywhere auto-attaches while in AI mode
 
                     if hasAttachments && !cancelled { Spacer(minLength: 0) }
                 }
@@ -122,7 +116,7 @@ struct OverlayView: View {
                         }
 
                         if appState.attachedContexts.count < AppState.maxAttachments {
-                            addMoreButton
+                            addMoreHint
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
@@ -146,11 +140,17 @@ struct OverlayView: View {
                         GlowBorder(cornerRadius: 18, color: Color(red: 0.95, green: 0.55, blue: 0.15))
                     } else if isHoveringPill {
                         GlowBorder(cornerRadius: 18, color: Color(red: 0.25, green: 0.78, blue: 0.45))
-                    } else if appState.isInstructionMode {
-                        AnimatedGradientBorder(cornerRadius: 18)
                     } else {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
+                        // Crossfade between the calm dictation border and the
+                        // animated AI-mode gradient when isInstructionMode flips.
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
+                                .opacity(appState.isInstructionMode ? 0 : 1)
+                            AnimatedGradientBorder(cornerRadius: 18)
+                                .opacity(appState.isInstructionMode ? 1 : 0)
+                        }
+                        .animation(.easeInOut(duration: 0.35), value: appState.isInstructionMode)
                     }
                 }
             )
@@ -220,58 +220,17 @@ struct OverlayView: View {
         AttachmentRowView(ctx: ctx, onRemove: { appState.removeAttachment(id: ctx.id) })
     }
 
-    private var clipboardButton: some View {
-        let hasAttachments = !appState.attachedContexts.isEmpty
-        return Image(systemName: "paperclip")
-            .font(.system(size: 11, weight: hasAttachments ? .semibold : .regular))
-            .foregroundStyle(.white.opacity(hasAttachments ? 0.75 : 0.35))
-            .frame(width: 20, height: 20)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if hasAttachments {
-                    appState.clearAllAttachments()
-                } else {
-                    appState.addClipboardAttachment()
-                }
-            }
-            .help("Attach clipboard contents (auto-captured while you Cmd+C)")
-    }
-
-    @State private var isHoveringScreenshot = false
-
-    private var screenshotButton: some View {
-        Image(systemName: "camera.viewfinder")
-            .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(.white.opacity(isHoveringScreenshot ? 0.75 : 0.35))
-            .frame(width: 20, height: 20)
-            .contentShape(Rectangle())
-            .onHover { isHoveringScreenshot = $0 }
-            .onTapGesture { appState.addScreenshotAttachment() }
-            .help("Attach a screenshot of your screen")
-    }
-
-    @State private var isHoveringAddMore = false
-
-    private var addMoreButton: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                Image(systemName: "plus")
-                    .font(.system(size: 8, weight: .medium))
-                Text("Add more clipboard content")
-                    .font(.system(size: 9, weight: .medium))
-            }
-            .foregroundStyle(.white.opacity(isHoveringAddMore ? 0.6 : 0.3))
-
-            Text("Copy more context or images to your clipboard and add them here")
-                .font(.system(size: 8))
-                .foregroundStyle(.white.opacity(isHoveringAddMore ? 0.35 : 0.18))
+    private var addMoreHint: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "command")
+                .font(.system(size: 8, weight: .medium))
+            Text("Cmd+C anything to add as context")
+                .font(.system(size: 9, weight: .medium))
         }
+        .foregroundStyle(.white.opacity(0.3))
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onHover { isHoveringAddMore = $0 }
-        .onTapGesture { appState.addClipboardAttachment() }
     }
 
     /// Gentle shape mask — barely attenuates the edges so the wave is
@@ -314,7 +273,7 @@ struct OverlayView: View {
     private var refiningView: some View {
         HStack(spacing: 8) {
             if appState.isAgentMode {
-                Image(systemName: "sparkles")
+                Image(systemName: "pencil")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.6))
                 Text("\(appState.activeAgentName ?? "Agent"): \(appState.agentStatus ?? "Working\u{2026}")")
@@ -325,7 +284,7 @@ struct OverlayView: View {
                     .contentTransition(.numericText())
                     .animation(.easeInOut(duration: 0.25), value: appState.agentStatus)
             } else if appState.isInstructionMode {
-                Image(systemName: "sparkles")
+                Image(systemName: "pencil")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.6))
                 Text("Generating\u{2026}")

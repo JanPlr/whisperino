@@ -56,44 +56,90 @@ class StatusBarController: NSObject, NSMenuDelegate {
         statusItem.menu = menu
     }
 
+    // Menu items we mutate dynamically based on app state.
+    // For the two action items we use NSMenuItem.view = custom NSView so
+    // we can render the gray shortcut text actually flush-right against
+    // the menu edge (which keyEquivalent + attributedTitle can't do).
+    private var dictationItem: NSMenuItem?
+    private var aiModeItem: NSMenuItem?
+    private var dictationView: HotkeyMenuItemView?
+    private var aiModeView: HotkeyMenuItemView?
+    private var setupItem: NSMenuItem?
+
     private func buildMenu() {
-        let recordItem = NSMenuItem(title: "Toggle Recording", action: #selector(toggleRecording), keyEquivalent: "")
-        recordItem.target = self
-        menu.addItem(recordItem)
+        // Dictation action with a custom view that draws icon · title · gray shortcut
+        let dictView = HotkeyMenuItemView(
+            title: "Start Dictation",
+            shortcut: "hold fn",
+            image: NSImage(systemSymbolName: "waveform", accessibilityDescription: "Dictate")
+        )
+        dictView.onClick = { [weak self] in self?.toggleDictation() }
+        let dict = NSMenuItem()
+        dict.view = dictView
+        menu.addItem(dict)
+        dictationItem = dict
+        dictationView = dictView
 
-        menu.addItem(.separator())
+        // AI mode action — same custom view pattern
+        let aiView = HotkeyMenuItemView(
+            title: "Start AI Mode",
+            shortcut: "fn + ⇧",
+            image: NSImage(systemSymbolName: "pencil", accessibilityDescription: "AI mode")
+        )
+        aiView.onClick = { [weak self] in self?.toggleAIMode() }
+        let ai = NSMenuItem()
+        ai.view = aiView
+        menu.addItem(ai)
+        aiModeItem = ai
+        aiModeView = aiView
 
-        let shortcutItem = NSMenuItem(title: "Hold fn (or double-tap fn to latch)", action: nil, keyEquivalent: "")
-        shortcutItem.isEnabled = false
-        menu.addItem(shortcutItem)
-
-        if !appState.isSetUp {
-            menu.addItem(.separator())
-            let setupItem = NSMenuItem(title: "Run setup.sh to install Whisper", action: nil, keyEquivalent: "")
-            setupItem.isEnabled = false
-            menu.addItem(setupItem)
-        }
+        // Setup-warning row — only shown if Whisper isn't installed
+        let setup = NSMenuItem(title: "⚠︎  Whisper not installed — run setup.sh", action: nil, keyEquivalent: "")
+        setup.isEnabled = false
+        setup.isHidden = true
+        menu.addItem(setup)
+        setupItem = setup
 
         menu.addItem(.separator())
 
         let copyLastItem = NSMenuItem(title: "Copy Last Transcription", action: #selector(copyLastTranscription), keyEquivalent: "")
         copyLastItem.target = self
+        copyLastItem.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Copy last")
         menu.addItem(copyLastItem)
 
         menu.addItem(.separator())
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
+        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
         menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit Whisperino", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
+        quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: "Quit")
         menu.addItem(quitItem)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        // Reflect current state in the two custom-view action items
+        switch appState.state {
+        case .recording, .paused:
+            dictationView?.update(title: "Stop & Submit", shortcut: "release fn or ↩", enabled: true)
+            if appState.isInstructionMode {
+                aiModeView?.update(title: "AI Mode is active", shortcut: "", enabled: false)
+            } else {
+                aiModeView?.update(title: "Switch to AI Mode", shortcut: "add ⇧", enabled: true)
+            }
+        case .transcribing, .refining:
+            dictationView?.update(title: "Working…", shortcut: "", enabled: false)
+            aiModeView?.update(title: "Working…", shortcut: "", enabled: false)
+        default:
+            dictationView?.update(title: "Start Dictation", shortcut: "hold fn", enabled: true)
+            aiModeView?.update(title: "Start AI Mode", shortcut: "fn + ⇧", enabled: true)
+        }
+
+        // Show setup warning only when Whisper isn't installed
+        setupItem?.isHidden = appState.isSetUp
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -101,6 +147,30 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func toggleRecording() {
         appState.toggleRecording()
+    }
+
+    /// Dictation button: start dictation when idle, submit when recording.
+    @objc private func toggleDictation() {
+        switch appState.state {
+        case .recording, .paused:
+            appState.toggleRecording()  // submits in current mode
+        default:
+            appState.hotkeyToggle()  // starts in dictation mode
+        }
+    }
+
+    /// AI mode button: start AI mode when idle, upgrade to AI mode when
+    /// already recording in dictation, no-op when AI mode is already active
+    /// (the dictation button stops it).
+    @objc private func toggleAIMode() {
+        switch appState.state {
+        case .recording, .paused:
+            if !appState.isInstructionMode {
+                appState.upgradeToInstructionMode()
+            }
+        default:
+            appState.instructionHotkeyToggle()
+        }
     }
 
     @objc private func quit() {
@@ -172,5 +242,132 @@ class StatusBarController: NSObject, NSMenuDelegate {
             // Template: macOS auto-adapts to light/dark menu bar
             button.image = Self.makeIcon(barColor: .black, asTemplate: true)
         }
+    }
+}
+
+// MARK: - Custom menu item view (for icon · title · trailing-aligned shortcut)
+
+/// Renders a menu item that mirrors macOS's standard layout but with a
+/// non-keyEquivalent shortcut hint right-aligned at the trailing edge.
+/// We need this because Fn isn't a real `keyEquivalent`, and
+/// `attributedTitle` with a tab stop can't actually flush-right against
+/// the menu's dynamic edge.
+final class HotkeyMenuItemView: NSView {
+    private let iconView = NSImageView()
+    private let titleField = NSTextField(labelWithString: "")
+    private let shortcutField = NSTextField(labelWithString: "")
+    private var isMouseInside = false
+    private var isItemEnabled = true
+
+    var onClick: (() -> Void)?
+
+    init(title: String, shortcut: String, image: NSImage?) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        autoresizingMask = [.width]
+        wantsLayer = true
+
+        // Icon
+        iconView.image = image
+        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        iconView.contentTintColor = .labelColor
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(iconView)
+
+        // Title (left-aligned, single line)
+        titleField.font = .menuFont(ofSize: 0)
+        titleField.stringValue = title
+        titleField.textColor = .labelColor
+        titleField.usesSingleLineMode = true
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(titleField)
+
+        // Shortcut (right-aligned, gray)
+        shortcutField.font = .menuFont(ofSize: 0)
+        shortcutField.stringValue = shortcut
+        shortcutField.textColor = .secondaryLabelColor
+        shortcutField.alignment = .right
+        shortcutField.usesSingleLineMode = true
+        shortcutField.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(shortcutField)
+
+        // Match standard menu item paddings: 14pt icon-left, 8pt icon-title,
+        // 14pt trailing inset for shortcut, ≥16pt minimum gap title↔shortcut
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 16),
+            iconView.heightAnchor.constraint(equalToConstant: 16),
+
+            titleField.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            shortcutField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            shortcutField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            shortcutField.leadingAnchor.constraint(
+                greaterThanOrEqualTo: titleField.trailingAnchor, constant: 16
+            ),
+        ])
+
+        // Hover tracking → highlight on enter, restore on exit
+        let tracking = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(tracking)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Update the rendered title / shortcut / enabled state. Called from
+    /// `menuWillOpen` to reflect the current recording state.
+    func update(title: String, shortcut: String, enabled: Bool) {
+        titleField.stringValue = title
+        shortcutField.stringValue = shortcut
+        isItemEnabled = enabled
+        applyColors()
+    }
+
+    private func applyColors() {
+        let baseAlpha: CGFloat = isItemEnabled ? 1.0 : 0.4
+        if isMouseInside && isItemEnabled {
+            // Selected/highlighted → standard system colors invert
+            titleField.textColor = .selectedMenuItemTextColor
+            shortcutField.textColor = NSColor.selectedMenuItemTextColor.withAlphaComponent(0.7)
+            iconView.contentTintColor = .selectedMenuItemTextColor
+        } else {
+            titleField.textColor = NSColor.labelColor.withAlphaComponent(baseAlpha)
+            shortcutField.textColor = NSColor.secondaryLabelColor.withAlphaComponent(baseAlpha)
+            iconView.contentTintColor = NSColor.labelColor.withAlphaComponent(baseAlpha)
+        }
+        needsDisplay = true
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isMouseInside = true
+        applyColors()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isMouseInside = false
+        applyColors()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isItemEnabled else { return }
+        onClick?()
+        // Close the menu so it dismisses like a standard click would
+        enclosingMenuItem?.menu?.cancelTracking()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard isMouseInside, isItemEnabled else { return }
+        // Match the system's selection background (rounded inset rect)
+        NSColor.selectedContentBackgroundColor.setFill()
+        let highlightRect = bounds.insetBy(dx: 5, dy: 0)
+        NSBezierPath(roundedRect: highlightRect, xRadius: 4, yRadius: 4).fill()
     }
 }

@@ -35,6 +35,7 @@ private struct GeneralTab: View {
 
     var body: some View {
         Form {
+            // MARK: App preferences
             Section {
                 Toggle("Launch at login", isOn: Binding(
                     get: { launchAtLogin },
@@ -49,57 +50,50 @@ private struct GeneralTab: View {
                         launchAtLogin = SMAppService.mainApp.status == .enabled
                     }
                 ))
-                Toggle("Sound effects", isOn: $store.settings.soundEffectsEnabled)
-                Text("Plays a soft chime when recording starts and stops.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Toggle("Sound effects on start / stop", isOn: $store.settings.soundEffectsEnabled)
             }
 
+            // MARK: Shortcuts — core usage, plain language, TL;DR
             Section {
-                SectionHeader("Dictation")
-                ShortcutRow(keys: "hold fn", label: "Hold Fn to dictate, release to submit")
-                ShortcutRow(keys: "fn fn", label: "Double-tap Fn to latch — single tap stops")
-                ShortcutRow(keys: "esc", label: "Cancel while recording")
-                ShortcutRow(keys: "↩", label: "Submit while recording")
+                SectionHeader("Shortcuts")
+                ShortcutRow(keys: "hold fn", label: "Dictate (release to send)")
+                ShortcutRow(keys: "fn fn", label: "Hands-free dictation (tap to stop)")
+                ShortcutRow(keys: "fn + ⇧", label: "AI mode — hold both, LLM responds")
+                ShortcutRow(keys: "tap fn", label: "Submit (in AI / hands-free mode)")
+                ShortcutRow(keys: "↩", label: "Submit any recording")
+                ShortcutRow(keys: "esc", label: "Cancel")
             }
 
+            // MARK: Langdock API — gates AI features, so positioned before
+            // the AI explainer
             Section {
-                SectionHeader("Langdock API Key")
+                SectionHeader("Langdock API")
                 HStack {
                     if showAPIKey {
-                        TextField("Paste your API key", text: $store.settings.apiKey)
+                        TextField("Paste API key", text: $store.settings.apiKey)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField("Paste your API key", text: $store.settings.apiKey)
+                        SecureField("Paste API key", text: $store.settings.apiKey)
                             .textFieldStyle(.roundedBorder)
                     }
-                    Button(showAPIKey ? "Hide" : "Show") {
-                        showAPIKey.toggle()
-                    }
-                    .buttonStyle(.borderless)
+                    Button(showAPIKey ? "Hide" : "Show") { showAPIKey.toggle() }
+                        .buttonStyle(.borderless)
                 }
-                Text("Required for LLM refinement and instruction mode.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
 
-            Section {
-                Toggle("Enable LLM refinement", isOn: $store.settings.llmRefinementEnabled)
+                Toggle("Clean up dictations with Claude Haiku", isOn: $store.settings.llmRefinementEnabled)
                     .disabled(!hasAPIKey)
-                Text("Removes filler words, adds punctuation, corrects backtracking, and applies your dictionary terms using Claude Haiku via Langdock.")
+                Text("Removes filler words, adds punctuation, applies your dictionary, handles self-corrections.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .opacity(hasAPIKey ? 1 : 0.5)
 
+            // MARK: AI mode explainer — informational, last
             Section {
-                SectionHeader("Instruction Mode")
-                ShortcutRow(keys: "fn+⇧", label: "Hold Fn + Shift, release to submit")
-                Text("Speak instructions and the LLM generates a response. Tap the paperclip to attach clipboard content (text or image). Press in either order — a brief mode-decision delay catches near-simultaneous presses.")
+                SectionHeader("How AI mode works")
+                Text("Hold **Fn + Shift** (or add Shift while already dictating) → speak → **Cmd+C** any text or image to attach as context → tap **Fn** or press **Return** to submit. Claude generates a response and pastes it inline.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .opacity(hasAPIKey && store.settings.llmRefinementEnabled ? 1 : 0.5)
         }
         .formStyle(.grouped)
         .padding(.vertical, 8)
@@ -363,7 +357,7 @@ private struct HistoryTab: View {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 4) {
                                 if entry.isInstruction {
-                                    Image(systemName: "sparkles")
+                                    Image(systemName: "pencil")
                                         .font(.system(size: 9))
                                         .foregroundStyle(.purple)
                                 }

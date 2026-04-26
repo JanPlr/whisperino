@@ -7,14 +7,17 @@ import Foundation
 /// 2. **Double-tap Fn** (toggle) — quickly tap twice to enter a latched
 ///    recording, then a single tap stops and submits. Useful for hands-free
 ///    long dictation.
-/// 3. **Fn + Shift** — instruction mode (LLM responds). Works whether you
-///    press them in either order, thanks to a tiny mode-decision delay.
+/// 3. **Fn + Shift** — instruction (AI) mode. Either press them together,
+///    or start with Fn alone and add Shift at any point during the
+///    recording — the mode upgrades and the recording becomes latched
+///    (release won't auto-submit; tap Fn again or press Enter to submit).
 /// 4. **Esc / Return** — cancel / submit while recording.
 class HotkeyManager {
     static let shared = HotkeyManager()
 
     private var onToggle: (() -> Void)?
     private var onInstructionToggle: (() -> Void)?
+    private var onUpgradeToInstruction: (() -> Void)?
     private var onCancel: (() -> Void)?
     private var isRecordingCheck: (() -> Bool)?
 
@@ -22,6 +25,7 @@ class HotkeyManager {
     private var flagsMonitor: Any?
     private var localFlagsMonitor: Any?
     private var fnIsDown = false
+    private var shiftWasDown = false
     private var fnPressTime: Date?
 
     // Double-tap toggle support
@@ -50,11 +54,13 @@ class HotkeyManager {
     func register(
         onToggle: @escaping () -> Void,
         onInstructionToggle: @escaping () -> Void,
+        onUpgradeToInstruction: @escaping () -> Void,
         onCancel: @escaping () -> Void,
         isRecording: @escaping () -> Bool
     ) {
         self.onToggle = onToggle
         self.onInstructionToggle = onInstructionToggle
+        self.onUpgradeToInstruction = onUpgradeToInstruction
         self.onCancel = onCancel
         self.isRecordingCheck = isRecording
         installFlagsMonitor()
@@ -104,9 +110,11 @@ class HotkeyManager {
 
     private func handleFlagsChanged(_ event: NSEvent) {
         let fnDown = event.modifierFlags.contains(.function)
+        let shiftDown = event.modifierFlags.contains(.shift)
         let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
         let hasBlockedModifiers = !event.modifierFlags.intersection(blockedModifiers).isEmpty
 
+        // Fn transitions
         if fnDown && !fnIsDown {
             fnIsDown = true
             handleFnPress(blocked: hasBlockedModifiers)
@@ -114,6 +122,21 @@ class HotkeyManager {
             fnIsDown = false
             handleFnRelease()
         }
+
+        // Shift added while we're already holding Fn and recording in
+        // dictation mode → upgrade to instruction (AI) mode.
+        // The session also becomes latched: release won't auto-submit,
+        // because the typical AI-mode flow is to keep adding context
+        // (Cmd+C selections) and then explicitly submit.
+        if fnIsDown && shiftDown && !shiftWasDown
+            && !hasBlockedModifiers
+            && isRecordingCheck?() == true {
+            isLatched = true
+            DispatchQueue.main.async { [weak self] in
+                self?.onUpgradeToInstruction?()
+            }
+        }
+        shiftWasDown = shiftDown
     }
 
     private func handleFnPress(blocked: Bool) {
@@ -151,8 +174,11 @@ class HotkeyManager {
             let blockedNow = !flags.intersection([.command, .control, .option]).isEmpty
             guard stillFn, !blockedNow else { return }
             self.modeDecisionTask = nil
-            self.isLatched = false
             self.stopPending = false
+            // Instruction mode is always latched — release shouldn't
+            // auto-submit, the user will explicitly submit when they're
+            // done adding context.
+            self.isLatched = nowShift
             if nowShift {
                 self.onInstructionToggle?()
             } else {
