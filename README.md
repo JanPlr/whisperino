@@ -44,13 +44,15 @@ The install script does the following automatically:
 5. Copies it to `/Applications`
 6. Launches the app and opens **System Settings > Accessibility**
 
-### After install — two permissions you need to grant manually
+### After install — permissions you need to grant manually
 
 **Microphone** — macOS will show a permission dialog the first time you record. Click **Allow**.
 
 **Accessibility** — required so Whisperino can paste text into your focused app. After install, System Settings opens automatically. Find **Whisperino** in the Accessibility list and **toggle it ON**. If you don't see it, scroll down or search.
 
-Once both permissions are granted, you're ready to go.
+**Screen Recording** *(optional, only if you use the screenshot button in instruction mode)* — macOS will prompt the first time you tap the camera-viewfinder icon. Toggle Whisperino ON in Privacy & Security → Screen Recording.
+
+Once permissions are granted, you're ready to go.
 
 ## Shortcuts
 
@@ -91,9 +93,12 @@ This is the right gesture for longer recordings where you want your hands free.
 **Hold Fn together with Shift** — order doesn't matter; a small (~18ms) mode-decision window catches near-simultaneous presses. The pill border turns into an animated rainbow gradient.
 
 1. Speak a request, e.g. "Reply to this email politely declining the meeting." or "Summarise this for me in one sentence."
-2. (Optional) Click the **paperclip** in the pill to attach clipboard contents — text or image. You can stack up to 5 attachments.
-3. **Release Fn** — the request is sent.
-4. The LLM generates a response and pastes it into your focused text field.
+2. **Auto-capture context while you talk:**
+   - **Anything you Cmd+C while in instruction mode is auto-attached** — highlight text in any app, Cmd+C, and it lands in the pill as context. No need to click the paperclip. Up to 5 attachments stack.
+   - **Click the camera-viewfinder icon** in the pill to attach a screenshot of your current screen. macOS will ask for Screen Recording permission the first time.
+   - The paperclip still works for one-off clipboard attaching, and tapping it again clears all attachments.
+3. **Release Fn** — the request is sent. Voice transcript + all attachments go to the LLM together.
+4. The response is pasted into your focused text field.
 
 > Tip: brief accidental Fn taps (<0.5s without follow-up) are discarded automatically — so a quick tap won't dump anything into your text field.
 
@@ -231,6 +236,8 @@ open /Applications/Whisperino.app
 - **Push-to-talk hotkey** — *just hold Fn*. The app records while you hold, and submits the moment you release. The simplest possible flow.
 - **Double-tap Fn (latched)** — alternative for hands-free / long dictation: double-tap to start a latched recording that survives release. A single Fn tap then stops and submits.
 - **Reliable instruction mode** — `Fn + Shift` works regardless of which order you press them. A tiny (~18ms) mode-decision window catches near-simultaneous presses.
+- **Auto-clipboard capture in instruction mode** — anything you Cmd+C while holding Fn+Shift gets auto-attached as context. No more clicking the paperclip for every selection.
+- **Screen-context attachment** — new camera-viewfinder button in the pill (instruction mode only) attaches a screenshot of your current screen so the LLM can "see" what you're looking at. Requires Screen Recording permission.
 - **Real-time waveform** — bars now track your voice on every audio buffer (~12ms latency from voice to visible response). The wave actually rolls right-to-left across the pill with a gentle per-tick fade, instead of dancing in place or holding stale snapshots after you stop speaking.
 - **Smarter onset detection** — when rising from silence, the meter snaps directly to voice level (no exponential climb). The first word out of silence is captured at full intensity from the very first buffer.
 

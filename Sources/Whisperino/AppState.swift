@@ -77,6 +77,12 @@ class AppState: ObservableObject {
     /// visibly travels right-to-left.
     private var sampleTimer: Timer?
 
+    /// Polls the system pasteboard during instruction mode so that anything
+    /// the user copies (Cmd+C) gets auto-attached as context. Saves manual
+    /// clicks on the paperclip.
+    private var clipboardWatchTimer: Timer?
+    private var clipboardBaselineChangeCount: Int = 0
+
     var isSetUp: Bool { transcriber.isAvailable }
 
     // MARK: - Input Device Management
@@ -166,6 +172,7 @@ class AppState: ObservableObject {
 
     func cancelRecording() {
         showingInputPicker = false
+        stopClipboardWatching()
         if let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
@@ -237,6 +244,50 @@ class AppState: ObservableObject {
         attachedContexts.removeAll()
     }
 
+    /// Capture the current main display as an image and attach it. Lets the
+    /// LLM "see your screen" alongside whatever you're saying. Requires
+    /// Screen Recording permission — macOS prompts on first invocation.
+    func addScreenshotAttachment() {
+        guard attachedContexts.count < Self.maxAttachments else { return }
+        let displayID = CGMainDisplayID()
+        guard let cgImage = CGDisplayCreateImage(displayID) else {
+            // Permission not granted yet — system prompt was just shown.
+            // Open Privacy & Security so the user can flip the toggle.
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+        let size = NSSize(width: cgImage.width, height: cgImage.height)
+        let nsImage = NSImage(cgImage: cgImage, size: size)
+        let preview = "Screen (\(cgImage.width)×\(cgImage.height))"
+        let ctx = AttachedContext(content: .image(nsImage), preview: preview)
+        attachedContexts.append(ctx)
+    }
+
+    // MARK: - Pasteboard auto-capture (instruction mode only)
+
+    /// Begin watching the system pasteboard. Anything copied while this is
+    /// running gets auto-attached as context — no manual paperclip click.
+    /// Started when instruction mode begins, stopped when recording ends.
+    private func startClipboardWatching() {
+        // Snapshot the current change count so we only react to *new* copies.
+        clipboardBaselineChangeCount = NSPasteboard.general.changeCount
+        clipboardWatchTimer?.invalidate()
+        clipboardWatchTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let current = NSPasteboard.general.changeCount
+            guard current > self.clipboardBaselineChangeCount else { return }
+            self.clipboardBaselineChangeCount = current
+            self.addClipboardAttachment()
+        }
+    }
+
+    private func stopClipboardWatching() {
+        clipboardWatchTimer?.invalidate()
+        clipboardWatchTimer = nil
+    }
+
     // MARK: - Recording
 
     private func startRecording(instruction: Bool) {
@@ -282,6 +333,8 @@ class AppState: ObservableObject {
                 }
             }
             startWaveformSampling()
+            // Auto-attach anything the user copies while in instruction mode
+            if instruction { startClipboardWatching() }
             SoundEffects.playStart()
             recordingStartTime = Date()
             state = .recording
@@ -293,6 +346,7 @@ class AppState: ObservableObject {
 
     private func stopRecording() {
         showingInputPicker = false
+        stopClipboardWatching()
         guard let audioURL = recorder.stop() else {
             stopWaveformSampling()
             resetInstructionMode()

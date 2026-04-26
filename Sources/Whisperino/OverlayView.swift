@@ -98,6 +98,7 @@ struct OverlayView: View {
 
                     if appState.isInstructionMode && !cancelled {
                         clipboardButton
+                        screenshotButton
                     }
 
                     if hasAttachments && !cancelled { Spacer(minLength: 0) }
@@ -233,6 +234,20 @@ struct OverlayView: View {
                     appState.addClipboardAttachment()
                 }
             }
+            .help("Attach clipboard contents (auto-captured while you Cmd+C)")
+    }
+
+    @State private var isHoveringScreenshot = false
+
+    private var screenshotButton: some View {
+        Image(systemName: "camera.viewfinder")
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(.white.opacity(isHoveringScreenshot ? 0.75 : 0.35))
+            .frame(width: 20, height: 20)
+            .contentShape(Rectangle())
+            .onHover { isHoveringScreenshot = $0 }
+            .onTapGesture { appState.addScreenshotAttachment() }
+            .help("Attach a screenshot of your screen")
     }
 
     @State private var isHoveringAddMore = false
