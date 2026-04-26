@@ -71,15 +71,11 @@ class AppState: ObservableObject {
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
 
-    /// Drives the waveform sampler.
+    /// Drives the waveform's rolling history. The rightmost bar tracks
+    /// audio level in real-time via the recorder callback; this timer just
+    /// shifts the value into history at a fixed cadence so the wave
+    /// visibly travels right-to-left.
     private var sampleTimer: Timer?
-    /// Running sum of audio levels seen since the last sampler tick. Averaged
-    /// at tick time — averages are far smoother than peaks.
-    private var sampleAccumulator: Float = 0
-    private var sampleCount: Int = 0
-    /// Last published sample, used to exponentially blend new samples for
-    /// additional temporal smoothness (fast rise, slower decay).
-    private var lastSmoothedSample: Float = 0
 
     var isSetUp: Bool { transcriber.isAvailable }
 
@@ -185,34 +181,23 @@ class AppState: ObservableObject {
     // MARK: - Waveform sampling
 
     private func startWaveformSampling() {
-        sampleAccumulator = 0
-        sampleCount = 0
-        lastSmoothedSample = 0
         audioSamples = Array(repeating: 0, count: Self.waveformBarCount)
         sampleTimer?.invalidate()
-        // 10 Hz — newest sample enters on the right and rolls leftward over
-        // time, so a voice burst appears, peaks in the middle (where the
-        // shape mask is largest), then fades out to the left as it ages.
-        sampleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 10.0, repeats: true) { [weak self] _ in
+        // 22 Hz — every ~45ms the wave rolls one step. With a per-step decay
+        // factor, the historical "trail" fades AND moves left, so when voice
+        // stops the pill clears within ~250ms instead of holding stale
+        // snapshots until they roll off.
+        sampleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 22.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            // Average the levels seen this tick — much smoother than peaks.
-            let avg = self.sampleCount > 0
-                ? self.sampleAccumulator / Float(self.sampleCount)
-                : 0
-            self.sampleAccumulator = 0
-            self.sampleCount = 0
-
-            // Asymmetric blend: rise toward voice quickly enough to feel
-            // reactive, but not so fast that single-tick plosives whip the
-            // bars. Decay is slower so the wave glides out gently.
-            let mix: Float = avg > self.lastSmoothedSample ? 0.55 : 0.30
-            let smoothed = self.lastSmoothedSample + mix * (avg - self.lastSmoothedSample)
-            self.lastSmoothedSample = smoothed
-
-            // Roll the buffer: oldest drops off the left, newest enters right.
             var s = self.audioSamples
+            // Gentle per-tick fade — the wave keeps enough amplitude to
+            // visibly travel across the pill before it disappears off the
+            // left edge (after ~9 ticks ≈ 410ms total visible duration).
+            for i in 0..<s.count { s[i] *= 0.92 }
+            // Roll left + append current live level (overwritten by next
+            // audio callback, so the rightmost stays real-time).
             s.removeFirst()
-            s.append(smoothed)
+            s.append(self.audioLevel)
             self.audioSamples = s
         }
     }
@@ -220,9 +205,6 @@ class AppState: ObservableObject {
     private func stopWaveformSampling() {
         sampleTimer?.invalidate()
         sampleTimer = nil
-        sampleAccumulator = 0
-        sampleCount = 0
-        lastSmoothedSample = 0
         audioSamples = Array(repeating: 0, count: Self.waveformBarCount)
     }
 
@@ -291,8 +273,12 @@ class AppState: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     self.audioLevel = level
-                    self.sampleAccumulator += level
-                    self.sampleCount += 1
+                    // Real-time tracking: rightmost bar reflects live voice
+                    // immediately, no timer-tick wait. The timer below only
+                    // handles rolling history from right to left.
+                    if !self.audioSamples.isEmpty {
+                        self.audioSamples[self.audioSamples.count - 1] = level
+                    }
                 }
             }
             startWaveformSampling()

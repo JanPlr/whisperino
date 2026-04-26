@@ -209,7 +209,7 @@ struct OverlayView: View {
             }
         }
         .onHover { isHoveringPill = $0 }
-        .animation(.easeInOut(duration: 0.18), value: appState.audioSamples)
+        .animation(.easeOut(duration: 0.04), value: appState.audioSamples)
         .animation(.easeInOut(duration: 0.15), value: isHoveringPill)
         .animation(.easeInOut(duration: 0.15), value: isHoveringMic)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appState.attachedContexts.count)
@@ -259,12 +259,11 @@ struct OverlayView: View {
         .onTapGesture { appState.addClipboardAttachment() }
     }
 
-    /// Center-emphasizing shape mask: bars at the edges are visually muted so
-    /// the wave reads as a centered crest. Voice samples enter on the right
-    /// (small), grow as they roll into the middle (peak), then fade as they
-    /// continue left and exit.
+    /// Gentle shape mask — barely attenuates the edges so the wave is
+    /// visibly present across the whole pill as it rolls right-to-left,
+    /// rather than collapsing to a right-side spike.
     private static let barShape: [CGFloat] = [
-        0.45, 0.65, 0.85, 0.95, 1.0, 0.95, 0.85, 0.65, 0.45
+        0.85, 0.90, 0.95, 1.0, 1.0, 1.0, 0.95, 0.90, 0.85
     ]
 
     private func barHeight(for index: Int) -> CGFloat {

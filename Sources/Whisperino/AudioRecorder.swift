@@ -147,7 +147,7 @@ class AudioRecorder {
         let audioFile = try AVAudioFile(forWriting: url, settings: inputFormat.settings)
         self.audioFile = audioFile
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 512, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
 
             // When paused, keep engine running but skip writing and report zero level
@@ -169,11 +169,17 @@ class AudioRecorder {
                 let db = 20 * log10(max(rms, 1e-6))
                 let level = Self.gatedLevel(db: db)
 
-                // Smooth: moderate attack, slow decay
-                let attack: Float = 0.55
-                let decay: Float = 0.18
-                let factor = level > self.smoothedLevel ? attack : decay
-                self.smoothedLevel += factor * (level - self.smoothedLevel)
+                // Onset-snap: if we were below silence threshold and a real
+                // signal arrives, jump straight to it — the *first* word
+                // out of silence has zero smoothing latency.
+                // Otherwise: aggressive attack while voice is active,
+                // brisk decay when it ends so the wave clears quickly.
+                if level > self.smoothedLevel && self.smoothedLevel < 0.05 {
+                    self.smoothedLevel = level
+                } else {
+                    let factor: Float = level > self.smoothedLevel ? 0.9 : 0.5
+                    self.smoothedLevel += factor * (level - self.smoothedLevel)
+                }
 
                 levelCallback(self.smoothedLevel)
             }
@@ -212,7 +218,7 @@ class AudioRecorder {
         let inputNode = newEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 512, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
             guard !self.isPaused else {
                 levelCallback(0)
@@ -229,8 +235,12 @@ class AudioRecorder {
                 let rms = sqrt(sum / max(Float(frames), 1))
                 let db = 20 * log10(max(rms, 1e-6))
                 let level = Self.gatedLevel(db: db)
-                let factor = level > self.smoothedLevel ? Float(0.55) : Float(0.18)
-                self.smoothedLevel += factor * (level - self.smoothedLevel)
+                if level > self.smoothedLevel && self.smoothedLevel < 0.05 {
+                    self.smoothedLevel = level
+                } else {
+                    let factor: Float = level > self.smoothedLevel ? 0.9 : 0.5
+                    self.smoothedLevel += factor * (level - self.smoothedLevel)
+                }
                 levelCallback(self.smoothedLevel)
             }
 
