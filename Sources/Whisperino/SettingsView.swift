@@ -65,7 +65,7 @@ private struct GeneralTab: View {
                         Text(key.displayName).tag(key)
                     }
                 }
-                Text("The key you hold to start recording. Right-side modifiers are usually free since most shortcuts use the left side.")
+                Text("The key combo you hold to start recording. Combos like ⌥D need Accessibility permission so the keystroke can be intercepted (no stray “∂” typed).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

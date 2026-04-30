@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 
 /// Hotkey behaviour:
@@ -13,7 +14,11 @@ import Foundation
 ///    (release won't auto-submit; tap trigger again or press Enter to submit).
 /// 4. **Esc / Return** — cancel / submit while recording.
 ///
-/// The trigger key is configurable in Settings (defaults to Fn).
+/// The trigger is configurable in Settings. Two flavours:
+/// - **Modifier-only** (Fn, Right ⌥, etc.) — driven by `flagsChanged`.
+/// - **Modifier + key combo** (⌥D, ⌥Space, ⌥Q) — driven by a `CGEventTap`
+///   that intercepts the keystroke so the underlying character (e.g. "∂"
+///   for ⌥D) isn't typed into the focused app.
 class HotkeyManager {
     static let shared = HotkeyManager()
 
@@ -53,6 +58,12 @@ class HotkeyManager {
     private var keyDownMonitor: Any?
     private var localKeyDownMonitor: Any?
 
+    // CGEventTap for combo triggers (intercepts the keystroke so the
+    // underlying character isn't typed). Always installed; the callback
+    // short-circuits if the current trigger isn't a combo.
+    private var eventTap: CFMachPort?
+    private var eventTapRunLoopSource: CFRunLoopSource?
+
     /// Currently configured trigger key. Read live from settings on every
     /// event so user changes take effect without re-registering monitors.
     private var triggerKey: TriggerKey {
@@ -73,11 +84,14 @@ class HotkeyManager {
         self.isRecordingCheck = isRecording
         installFlagsMonitor()
         installKeyMonitor()
+        installEventTap()
     }
 
     /// Reset internal state when the trigger key changes mid-session, so a
     /// stale "trigger is held" flag from the old key doesn't confuse the
-    /// state machine after the swap.
+    /// state machine after the swap. Also re-attempts to install the event
+    /// tap, so a user who switches to a combo trigger right after granting
+    /// Accessibility doesn't have to wait for the next retry tick.
     func resetTriggerState() {
         modeDecisionTask?.cancel()
         modeDecisionTask = nil
@@ -88,6 +102,7 @@ class HotkeyManager {
         triggerPressTime = nil
         isLatched = false
         stopPending = false
+        installEventTap()
     }
 
     // MARK: - Enter / Esc Key Monitor
@@ -133,17 +148,29 @@ class HotkeyManager {
 
     private func handleFlagsChanged(_ event: NSEvent) {
         let trigger = triggerKey
-        let triggerDown = trigger.isDown(in: event.modifierFlags)
         let shiftDown = event.modifierFlags.contains(.shift)
         let hasBlockedModifiers = !event.modifierFlags.intersection(trigger.blockedFlags).isEmpty
 
-        // Trigger transitions
-        if triggerDown && !triggerIsDown {
-            triggerIsDown = true
-            handleTriggerPress(blocked: hasBlockedModifiers)
-        } else if !triggerDown && triggerIsDown {
-            triggerIsDown = false
-            handleTriggerRelease()
+        if !trigger.isCombo {
+            // Modifier-only triggers: press/release tracked here.
+            let triggerDown = trigger.isDown(in: event.modifierFlags)
+            if triggerDown && !triggerIsDown {
+                triggerIsDown = true
+                handleTriggerPress(blocked: hasBlockedModifiers)
+            } else if !triggerDown && triggerIsDown {
+                triggerIsDown = false
+                handleTriggerRelease()
+            }
+        } else {
+            // Combo triggers: press/release come from the event tap. But if
+            // the user releases the modifier (e.g. Option) without releasing
+            // the combo key first, the tap won't see a keyUp with the
+            // modifier — so we treat modifier release as an implicit release
+            // of the trigger.
+            if triggerIsDown && !trigger.isDown(in: event.modifierFlags) {
+                triggerIsDown = false
+                handleTriggerRelease()
+            }
         }
 
         // Shift added while we're already holding the trigger and recording
@@ -258,6 +285,104 @@ class HotkeyManager {
         } else {
             // Held long enough — push-to-talk submit
             DispatchQueue.main.async { [weak self] in self?.onToggle?() }
+        }
+    }
+
+    // MARK: - CGEventTap (combo triggers)
+
+    private func installEventTap() {
+        guard eventTap == nil else { return }
+
+        let mask: CGEventMask =
+            (1 << CGEventType.keyDown.rawValue) |
+            (1 << CGEventType.keyUp.rawValue)
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, refcon in
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
+                let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
+                return manager.handleTapEvent(type: type, event: event)
+            },
+            userInfo: userInfo
+        ) else {
+            // Tap creation fails if Accessibility isn't granted yet — common
+            // right after a fresh build (build.sh resets the permission).
+            // Retry every 2s; the guard at the top makes this idempotent
+            // once we eventually succeed.
+            print("[whisperino] CGEventTap install failed — retrying once Accessibility is granted")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.installEventTap()
+            }
+            return
+        }
+
+        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        eventTap = tap
+        eventTapRunLoopSource = source
+        print("[whisperino] CGEventTap installed — combo triggers active")
+    }
+
+    /// Tap callback: decides whether to consume the event (combo match) or
+    /// pass it through. Runs on the main thread because we install the
+    /// run-loop source on the main run loop.
+    private func handleTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // The system can disable our tap if it thinks we're slow. Re-enable
+        // if that happens. Other event types we don't care about.
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+
+        let trigger = triggerKey
+        guard let comboKeyCode = trigger.comboKeyCode else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let eventKeyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        guard eventKeyCode == comboKeyCode else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        // Bridge CGEventFlags → NSEvent.ModifierFlags (the device-independent
+        // bits use the same layout, so a raw cast is safe for our checks).
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+        guard trigger.isDown(in: flags) else {
+            // Combo key pressed without the required modifier — let it
+            // through as a normal keystroke.
+            return Unmanaged.passUnretained(event)
+        }
+
+        let hasBlockedModifiers = !flags.intersection(trigger.blockedFlags).isEmpty
+
+        switch type {
+        case .keyDown:
+            // Auto-repeat fires keyDown repeatedly while held; only act on
+            // the initial press so the state machine doesn't see a stream of
+            // "presses".
+            let isAutoRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            if !isAutoRepeat {
+                if !triggerIsDown {
+                    triggerIsDown = true
+                    handleTriggerPress(blocked: hasBlockedModifiers)
+                }
+            }
+            return nil  // consume so e.g. "∂" isn't typed
+        case .keyUp:
+            if triggerIsDown {
+                triggerIsDown = false
+                handleTriggerRelease()
+            }
+            return nil  // consume keyUp for symmetry
+        default:
+            return Unmanaged.passUnretained(event)
         }
     }
 }

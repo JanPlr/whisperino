@@ -1,42 +1,61 @@
 import AppKit
 import Foundation
 
-/// User-selectable trigger key for push-to-talk / dictation.
+/// User-selectable trigger for push-to-talk / dictation.
 ///
-/// Fn is the historical default. Right-side modifiers are offered as
-/// alternatives because most people use the left-side modifiers for
-/// regular shortcuts (Cmd+C etc.) — the right side is usually free.
+/// Two flavours:
+/// - **Modifier-only** (Fn) — hold a single modifier. Driven by
+///   `NSEvent.flagsChanged`.
+/// - **Modifier + key combo** (Option+D, Option+Q) — hold a modifier and
+///   tap a regular key. Driven by a `CGEventTap` in `HotkeyManager` which
+///   intercepts the keystroke so the underlying character (e.g. "∂" for
+///   ⌥D) isn't typed into the focused app.
 enum TriggerKey: String, Codable, CaseIterable, Identifiable {
     case fn
-    case rightOption
-    case rightCommand
-    case rightControl
+    case optionD
+    case optionQ
 
     var id: String { rawValue }
 
-    /// Whether this key is currently held, given an event's modifier flags.
-    /// For the right-side modifiers we look at device-dependent bits in the
-    /// raw value (`NX_DEVICER*KEYMASK`) so we can distinguish left vs. right.
+    /// True for combo triggers (modifier + key); false for modifier-only.
+    /// Combo triggers route through the `CGEventTap`, modifier-only triggers
+    /// route through the `flagsChanged` monitor.
+    var isCombo: Bool {
+        comboKeyCode != nil
+    }
+
+    /// Virtual key code the combo listens for. `nil` for modifier-only triggers.
+    /// Values are `kVK_ANSI_*` constants (Carbon HIToolbox).
+    var comboKeyCode: UInt16? {
+        switch self {
+        case .optionD: return 2   // kVK_ANSI_D
+        case .optionQ: return 12  // kVK_ANSI_Q
+        case .fn:      return nil
+        }
+    }
+
+    /// Whether the trigger's modifier portion is currently held.
+    /// For modifier-only triggers, this IS the trigger.
+    /// For combo triggers, the modifier alone isn't enough — the combo key
+    /// must also be pressed (handled by the event tap).
     func isDown(in flags: NSEvent.ModifierFlags) -> Bool {
         switch self {
-        case .fn:           return flags.contains(.function)
-        case .rightOption:  return flags.rawValue & 0x40 != 0    // NX_DEVICERALTKEYMASK
-        case .rightCommand: return flags.rawValue & 0x10 != 0    // NX_DEVICERCMDKEYMASK
-        case .rightControl: return flags.rawValue & 0x2000 != 0  // NX_DEVICERCTLKEYMASK
+        case .fn: return flags.contains(.function)
+        case .optionD, .optionQ:
+            return flags.contains(.option)
         }
     }
 
     /// Modifiers that, if held alongside the trigger, should suppress
-    /// activation — e.g. avoid hijacking Cmd+Fn or Ctrl+Fn system shortcuts.
-    /// The trigger's own family is excluded so pressing the trigger doesn't
-    /// self-block (e.g. trigger=Right Cmd shouldn't be blocked by .command).
+    /// activation — e.g. avoid hijacking Cmd+Fn system shortcuts.
+    /// The trigger's own modifier family is excluded so pressing the
+    /// trigger doesn't self-block.
     var blockedFlags: NSEvent.ModifierFlags {
         var blocked: NSEvent.ModifierFlags = [.command, .control, .option]
         switch self {
-        case .fn:           break
-        case .rightOption:  blocked.subtract(.option)
-        case .rightCommand: blocked.subtract(.command)
-        case .rightControl: blocked.subtract(.control)
+        case .fn: break
+        case .optionD, .optionQ:
+            blocked.subtract(.option)
         }
         return blocked
     }
@@ -44,20 +63,18 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
     /// Compact label for inline shortcut hints ("hold fn", "fn + ⇧").
     var shortLabel: String {
         switch self {
-        case .fn:           return "fn"
-        case .rightOption:  return "right ⌥"
-        case .rightCommand: return "right ⌘"
-        case .rightControl: return "right ⌃"
+        case .fn:      return "fn"
+        case .optionD: return "⌥D"
+        case .optionQ: return "⌥Q"
         }
     }
 
     /// Verbose name for the picker UI.
     var displayName: String {
         switch self {
-        case .fn:           return "Fn (function key)"
-        case .rightOption:  return "Right Option (⌥)"
-        case .rightCommand: return "Right Command (⌘)"
-        case .rightControl: return "Right Control (⌃)"
+        case .fn:      return "Fn (function key)"
+        case .optionD: return "Option + D (⌥D)"
+        case .optionQ: return "Option + Q (⌥Q)"
         }
     }
 }
