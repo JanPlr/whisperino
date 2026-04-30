@@ -3,15 +3,17 @@ import Foundation
 
 /// Hotkey behaviour:
 ///
-/// 1. **Hold Fn** (push-to-talk) — press to record, release to submit.
-/// 2. **Double-tap Fn** (toggle) — quickly tap twice to enter a latched
+/// 1. **Hold trigger** (push-to-talk) — press to record, release to submit.
+/// 2. **Double-tap trigger** (toggle) — quickly tap twice to enter a latched
 ///    recording, then a single tap stops and submits. Useful for hands-free
 ///    long dictation.
-/// 3. **Fn + Shift** — instruction (AI) mode. Either press them together,
-///    or start with Fn alone and add Shift at any point during the
+/// 3. **Trigger + Shift** — instruction (AI) mode. Either press them together,
+///    or start with the trigger alone and add Shift at any point during the
 ///    recording — the mode upgrades and the recording becomes latched
-///    (release won't auto-submit; tap Fn again or press Enter to submit).
+///    (release won't auto-submit; tap trigger again or press Enter to submit).
 /// 4. **Esc / Return** — cancel / submit while recording.
+///
+/// The trigger key is configurable in Settings (defaults to Fn).
 class HotkeyManager {
     static let shared = HotkeyManager()
 
@@ -24,9 +26,9 @@ class HotkeyManager {
     // Modifier flag monitors
     private var flagsMonitor: Any?
     private var localFlagsMonitor: Any?
-    private var fnIsDown = false
+    private var triggerIsDown = false
     private var shiftWasDown = false
-    private var fnPressTime: Date?
+    private var triggerPressTime: Date?
 
     // Double-tap toggle support
     private var isLatched = false
@@ -34,7 +36,7 @@ class HotkeyManager {
     private var latchTimeoutTask: DispatchWorkItem?
 
     // Mode-decision delay — gives Shift a chance to register if pressed
-    // near-simultaneously with Fn. Below human perception threshold.
+    // near-simultaneously with the trigger. Below human perception threshold.
     private var modeDecisionTask: DispatchWorkItem?
     private let modeDecisionDelay: TimeInterval = 0.018
 
@@ -51,6 +53,12 @@ class HotkeyManager {
     private var keyDownMonitor: Any?
     private var localKeyDownMonitor: Any?
 
+    /// Currently configured trigger key. Read live from settings on every
+    /// event so user changes take effect without re-registering monitors.
+    private var triggerKey: TriggerKey {
+        SettingsStore.shared.settings.triggerKey
+    }
+
     func register(
         onToggle: @escaping () -> Void,
         onInstructionToggle: @escaping () -> Void,
@@ -65,6 +73,21 @@ class HotkeyManager {
         self.isRecordingCheck = isRecording
         installFlagsMonitor()
         installKeyMonitor()
+    }
+
+    /// Reset internal state when the trigger key changes mid-session, so a
+    /// stale "trigger is held" flag from the old key doesn't confuse the
+    /// state machine after the swap.
+    func resetTriggerState() {
+        modeDecisionTask?.cancel()
+        modeDecisionTask = nil
+        latchTimeoutTask?.cancel()
+        latchTimeoutTask = nil
+        triggerIsDown = false
+        shiftWasDown = false
+        triggerPressTime = nil
+        isLatched = false
+        stopPending = false
     }
 
     // MARK: - Enter / Esc Key Monitor
@@ -109,26 +132,26 @@ class HotkeyManager {
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        let fnDown = event.modifierFlags.contains(.function)
+        let trigger = triggerKey
+        let triggerDown = trigger.isDown(in: event.modifierFlags)
         let shiftDown = event.modifierFlags.contains(.shift)
-        let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
-        let hasBlockedModifiers = !event.modifierFlags.intersection(blockedModifiers).isEmpty
+        let hasBlockedModifiers = !event.modifierFlags.intersection(trigger.blockedFlags).isEmpty
 
-        // Fn transitions
-        if fnDown && !fnIsDown {
-            fnIsDown = true
-            handleFnPress(blocked: hasBlockedModifiers)
-        } else if !fnDown && fnIsDown {
-            fnIsDown = false
-            handleFnRelease()
+        // Trigger transitions
+        if triggerDown && !triggerIsDown {
+            triggerIsDown = true
+            handleTriggerPress(blocked: hasBlockedModifiers)
+        } else if !triggerDown && triggerIsDown {
+            triggerIsDown = false
+            handleTriggerRelease()
         }
 
-        // Shift added while we're already holding Fn and recording in
-        // dictation mode → upgrade to instruction (AI) mode.
+        // Shift added while we're already holding the trigger and recording
+        // in dictation mode → upgrade to instruction (AI) mode.
         // The session also becomes latched: release won't auto-submit,
         // because the typical AI-mode flow is to keep adding context
         // (Cmd+C selections) and then explicitly submit.
-        if fnIsDown && shiftDown && !shiftWasDown
+        if triggerIsDown && shiftDown && !shiftWasDown
             && !hasBlockedModifiers
             && isRecordingCheck?() == true {
             isLatched = true
@@ -139,8 +162,8 @@ class HotkeyManager {
         shiftWasDown = shiftDown
     }
 
-    private func handleFnPress(blocked: Bool) {
-        fnPressTime = Date()
+    private func handleTriggerPress(blocked: Bool) {
+        triggerPressTime = Date()
         guard !blocked else { return }
 
         let isCurrentlyRecording = isRecordingCheck?() ?? false
@@ -169,10 +192,11 @@ class HotkeyManager {
             guard let self = self else { return }
             // Re-check live modifier state at the moment we actually fire
             let flags = NSEvent.modifierFlags
-            let stillFn = flags.contains(.function)
+            let trigger = self.triggerKey
+            let stillTrigger = trigger.isDown(in: flags)
             let nowShift = flags.contains(.shift)
-            let blockedNow = !flags.intersection([.command, .control, .option]).isEmpty
-            guard stillFn, !blockedNow else { return }
+            let blockedNow = !flags.intersection(trigger.blockedFlags).isEmpty
+            guard stillTrigger, !blockedNow else { return }
             self.modeDecisionTask = nil
             self.stopPending = false
             // Instruction mode is always latched — release shouldn't
@@ -189,7 +213,7 @@ class HotkeyManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + modeDecisionDelay, execute: task)
     }
 
-    private func handleFnRelease() {
+    private func handleTriggerRelease() {
         // — If user released before the mode-decision fired, recording
         //   never started; just discard the pending task —
         if let task = modeDecisionTask {
@@ -198,7 +222,7 @@ class HotkeyManager {
             return
         }
 
-        guard let pressTime = fnPressTime else { return }
+        guard let pressTime = triggerPressTime else { return }
         let duration = Date().timeIntervalSince(pressTime)
         let isCurrentlyRecording = isRecordingCheck?() ?? false
         guard isCurrentlyRecording else { return }

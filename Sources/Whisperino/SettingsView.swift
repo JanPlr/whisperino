@@ -34,6 +34,9 @@ private struct GeneralTab: View {
     }
 
     var body: some View {
+        let trigger = store.settings.triggerKey
+        let triggerLabel = trigger.shortLabel
+
         Form {
             // MARK: App preferences
             Section {
@@ -53,13 +56,27 @@ private struct GeneralTab: View {
                 Toggle("Sound effects on start / stop", isOn: $store.settings.soundEffectsEnabled)
             }
 
+            // MARK: Trigger key — let users pick an alternative if Fn is
+            // mapped to something else (emoji picker, system function, etc.)
+            Section {
+                SectionHeader("Trigger key")
+                Picker("Press to dictate", selection: $store.settings.triggerKey) {
+                    ForEach(TriggerKey.allCases) { key in
+                        Text(key.displayName).tag(key)
+                    }
+                }
+                Text("The key you hold to start recording. Right-side modifiers are usually free since most shortcuts use the left side.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             // MARK: Shortcuts — core usage, plain language, TL;DR
             Section {
                 SectionHeader("Shortcuts")
-                ShortcutRow(keys: "hold fn", label: "Dictate (release to send)")
-                ShortcutRow(keys: "fn fn", label: "Hands-free dictation (tap to stop)")
-                ShortcutRow(keys: "fn + ⇧", label: "AI mode — hold both, LLM responds")
-                ShortcutRow(keys: "tap fn", label: "Submit (in AI / hands-free mode)")
+                ShortcutRow(keys: "hold \(triggerLabel)", label: "Dictate (release to send)")
+                ShortcutRow(keys: "\(triggerLabel) \(triggerLabel)", label: "Hands-free dictation (tap to stop)")
+                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "AI mode — hold both, LLM responds")
+                ShortcutRow(keys: "tap \(triggerLabel)", label: "Submit (in AI / hands-free mode)")
                 ShortcutRow(keys: "↩", label: "Submit any recording")
                 ShortcutRow(keys: "esc", label: "Cancel")
             }
@@ -90,7 +107,7 @@ private struct GeneralTab: View {
             // MARK: AI mode explainer — informational, last
             Section {
                 SectionHeader("How AI mode works")
-                Text("Hold **Fn + Shift** (or add Shift while already dictating) → speak → **Cmd+C** any text or image to attach as context → tap **Fn** or press **Return** to submit. Claude generates a response and pastes it inline.")
+                Text("Hold **\(triggerLabel) + Shift** (or add Shift while already dictating) → speak → **Cmd+C** any text or image to attach as context → tap **\(triggerLabel)** or press **Return** to submit. Claude generates a response and pastes it inline.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

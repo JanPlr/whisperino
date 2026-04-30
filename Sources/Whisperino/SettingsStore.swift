@@ -16,6 +16,11 @@ class SettingsStore: ObservableObject {
     @Published var settings: AppSettings {
         didSet {
             save(settings, to: settingsFile)
+            // Trigger swap mid-session leaves the hotkey state machine
+            // referencing the old key — clear it so the next press starts fresh.
+            if settings.triggerKey != oldValue.triggerKey {
+                HotkeyManager.shared.resetTriggerState()
+            }
         }
     }
     @Published var dictionary: [DictionaryEntry] {

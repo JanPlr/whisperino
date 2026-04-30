@@ -67,10 +67,12 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private var setupItem: NSMenuItem?
 
     private func buildMenu() {
+        let triggerLabel = store.settings.triggerKey.shortLabel
+
         // Dictation action with a custom view that draws icon · title · gray shortcut
         let dictView = HotkeyMenuItemView(
             title: "Start Dictation",
-            shortcut: "hold fn",
+            shortcut: "hold \(triggerLabel)",
             image: NSImage(systemSymbolName: "waveform", accessibilityDescription: "Dictate")
         )
         dictView.onClick = { [weak self] in self?.toggleDictation() }
@@ -83,7 +85,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
         // AI mode action — same custom view pattern
         let aiView = HotkeyMenuItemView(
             title: "Start AI Mode",
-            shortcut: "fn + ⇧",
+            shortcut: "\(triggerLabel) + ⇧",
             image: NSImage(systemSymbolName: "pencil", accessibilityDescription: "AI mode")
         )
         aiView.onClick = { [weak self] in self?.toggleAIMode() }
@@ -121,10 +123,12 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        let triggerLabel = store.settings.triggerKey.shortLabel
+
         // Reflect current state in the two custom-view action items
         switch appState.state {
         case .recording, .paused:
-            dictationView?.update(title: "Stop & Submit", shortcut: "release fn or ↩", enabled: true)
+            dictationView?.update(title: "Stop & Submit", shortcut: "release \(triggerLabel) or ↩", enabled: true)
             if appState.isInstructionMode {
                 aiModeView?.update(title: "AI Mode is active", shortcut: "", enabled: false)
             } else {
@@ -134,8 +138,8 @@ class StatusBarController: NSObject, NSMenuDelegate {
             dictationView?.update(title: "Working…", shortcut: "", enabled: false)
             aiModeView?.update(title: "Working…", shortcut: "", enabled: false)
         default:
-            dictationView?.update(title: "Start Dictation", shortcut: "hold fn", enabled: true)
-            aiModeView?.update(title: "Start AI Mode", shortcut: "fn + ⇧", enabled: true)
+            dictationView?.update(title: "Start Dictation", shortcut: "hold \(triggerLabel)", enabled: true)
+            aiModeView?.update(title: "Start AI Mode", shortcut: "\(triggerLabel) + ⇧", enabled: true)
         }
 
         // Show setup warning only when Whisper isn't installed
