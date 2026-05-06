@@ -6,14 +6,13 @@ import Foundation
 /// Two flavours:
 /// - **Modifier-only** (Fn) — hold a single modifier. Driven by
 ///   `NSEvent.flagsChanged`.
-/// - **Modifier + key combo** (Option+D, Option+Q) — hold a modifier and
-///   tap a regular key. Driven by a `CGEventTap` in `HotkeyManager` which
+/// - **Modifier + key combo** (Option+D) — hold a modifier and tap a
+///   regular key. Driven by a `CGEventTap` in `HotkeyManager` which
 ///   intercepts the keystroke so the underlying character (e.g. "∂" for
 ///   ⌥D) isn't typed into the focused app.
 enum TriggerKey: String, Codable, CaseIterable, Identifiable {
     case fn
     case optionD
-    case optionQ
 
     var id: String { rawValue }
 
@@ -29,7 +28,6 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
     var comboKeyCode: UInt16? {
         switch self {
         case .optionD: return 2   // kVK_ANSI_D
-        case .optionQ: return 12  // kVK_ANSI_Q
         case .fn:      return nil
         }
     }
@@ -41,7 +39,7 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
     func isDown(in flags: NSEvent.ModifierFlags) -> Bool {
         switch self {
         case .fn: return flags.contains(.function)
-        case .optionD, .optionQ:
+        case .optionD:
             return flags.contains(.option)
         }
     }
@@ -54,7 +52,7 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
         var blocked: NSEvent.ModifierFlags = [.command, .control, .option]
         switch self {
         case .fn: break
-        case .optionD, .optionQ:
+        case .optionD:
             blocked.subtract(.option)
         }
         return blocked
@@ -65,7 +63,6 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .fn:      return "fn"
         case .optionD: return "⌥D"
-        case .optionQ: return "⌥Q"
         }
     }
 
@@ -74,13 +71,18 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .fn:      return "Fn (function key)"
         case .optionD: return "Option + D (⌥D)"
-        case .optionQ: return "Option + Q (⌥Q)"
         }
     }
 }
 
 struct AppSettings: Codable, Equatable {
+    /// Haiku post-processing on raw whisper output: dictionary terms,
+    /// filler removal, punctuation, self-correction handling.
     var llmRefinementEnabled: Bool = false
+    /// Hold trigger + Shift to send a spoken instruction to the LLM and
+    /// paste its response. Distinct from refinement so users can keep
+    /// raw transcription if the API misbehaves.
+    var aiModeEnabled: Bool = false
     var apiKey: String = ""
     var triggerKey: TriggerKey = .fn
     var soundEffectsEnabled: Bool = false
@@ -89,8 +91,17 @@ struct AppSettings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         llmRefinementEnabled = try container.decodeIfPresent(Bool.self, forKey: .llmRefinementEnabled) ?? false
+        // Default `aiModeEnabled` to whatever refinement was — pre-split
+        // installs only had one toggle, and AI mode previously required it.
+        aiModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .aiModeEnabled) ?? llmRefinementEnabled
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
-        triggerKey = try container.decodeIfPresent(TriggerKey.self, forKey: .triggerKey) ?? .fn
+        // Migrate retired triggers (e.g. .optionQ) to the default rather
+        // than failing the whole settings decode.
+        if let stored = try? container.decode(TriggerKey.self, forKey: .triggerKey) {
+            triggerKey = stored
+        } else {
+            triggerKey = .fn
+        }
         soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
     }
 }

@@ -142,9 +142,9 @@ class AppState: ObservableObject {
         guard !isInstructionMode else { return }
 
         let settings = store.settings
-        // Require API key + LLM enabled, just like a fresh instruction-mode start
+        // Require API key + AI mode enabled, just like a fresh AI-mode start
         guard !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              settings.llmRefinementEnabled else { return }
+              settings.aiModeEnabled else { return }
 
         isInstructionMode = true
         startClipboardWatching()
@@ -297,15 +297,17 @@ class AppState: ObservableObject {
         isInstructionMode = instruction
 
         if instruction {
-            // In instruction mode, require API key + LLM to be configured
+            // AI mode requires API key + the AI-mode toggle. Refinement
+            // is independent — users may want raw transcription but still
+            // use AI mode, or vice versa.
             let settings = store.settings
             if settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 state = .error(message: "Add API key in Settings first")
                 autoDismiss(after: 3)
                 return
             }
-            guard settings.llmRefinementEnabled else {
-                state = .error(message: "Enable LLM refinement in Settings first")
+            guard settings.aiModeEnabled else {
+                state = .error(message: "Enable AI mode in Settings first")
                 autoDismiss(after: 3)
                 return
             }

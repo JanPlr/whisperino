@@ -81,10 +81,13 @@ private struct GeneralTab: View {
                 ShortcutRow(keys: "esc", label: "Cancel")
             }
 
-            // MARK: Langdock API — gates AI features, so positioned before
-            // the AI explainer
+            // MARK: AI capabilities — API key + the two toggles it gates,
+            // grouped together so the dependency is obvious. Either toggle
+            // can be flipped off independently if the API misbehaves;
+            // raw transcription keeps working.
             Section {
-                SectionHeader("Langdock API")
+                SectionHeader("AI capabilities (Langdock)")
+
                 HStack {
                     if showAPIKey {
                         TextField("Paste API key", text: $store.settings.apiKey)
@@ -96,17 +99,18 @@ private struct GeneralTab: View {
                     Button(showAPIKey ? "Hide" : "Show") { showAPIKey.toggle() }
                         .buttonStyle(.borderless)
                 }
-
-                Toggle("Clean up dictations with Claude Haiku", isOn: $store.settings.llmRefinementEnabled)
-                    .disabled(!hasAPIKey)
-                Text("Removes filler words, adds punctuation, applies your dictionary, handles self-corrections.")
+                Text("Without a key, transcription falls back to raw whisper output — no Haiku enhancement, no AI mode.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
 
-            // MARK: AI mode explainer — informational, last
-            Section {
-                SectionHeader("How AI mode works")
+                Toggle("Enhance dictations with Claude Haiku", isOn: $store.settings.llmRefinementEnabled)
+                    .disabled(!hasAPIKey)
+                Text("Removes filler words, adds punctuation, applies your dictionary, handles self-corrections on the normal transcription.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("AI mode (\(triggerLabel) + Shift)", isOn: $store.settings.aiModeEnabled)
+                    .disabled(!hasAPIKey)
                 Text("Hold **\(triggerLabel) + Shift** (or add Shift while already dictating) → speak → **Cmd+C** any text or image to attach as context → tap **\(triggerLabel)** or press **Return** to submit. Claude generates a response and pastes it inline.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -114,10 +118,18 @@ private struct GeneralTab: View {
         }
         .formStyle(.grouped)
         .padding(.vertical, 8)
-        .onChange(of: store.settings.apiKey) {
-            // Auto-disable refinement if API key is cleared
-            if !hasAPIKey && store.settings.llmRefinementEnabled {
+        .onChange(of: store.settings.apiKey) { oldValue, newValue in
+            let hadKey = !oldValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasKey = !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !hadKey && hasKey {
+                // First key paste — opt the user into the full AI experience.
+                // They can flip either off if the API misbehaves.
+                store.settings.llmRefinementEnabled = true
+                store.settings.aiModeEnabled = true
+            } else if hadKey && !hasKey {
+                // Key cleared — nothing to call, switch off both.
                 store.settings.llmRefinementEnabled = false
+                store.settings.aiModeEnabled = false
             }
         }
     }

@@ -127,7 +127,6 @@ struct OverlayView: View {
             .frame(width: (!cancelled && (hasAttachments || appState.showingInputPicker)) ? 300 : nil)
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 4)
             .overlay(
                 Group {
                     if cancelled {
@@ -311,7 +310,7 @@ struct OverlayView: View {
 
             Text(appState.isAgentMode
                 ? "\(appState.activeAgentName ?? "Agent") responded"
-                : appState.isInstructionMode ? "Generated" : "Copied to clipboard")
+                : appState.isInstructionMode ? "Generated" : "Saved transcription")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.75))
         }
@@ -346,7 +345,6 @@ private extension View {
             .padding(.vertical, 10)
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 4)
             .overlay(
                 Group {
                     if instruction {

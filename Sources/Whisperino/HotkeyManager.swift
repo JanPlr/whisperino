@@ -15,10 +15,10 @@ import Foundation
 /// 4. **Esc / Return** — cancel / submit while recording.
 ///
 /// The trigger is configurable in Settings. Two flavours:
-/// - **Modifier-only** (Fn, Right ⌥, etc.) — driven by `flagsChanged`.
-/// - **Modifier + key combo** (⌥D, ⌥Space, ⌥Q) — driven by a `CGEventTap`
-///   that intercepts the keystroke so the underlying character (e.g. "∂"
-///   for ⌥D) isn't typed into the focused app.
+/// - **Modifier-only** (Fn) — driven by `flagsChanged`.
+/// - **Modifier + key combo** (⌥D) — driven by a `CGEventTap` that
+///   intercepts the keystroke so the underlying character (e.g. "∂" for
+///   ⌥D) isn't typed into the focused app.
 class HotkeyManager {
     static let shared = HotkeyManager()
 

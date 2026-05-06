@@ -28,13 +28,21 @@ class OverlayPanel {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
-        panel.animationBehavior = .utilityWindow
+        // `.none` — we run our own alpha fade in present()/dismiss(). The
+        // default `.utilityWindow` adds a separate OS-level fade that
+        // overlaps ours and shows a faint gray rectangle for a frame or
+        // two until both animations settle.
+        panel.animationBehavior = .none
 
         let hostingView = NSHostingView(
             rootView: OverlayView(appState: appState)
         )
         hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = .clear
+        // `nil`, not `.clear` — `.clear` is still a CGColor (transparent
+        // black) and on some macOS versions composites as a one-pixel
+        // gray fringe under the SwiftUI shadow. `nil` means "no layer
+        // background at all" which is what we actually want.
+        hostingView.layer?.backgroundColor = nil
         hostingView.layer?.isOpaque = false
         panel.contentView = hostingView
 

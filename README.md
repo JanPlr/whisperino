@@ -52,7 +52,7 @@ If you've configured agents in Settings → Agents, mention an agent's name duri
 
 Click the menu bar icon → **Settings**.
 
-- **General**: launch at login · sound effects · **trigger key** (Fn · ⌥D · ⌥Q) · API key · LLM refinement toggle
+- **General**: launch at login · sound effects · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
 - **Dictionary**: terms the LLM should always spell correctly (`Langdock` or `langdonk = Langdock` mappings)
 - **Snippets**: reusable text blocks
 - **History**: last 50 transcriptions
@@ -74,7 +74,7 @@ After rebuilding, re-toggle Accessibility (off → on) since the code signature 
 
 ## Troubleshooting
 
-- **Fn key doesn't trigger anything** — System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D or ⌥Q.
+- **Fn key doesn't trigger anything** — System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D.
 - **Paste doesn't work** — re-toggle Accessibility for Whisperino (off → on) after each rebuild.
 - **App doesn't appear in Accessibility list** — launch it first (`open /Applications/Whisperino.app`), then check.
 
