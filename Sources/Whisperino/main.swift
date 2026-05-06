@@ -17,13 +17,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             onInstructionToggle: { [weak self] in self?.appState.instructionHotkeyToggle() },
             onUpgradeToInstruction: { [weak self] in self?.appState.upgradeToInstructionMode() },
             onCancel: { [weak self] in self?.appState.cancelRecording() },
+            onSubmit: { [weak self] in self?.appState.submitOrFinish() },
             isRecording: { [weak self] in
                 guard let state = self?.appState.state else { return false }
                 switch state {
                 case .recording, .paused: return true
                 default: return false
                 }
-            }
+            },
+            isChatActive: { [weak self] in self?.appState.isChatActive ?? false }
         )
     }
 }

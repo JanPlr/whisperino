@@ -34,6 +34,63 @@ enum AgentPhase: Equatable {
             return "Generating response\u{2026}"
         }
     }
+
+    /// SF Symbol that represents this phase in the chat step timeline.
+    /// Tool names from the agent API arrive in snake_case (`web_search`)
+    /// or camelCase (`webSearch`) depending on the backend revision —
+    /// normalising to a key without separators lets one switch handle
+    /// both shapes.
+    var stepIcon: String {
+        switch self {
+        case .uploadingAttachments: return "paperclip"
+        case .thinking: return "brain"
+        case .toolCall(let name):
+            switch Self.normalizedToolKey(name) {
+            case "websearch", "search", "browse", "browsing": return "globe"
+            case "openurl", "fetchurl", "url", "browser": return "link"
+            case "dataanalyst", "codeinterpreter": return "chart.bar"
+            case "imagegeneration", "imagegen": return "photo"
+            case "canvas": return "rectangle.and.pencil.and.ellipsis"
+            case "readfile", "filereader": return "doc.text"
+            default: return "hammer"
+            }
+        case .readingDocuments: return "doc.text"
+        case .generating: return "sparkle"
+        }
+    }
+
+    /// Title-case label for the step timeline. No trailing ellipsis —
+    /// the timeline visualises in-flight vs. completed via icon state,
+    /// not punctuation.
+    var stepTitle: String {
+        switch self {
+        case .uploadingAttachments: return "Uploading attachments"
+        case .thinking: return "Thinking"
+        case .toolCall(let name):
+            switch Self.normalizedToolKey(name) {
+            case "websearch", "search", "browse", "browsing": return "Searching the web"
+            case "openurl", "fetchurl", "url", "browser": return "Opening link"
+            case "dataanalyst", "codeinterpreter": return "Analyzing data"
+            case "imagegeneration", "imagegen": return "Generating image"
+            case "canvas": return "Working on canvas"
+            case "readfile", "filereader": return "Reading file"
+            default:
+                let pretty = name
+                    .replacingOccurrences(of: "_", with: " ")
+                    .replacingOccurrences(of: "-", with: " ")
+                return "Using \(pretty)"
+            }
+        case .readingDocuments: return "Reading documents"
+        case .generating: return "Generating response"
+        }
+    }
+
+    private static func normalizedToolKey(_ name: String) -> String {
+        name.lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
 }
 
 struct AgentClient {
@@ -156,12 +213,12 @@ struct AgentClient {
             }
         }
 
-        // Strip Langdock citation markers like 【...】
-        let cleaned = collectedText.replacingOccurrences(
-            of: "【[^】]*】",
-            with: "",
-            options: .regularExpression
-        )
+        // Strip Langdock citation markers like 【...】 *and* common
+        // markdown that the agent occasionally emits — we render plain
+        // text only, and pasted output should also be markdown-free.
+        let cleaned = collectedText
+            .replacingOccurrences(of: "【[^】]*】", with: "", options: .regularExpression)
+            .strippedMarkdown
         let result = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else {
             throw AgentError.emptyResponse

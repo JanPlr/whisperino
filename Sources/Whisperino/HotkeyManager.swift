@@ -26,7 +26,9 @@ class HotkeyManager {
     private var onInstructionToggle: (() -> Void)?
     private var onUpgradeToInstruction: (() -> Void)?
     private var onCancel: (() -> Void)?
+    private var onSubmit: (() -> Void)?
     private var isRecordingCheck: (() -> Bool)?
+    private var isChatActiveCheck: (() -> Bool)?
 
     // Modifier flag monitors
     private var flagsMonitor: Any?
@@ -75,13 +77,17 @@ class HotkeyManager {
         onInstructionToggle: @escaping () -> Void,
         onUpgradeToInstruction: @escaping () -> Void,
         onCancel: @escaping () -> Void,
-        isRecording: @escaping () -> Bool
+        onSubmit: @escaping () -> Void,
+        isRecording: @escaping () -> Bool,
+        isChatActive: @escaping () -> Bool
     ) {
         self.onToggle = onToggle
         self.onInstructionToggle = onInstructionToggle
         self.onUpgradeToInstruction = onUpgradeToInstruction
         self.onCancel = onCancel
+        self.onSubmit = onSubmit
         self.isRecordingCheck = isRecording
+        self.isChatActiveCheck = isChatActive
         installFlagsMonitor()
         installKeyMonitor()
         installEventTap()
@@ -120,10 +126,14 @@ class HotkeyManager {
 
     @discardableResult
     private func handleKeyDown(_ event: NSEvent) -> Bool {
-        guard isRecordingCheck?() == true else { return false }
+        // Listen to Esc/Enter while *either* a recording is in flight
+        // or the chat overlay is open (the chat-idle case).
+        let recording = isRecordingCheck?() == true
+        let chatActive = isChatActiveCheck?() == true
+        guard recording || chatActive else { return false }
         switch event.keyCode {
-        case 36, 76: // Return, Enter (numpad)
-            DispatchQueue.main.async { [weak self] in self?.onToggle?() }
+        case 36, 76: // Return, Enter (numpad) → submit (recording) / finish (chat)
+            DispatchQueue.main.async { [weak self] in self?.onSubmit?() }
             return true
         case 53: // Escape
             DispatchQueue.main.async { [weak self] in self?.onCancel?() }

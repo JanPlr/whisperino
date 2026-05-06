@@ -28,6 +28,36 @@ struct AttachedContext: Identifiable {
     let preview: String
 }
 
+/// One entry in an AI-mode conversation. Ephemeral — never persisted —
+/// so we can keep `NSImage` references in attachments without worrying
+/// about Codable.
+struct ChatTurn: Identifiable {
+    enum Role { case user, assistant }
+    let id = UUID()
+    let role: Role
+    var text: String
+    /// True while tokens are still streaming in. Lets the UI render a
+    /// blinking caret and disables interactions on the in-flight bubble.
+    var isStreaming: Bool = false
+    /// User-side only. Captured at submit time so the bubble can show
+    /// what was attached for that turn.
+    var attachments: [AttachedContext] = []
+    /// Assistant-side, agent runs only. Each entry is one step the
+    /// agent went through (web search, data analysis, …). Rendered as
+    /// a tiny timeline above the final text in the bubble.
+    var agentSteps: [AgentStepEvent] = []
+}
+
+/// One row in the agent step timeline. `completed` flips to true when
+/// the agent moves on to the next step. Carries both the SF Symbol the
+/// UI should render and a human title (no trailing dots, title-case).
+struct AgentStepEvent: Identifiable, Equatable {
+    let id = UUID()
+    let icon: String
+    let title: String
+    var completed: Bool = false
+}
+
 class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
@@ -61,6 +91,23 @@ class AppState: ObservableObject {
     /// Number of bars shown in the waveform display.
     static let waveformBarCount = 9
 
+    // MARK: - Chat (AI mode multi-turn)
+
+    /// All turns in the current AI-mode conversation. Empty = no chat
+    /// active. Adding to this opens the chat overlay; clearing closes it.
+    @Published var chatHistory: [ChatTurn] = []
+
+    /// True when an assistant turn is being streamed. Used for the
+    /// "generating" indicator under the chat bubbles.
+    @Published var isStreamingResponse: Bool = false
+
+    /// Convenience: chat is active iff any turns exist.
+    var isChatActive: Bool { !chatHistory.isEmpty }
+
+    /// 20s after the last activity, the chat auto-dismisses.
+    private var chatIdleTimer: Timer?
+    private static let chatIdleTimeout: TimeInterval = 20
+
     private(set) var lastTranscriptionResult: String?
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
@@ -82,6 +129,11 @@ class AppState: ObservableObject {
     /// clicks on the paperclip.
     private var clipboardWatchTimer: Timer?
     private var clipboardBaselineChangeCount: Int = 0
+    /// While we're driving the pasteboard ourselves (auto-paste of an
+    /// AI reply, restore of the user's prior clipboard), the watcher
+    /// must ignore the resulting changes — otherwise our own paste
+    /// gets captured as a context chip on the next turn.
+    private var clipboardWatchSuppressed: Bool = false
 
     var isSetUp: Bool { transcriber.isAvailable }
 
@@ -125,7 +177,14 @@ class AppState: ObservableObject {
     // MARK: - Hotkey handlers
 
     func hotkeyToggle() {
-        toggleRecording(instruction: false)
+        // While a chat is active, a bare trigger press continues the
+        // existing AI conversation rather than starting a fresh raw
+        // dictation. Saves the user from holding Shift on every turn.
+        if isChatActive {
+            toggleRecording(instruction: true)
+        } else {
+            toggleRecording(instruction: false)
+        }
     }
 
     func instructionHotkeyToggle() {
@@ -189,6 +248,19 @@ class AppState: ObservableObject {
     // MARK: - Cancel
 
     func cancelRecording() {
+        // Esc with chat open and no recording = close the conversation.
+        // Have to branch here so cancelRecording stays the single Esc
+        // sink — the alternative is forking the hotkey wiring per-state.
+        let isRecordingNow: Bool
+        switch state {
+        case .recording, .paused: isRecordingNow = true
+        default: isRecordingNow = false
+        }
+        if !isRecordingNow && isChatActive {
+            closeChat()
+            return
+        }
+
         showingInputPicker = false
         stopClipboardWatching()
         if let url = recorder.stop() {
@@ -200,7 +272,25 @@ class AppState: ObservableObject {
         recordingTargetPID = nil
         resetInstructionMode()
 
-        state = .cancelled
+        // Don't show the cancel-flash animation when a chat is up — it
+        // collides visually with the bubbles. Just go back to chat-idle.
+        if isChatActive {
+            state = .idle
+            bumpChatIdleTimer()
+        } else {
+            state = .cancelled
+        }
+    }
+
+    /// Enter / "finish" gesture. While recording, submits the current
+    /// take. While chat-idle, closes the chat (the user is done).
+    func submitOrFinish() {
+        switch state {
+        case .recording, .paused:
+            stopRecording()
+        default:
+            if isChatActive { closeChat() }
+        }
     }
 
     // MARK: - Waveform sampling
@@ -272,7 +362,7 @@ class AppState: ObservableObject {
         clipboardBaselineChangeCount = NSPasteboard.general.changeCount
         clipboardWatchTimer?.invalidate()
         clipboardWatchTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
+            guard let self = self, !self.clipboardWatchSuppressed else { return }
             let current = NSPasteboard.general.changeCount
             guard current > self.clipboardBaselineChangeCount else { return }
             self.clipboardBaselineChangeCount = current
@@ -283,6 +373,101 @@ class AppState: ObservableObject {
     private func stopClipboardWatching() {
         clipboardWatchTimer?.invalidate()
         clipboardWatchTimer = nil
+    }
+
+    // MARK: - Chat lifecycle
+
+    /// Tear down the chat conversation and dismiss the overlay. Used by
+    /// Esc, the X button, Enter while chat-idle, and the idle timeout.
+    func closeChat() {
+        chatIdleTimer?.invalidate()
+        chatIdleTimer = nil
+
+        // If a recording is in flight, stop the recorder silently — we're
+        // tearing the whole UI down, no need for the cancel-flash animation.
+        switch state {
+        case .recording, .paused:
+            showingInputPicker = false
+            if let url = recorder.stop() {
+                try? FileManager.default.removeItem(at: url)
+            }
+            stopWaveformSampling()
+            audioLevel = 0
+            recordingStartTime = nil
+            recordingTargetPID = nil
+        default:
+            break
+        }
+
+        chatHistory.removeAll()
+        isStreamingResponse = false
+        // Chat is the lifecycle owner of clipboard watching during AI
+        // sessions — when chat ends, watching ends. Random Cmd+Cs after
+        // the user closes shouldn't accumulate as attachments.
+        stopClipboardWatching()
+        resetInstructionMode()
+        state = .idle
+    }
+
+    /// Restart the 20s idle countdown. Called whenever the user
+    /// interacts with the chat (new turn, hover ends, etc.).
+    func bumpChatIdleTimer() {
+        chatIdleTimer?.invalidate()
+        guard isChatActive else { return }
+        chatIdleTimer = Timer.scheduledTimer(withTimeInterval: Self.chatIdleTimeout, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async { self?.closeChat() }
+        }
+    }
+
+    /// Pause the idle countdown without rescheduling. Used while the
+    /// user is hovering the panel (reading / scrolling) — they're
+    /// engaged, so we shouldn't tick toward auto-close.
+    func pauseChatIdleTimer() {
+        chatIdleTimer?.invalidate()
+        chatIdleTimer = nil
+    }
+
+    /// Append (or de-dup) an agent step on the most recent assistant
+    /// turn. Each phase change from `AgentClient.onStatusUpdate` flows
+    /// through here so the bubble can render a tool-call timeline.
+    fileprivate func appendAgentStep(phase: AgentPhase) {
+        guard let lastIdx = chatHistory.indices.last,
+              chatHistory[lastIdx].role == .assistant else { return }
+
+        // "Thinking" is too generic to deserve a row — every phase
+        // change between tool calls would emit one and the timeline
+        // would be all thinking.
+        if case .thinking = phase { return }
+
+        // "Generating response" is the moment the assistant starts
+        // producing the answer — the answer text appearing IS the
+        // signal, so a separate row would just clutter the timeline.
+        // We still need to mark the previous tool call as completed so
+        // it stops pulsing, even though we don't add a row.
+        if case .generating = phase {
+            if !chatHistory[lastIdx].agentSteps.isEmpty {
+                let prev = chatHistory[lastIdx].agentSteps.count - 1
+                chatHistory[lastIdx].agentSteps[prev].completed = true
+            }
+            return
+        }
+
+        let title = phase.stepTitle
+        if let last = chatHistory[lastIdx].agentSteps.last, last.title == title {
+            // Same phase fired twice — ignore the duplicate.
+            return
+        }
+
+        // Mark the previous step done before adding the next so the UI
+        // can render a clean "→ done → in-progress" sequence.
+        if !chatHistory[lastIdx].agentSteps.isEmpty {
+            let prev = chatHistory[lastIdx].agentSteps.count - 1
+            chatHistory[lastIdx].agentSteps[prev].completed = true
+        }
+
+        chatHistory[lastIdx].agentSteps.append(
+            AgentStepEvent(icon: phase.stepIcon, title: title)
+        )
     }
 
     // MARK: - Recording
@@ -311,8 +496,19 @@ class AppState: ObservableObject {
                 autoDismiss(after: 3)
                 return
             }
-            // Reset attachments from any previous session
-            clearAllAttachments()
+            // Fresh AI session resets stale attachments. A chat already
+            // in flight keeps whatever the user pre-attached via Cmd+C
+            // between turns — those count as context for *this* turn.
+            if !isChatActive {
+                clearAllAttachments()
+            }
+        }
+
+        // Recording counts as activity — pause the chat idle countdown so
+        // a slow speaker doesn't get the conversation closed under them.
+        if isChatActive {
+            chatIdleTimer?.invalidate()
+            chatIdleTimer = nil
         }
 
         // Capture the frontmost app so we can re-activate it before pasting
@@ -345,7 +541,13 @@ class AppState: ObservableObject {
 
     private func stopRecording() {
         showingInputPicker = false
-        stopClipboardWatching()
+        // Instruction mode means a chat will (or already does) carry
+        // forward — keep clipboard watching alive so the user can
+        // pre-attach context for the next turn between recordings.
+        // Plain dictation has no notion of follow-up, so it stops.
+        if !isInstructionMode {
+            stopClipboardWatching()
+        }
         guard let audioURL = recorder.stop() else {
             stopWaveformSampling()
             resetInstructionMode()
@@ -369,6 +571,11 @@ class AppState: ObservableObject {
 
         let instructionMode = isInstructionMode
         let attachments = attachedContexts
+        // Snapshot history *before* this turn — drives both the API call
+        // (Anthropic Messages format wants prior turns ordered chronologically)
+        // and the auto-paste decision (only paste if this is the first turn).
+        let preChatHistory = chatHistory
+        let isFirstChatTurn = preChatHistory.isEmpty
 
         // Delay clearing attachments so the content cross-fades first,
         // then the panel smoothly collapses to its base height
@@ -382,9 +589,16 @@ class AppState: ObservableObject {
 
                 guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     await MainActor.run {
-                        self.state = .error(message: "No speech detected")
-                        self.resetInstructionMode()
-                        self.autoDismiss(after: 2)
+                        if !self.isChatActive {
+                            self.state = .error(message: "No speech detected")
+                            self.resetInstructionMode()
+                            self.autoDismiss(after: 2)
+                        } else {
+                            // Chat is open — silently drop the empty take.
+                            self.resetInstructionMode()
+                            self.state = .idle
+                            self.bumpChatIdleTimer()
+                        }
                     }
                     return
                 }
@@ -393,64 +607,179 @@ class AppState: ObservableObject {
                     self.state = .refining
                 }
 
-                let finalText: String
                 let settings = store.settings
 
-                if instructionMode, !settings.apiKey.isEmpty, let match = await detectAgent(in: rawText, apiKey: settings.apiKey) {
-                    // Agent mode: route to Langdock Agent API with streaming
+                // Agent path: only on the *first* turn, since agents own
+                // their own conversation semantics. Once we're in a Claude
+                // chat we don't suddenly hand over to an agent mid-thread.
+                // Renders inside the chat panel — user bubble, then a
+                // small step timeline (web search, data analysis, …)
+                // that resolves into the final text bubble.
+                if instructionMode, isFirstChatTurn, !settings.apiKey.isEmpty,
+                   let match = await detectAgent(in: rawText, apiKey: settings.apiKey) {
                     await MainActor.run {
+                        let userTurn = ChatTurn(role: .user, text: match.cleanedText, attachments: attachments)
+                        let assistantTurn = ChatTurn(role: .assistant, text: "", isStreaming: true)
+                        self.chatHistory.append(userTurn)
+                        self.chatHistory.append(assistantTurn)
+                        self.isStreamingResponse = true
                         self.isAgentMode = true
                         self.activeAgentName = match.agent.name
-                        self.agentStatus = AgentPhase.thinking.displayText
+                        self.chatIdleTimer?.invalidate()
+                        self.chatIdleTimer = nil
                     }
-                    finalText = try await agentClient.execute(
+
+                    let finalText = try await agentClient.execute(
                         agentId: match.agent.agentId,
                         userMessage: match.cleanedText,
                         attachments: attachments,
                         apiKey: settings.apiKey,
                         onStatusUpdate: { [weak self] phase in
-                            let text = phase.displayText
                             DispatchQueue.main.async { [weak self] in
-                                self?.agentStatus = text
+                                self?.appendAgentStep(phase: phase)
                             }
                         }
                     )
+
+                    await MainActor.run {
+                        if let lastIdx = self.chatHistory.indices.last,
+                           self.chatHistory[lastIdx].role == .assistant {
+                            // Mark the trailing step as completed before
+                            // flipping the bubble out of streaming mode.
+                            if !self.chatHistory[lastIdx].agentSteps.isEmpty {
+                                let stepIdx = self.chatHistory[lastIdx].agentSteps.count - 1
+                                self.chatHistory[lastIdx].agentSteps[stepIdx].completed = true
+                            }
+                            self.chatHistory[lastIdx].text = finalText
+                            self.chatHistory[lastIdx].isStreaming = false
+                        }
+                        self.isStreamingResponse = false
+
+                        // Same close-mid-stream guard as the Claude path.
+                        guard self.isChatActive else { return }
+
+                        self.lastTranscriptionResult = finalText
+                        self.store.addTranscript(finalText, isInstruction: true)
+
+                        // First turn → auto-paste once, then stay in chat
+                        // so the user can iterate (the iteration goes back
+                        // to plain Claude, since agent runs are one-shot).
+                        self.state = .result(text: finalText)
+                        self.insertResult(finalText)
+                        self.state = .idle
+                        self.bumpChatIdleTimer()
+                    }
                 } else if instructionMode {
-                    // Instruction mode: send spoken text as instructions to LLM
+                    // Chat path: append user turn + streaming assistant turn,
+                    // mutate the assistant turn's text as deltas arrive, then
+                    // either paste-and-stay (first turn) or just stay (later).
+                    await MainActor.run {
+                        let userTurn = ChatTurn(role: .user, text: rawText, attachments: attachments)
+                        let assistantTurn = ChatTurn(role: .assistant, text: "", isStreaming: true)
+                        self.chatHistory.append(userTurn)
+                        self.chatHistory.append(assistantTurn)
+                        self.isStreamingResponse = true
+                        // Pause the idle timer while the model is generating.
+                        self.chatIdleTimer?.invalidate()
+                        self.chatIdleTimer = nil
+                    }
+
                     let terms = store.dictionary.map { $0.term }
                     let snips = store.snippets.map { (name: $0.name, text: $0.text) }
-                    finalText = try await refiner.instruct(
-                        transcription: rawText,
+                    let finalText = try await refiner.instructConversation(
+                        history: preChatHistory,
+                        newTurnText: rawText,
+                        newTurnAttachments: attachments,
                         apiKey: settings.apiKey,
-                        attachments: attachments,
                         dictionaryTerms: terms,
-                        snippets: snips
+                        snippets: snips,
+                        onChunk: { [weak self] fullStrippedText in
+                            // The refiner hands us the full accumulated
+                            // text (markdown-stripped) on every tick, so
+                            // we replace rather than append. This avoids
+                            // a brief flash of raw `**bold**` while
+                            // partial chunks haven't yet closed their
+                            // delimiters.
+                            DispatchQueue.main.async {
+                                guard let self = self else { return }
+                                guard let lastIdx = self.chatHistory.indices.last,
+                                      self.chatHistory[lastIdx].role == .assistant,
+                                      self.chatHistory[lastIdx].isStreaming else { return }
+                                self.chatHistory[lastIdx].text = fullStrippedText
+                            }
+                        }
                     )
-                } else if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
-                    // Transcription mode: clean up speech
-                    do {
-                        let terms = store.dictionary.map { $0.term }
-                        finalText = try await refiner.refine(
-                            text: rawText,
-                            apiKey: settings.apiKey,
-                            dictionaryTerms: terms
-                        )
-                    } catch {
-                        finalText = rawText
+
+                    await MainActor.run {
+                        // Replace with the trimmed final text (chunks may
+                        // have left whitespace at the edges) and clear
+                        // the streaming flag.
+                        if let lastIdx = self.chatHistory.indices.last,
+                           self.chatHistory[lastIdx].role == .assistant {
+                            self.chatHistory[lastIdx].text = finalText
+                            self.chatHistory[lastIdx].isStreaming = false
+                        }
+                        self.isStreamingResponse = false
+
+                        // Bail out if the user closed the chat mid-stream
+                        // (Esc / X). closeChat already cleared chatHistory
+                        // and set state to .idle — don't paste after the
+                        // user just told us they're done.
+                        guard self.isChatActive else { return }
+
+                        self.lastTranscriptionResult = finalText
+                        self.store.addTranscript(finalText, isInstruction: true)
+
+                        if isFirstChatTurn {
+                            // First reply pastes once into the focused app —
+                            // the user can keep iterating in the chat to
+                            // refine, but we don't keep stamping new pastes.
+                            self.state = .result(text: finalText)
+                            self.insertResult(finalText)
+                        } else {
+                            self.resetInstructionMode()
+                        }
+                        self.state = .idle
+                        self.bumpChatIdleTimer()
                     }
                 } else {
-                    finalText = rawText
-                }
+                    // Raw transcription (non-AI) path — Haiku cleanup if
+                    // enabled, paste, dismiss as before.
+                    let finalText: String
+                    if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
+                        do {
+                            let terms = store.dictionary.map { $0.term }
+                            finalText = try await refiner.refine(
+                                text: rawText,
+                                apiKey: settings.apiKey,
+                                dictionaryTerms: terms
+                            )
+                        } catch {
+                            finalText = rawText
+                        }
+                    } else {
+                        finalText = rawText
+                    }
 
-                await MainActor.run {
-                    self.lastTranscriptionResult = finalText
-                    self.store.addTranscript(finalText, isInstruction: instructionMode)
-                    self.state = .result(text: finalText)
-                    self.insertResult(finalText)
-                    self.startDismissSequence()
+                    await MainActor.run {
+                        self.lastTranscriptionResult = finalText
+                        self.store.addTranscript(finalText, isInstruction: false)
+                        self.state = .result(text: finalText)
+                        self.insertResult(finalText)
+                        self.startDismissSequence()
+                    }
                 }
             } catch {
                 await MainActor.run {
+                    // If a streaming assistant turn was added but never
+                    // completed, drop it so the chat doesn't show an
+                    // empty bubble next to an error.
+                    if let lastIdx = self.chatHistory.indices.last,
+                       self.chatHistory[lastIdx].role == .assistant,
+                       self.chatHistory[lastIdx].isStreaming {
+                        self.chatHistory.remove(at: lastIdx)
+                    }
+                    self.isStreamingResponse = false
                     self.resetInstructionMode()
                     self.state = .error(message: error.localizedDescription)
                     self.autoDismiss(after: 3)
@@ -464,7 +793,14 @@ class AppState: ObservableObject {
         isAgentMode = false
         agentStatus = nil
         activeAgentName = nil
-        clearAllAttachments()
+        // Don't wipe attachments when chat is open — the user may have
+        // pre-attached new clipboard items between turns and is waiting
+        // to send them in the next follow-up. The deferred clear in
+        // stopRecording handles consuming attachments for the current
+        // turn; we don't want a second clear stomping new ones.
+        if !isChatActive {
+            clearAllAttachments()
+        }
     }
 
     /// Check if the transcription mentions a configured agent.
@@ -566,12 +902,16 @@ class AppState: ObservableObject {
             return dict.isEmpty ? nil : dict
         } ?? []
 
+        // Mute the watcher across the entire paste-and-restore window
+        // so our own clipboard mutations don't get captured as chips.
+        clipboardWatchSuppressed = true
+
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         pasteClipboard()
 
         // Restore previous clipboard after paste completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             NSPasteboard.general.clearContents()
             for itemDict in savedItems {
                 let item = NSPasteboardItem()
@@ -580,6 +920,11 @@ class AppState: ObservableObject {
                 }
                 NSPasteboard.general.writeObjects([item])
             }
+            // Now that the dust has settled, snap the watcher's
+            // baseline forward and re-enable it. Anything the user
+            // copies after this point is a real attachment candidate.
+            self?.clipboardBaselineChangeCount = NSPasteboard.general.changeCount
+            self?.clipboardWatchSuppressed = false
         }
     }
 
@@ -617,6 +962,64 @@ class AppState: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(snippet.text, forType: .string)
         pasteClipboard()
+    }
+
+    /// Send `text` to the focused app via the clipboard, then restore
+    /// whatever was there. Used by the per-bubble "paste this version"
+    /// action so the user can commit a later iteration of an AI reply.
+    func pasteIntoTargetApp(_ text: String) {
+        // Re-activate the original target if we still know it. Otherwise
+        // paste into whatever is currently frontmost.
+        if let pid = recordingTargetPID,
+           let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate()
+        }
+
+        let savedItems = NSPasteboard.general.pasteboardItems?.compactMap { item -> [String: Data]? in
+            var dict = [String: Data]()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    dict[type.rawValue] = data
+                }
+            }
+            return dict.isEmpty ? nil : dict
+        } ?? []
+
+        // Same suppression dance as insertResult — our own pasteboard
+        // writes mustn't echo back as attachment chips.
+        clipboardWatchSuppressed = true
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        pasteClipboard()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            NSPasteboard.general.clearContents()
+            for itemDict in savedItems {
+                let item = NSPasteboardItem()
+                for (type, data) in itemDict {
+                    item.setData(data, forType: NSPasteboard.PasteboardType(type))
+                }
+                NSPasteboard.general.writeObjects([item])
+            }
+            self?.clipboardBaselineChangeCount = NSPasteboard.general.changeCount
+            self?.clipboardWatchSuppressed = false
+        }
+    }
+
+    /// Copy `text` to the system clipboard, no paste. Lightweight
+    /// counterpart to pasteIntoTargetApp for the chat bubble actions.
+    /// Same suppression dance as the auto-paste — if we don't mute the
+    /// watcher across our own write, the watcher's next tick captures
+    /// the copied text as a context chip on the next turn.
+    func copyToClipboard(_ text: String) {
+        clipboardWatchSuppressed = true
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.clipboardBaselineChangeCount = NSPasteboard.general.changeCount
+            self?.clipboardWatchSuppressed = false
+        }
     }
 
     private func autoDismiss(after seconds: Double) {

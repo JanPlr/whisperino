@@ -61,6 +61,63 @@ struct LLMRefiner {
         return try await sendStreaming(request: request)
     }
 
+    /// Multi-turn streaming variant. Past turns drive context, the new
+    /// user turn (transcription + attachments) is appended, the response
+    /// streams back through `onChunk` and the final assembled text is
+    /// returned. Used by the chat overlay so the UI can render tokens
+    /// progressively while still getting a final value to commit.
+    ///
+    /// Each historical user turn is re-sent with its original
+    /// attachments — Claude needs the images in-context to reason about
+    /// them on later turns, since the assistant's prior message doesn't
+    /// carry the image data forward.
+    func instructConversation(
+        history: [ChatTurn],
+        newTurnText: String,
+        newTurnAttachments: [AttachedContext],
+        apiKey: String,
+        dictionaryTerms: [String] = [],
+        snippets: [(name: String, text: String)] = [],
+        onChunk: @escaping @Sendable (String) -> Void
+    ) async throws -> String {
+        var request = URLRequest(url: endpoint, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let systemPrompt = buildInstructSystemPrompt(dictionaryTerms: dictionaryTerms, snippets: snippets)
+
+        // Convert each historical turn into the Anthropic Messages format,
+        // then append the in-flight user turn at the end.
+        var messages: [[String: Any]] = []
+        for turn in history {
+            let role = turn.role == .user ? "user" : "assistant"
+            let content: Any
+            if turn.role == .user {
+                content = buildMessageContent(transcription: turn.text, attachments: turn.attachments)
+            } else {
+                content = turn.text
+            }
+            messages.append(["role": role, "content": content])
+        }
+        messages.append([
+            "role": "user",
+            "content": buildMessageContent(transcription: newTurnText, attachments: newTurnAttachments)
+        ])
+
+        let body: [String: Any] = [
+            "model": instructModel,
+            "max_tokens": 4096,
+            "temperature": 0.5,
+            "stream": true,
+            "system": systemPrompt,
+            "messages": messages
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        return try await sendStreaming(request: request, onChunk: onChunk)
+    }
+
     /// Build the user message content from attachments + instruction.
     /// Returns a plain string when possible (text-only), or an array of content blocks when images are present.
     private func buildMessageContent(transcription: String, attachments: [AttachedContext]) -> Any {
@@ -139,7 +196,7 @@ struct LLMRefiner {
 
     // MARK: - Streaming request sender (Anthropic SSE format)
 
-    private func sendStreaming(request: URLRequest) async throws -> String {
+    private func sendStreaming(request: URLRequest, onChunk: (@Sendable (String) -> Void)? = nil) async throws -> String {
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
 
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -166,10 +223,18 @@ struct LLMRefiner {
                let delta = json["delta"] as? [String: Any],
                let text = delta["text"] as? String {
                 collectedText += text
+                // Hand the bubble the full stripped accumulated text on
+                // every tick — partial chunks of `**bold**` rendering
+                // raw asterisks during streaming would briefly look
+                // like an LLM that forgot to format. Re-stripping the
+                // whole string each tick is cheap.
+                onChunk?(collectedText.strippedMarkdown)
             }
         }
 
-        let result = collectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = collectedText
+            .strippedMarkdown
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else {
             throw RefinerError.parseError
         }
@@ -292,5 +357,59 @@ enum RefinerError: LocalizedError {
         case .httpError(let code): return "Langdock API error (HTTP \(code))"
         case .parseError: return "Failed to parse Langdock response"
         }
+    }
+}
+
+// MARK: - Markdown stripping
+
+extension String {
+    /// Strip the most common markdown syntax. The chat doesn't render
+    /// markdown and AI responses get pasted into plain-text contexts,
+    /// so leftover `**`/`#`/`` ` `` markers are noise either way.
+    var strippedMarkdown: String {
+        var result = self
+        // Bold and italic (`**xxx**`, `__xxx__`, `*xxx*`, `_xxx_`).
+        // Bold runs first so the inner italic regex doesn't eat the
+        // outer asterisks of a bold span.
+        result = result.replacingOccurrences(
+            of: #"\*\*([\s\S]+?)\*\*"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        result = result.replacingOccurrences(
+            of: #"__([\s\S]+?)__"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        result = result.replacingOccurrences(
+            of: #"(?<![\*\w])\*([^*\n]+?)\*(?![\*\w])"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        result = result.replacingOccurrences(
+            of: #"(?<![_\w])_([^_\n]+?)_(?![_\w])"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        // Inline code: `xxx` → xxx
+        result = result.replacingOccurrences(
+            of: #"`([^`\n]+)`"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        // Links: [text](url) → text
+        result = result.replacingOccurrences(
+            of: #"\[([^\]]+)\]\(([^)]+)\)"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        // Leading heading hashes: `## Title` → `Title`. The (?m) flag
+        // makes `^` match at every line start, not just the first.
+        result = result.replacingOccurrences(
+            of: #"(?m)^[ \t]*#{1,6}[ \t]+"#,
+            with: "",
+            options: .regularExpression
+        )
+        return result
     }
 }

@@ -207,12 +207,20 @@ class StatusBarController: NSObject, NSMenuDelegate {
         appState.$state
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
-                self?.updateStatusIcon(for: state)
+                guard let self = self else { return }
+                self.updateStatusIcon(for: state)
                 switch state {
                 case .idle:
-                    self?.overlayPanel.dismiss()
+                    // Chat-active idle = panel stays open showing the
+                    // conversation. Only dismiss when there's nothing to
+                    // show.
+                    if !self.appState.isChatActive {
+                        self.overlayPanel.dismiss()
+                    } else {
+                        self.overlayPanel.present()
+                    }
                 case .dismissing:
-                    self?.overlayPanel.dismiss()
+                    self.overlayPanel.dismiss()
                 case .cancelled:
                     // Let cancel animation play, then dismiss, then go idle
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in
@@ -228,7 +236,23 @@ class StatusBarController: NSObject, NSMenuDelegate {
                         }
                     }
                 default:
-                    self?.overlayPanel.present()
+                    self.overlayPanel.present()
+                }
+            }
+            .store(in: &cancellables)
+
+        // chat history opens / closes the panel independently of state
+        appState.$chatHistory
+            .map { !$0.isEmpty }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isOpen in
+                guard let self = self else { return }
+                if isOpen {
+                    self.overlayPanel.present()
+                } else if case .idle = self.appState.state {
+                    // Chat just closed *and* we're idle → take the panel down.
+                    self.overlayPanel.dismiss()
                 }
             }
             .store(in: &cancellables)

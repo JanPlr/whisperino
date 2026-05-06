@@ -46,18 +46,21 @@ class OverlayPanel {
         hostingView.layer?.isOpaque = false
         panel.contentView = hostingView
 
-        // Resize panel whenever attachments, picker visibility, or device count changes.
-        // Uses the exact same height formula as OverlayView.pickerExtraHeight.
-        cancellable = Publishers.CombineLatest3(
+        // Resize panel whenever attachments, picker visibility, device count,
+        // or chat state changes. Uses the exact same formula as
+        // OverlayView.panelContentHeight.
+        cancellable = Publishers.CombineLatest4(
             appState.$attachedContexts.map(\.count).removeDuplicates(),
             appState.$showingInputPicker.removeDuplicates(),
-            appState.$inputDevices.map(\.count).removeDuplicates()
+            appState.$inputDevices.map(\.count).removeDuplicates(),
+            appState.$chatHistory.map { !$0.isEmpty }.removeDuplicates()
         )
-        .sink { [weak self] attachmentCount, pickerShowing, deviceCount in
+        .sink { [weak self] attachmentCount, pickerShowing, deviceCount, chatActive in
             self?.updatePanelHeight(
                 attachmentCount: attachmentCount,
                 pickerShowing: pickerShowing,
-                deviceCount: deviceCount
+                deviceCount: deviceCount,
+                chatActive: chatActive
             )
         }
     }
@@ -107,7 +110,16 @@ class OverlayPanel {
         return 28 + CGFloat(count) * 26 + 12 + 1
     }
 
-    private func panelHeight(attachmentCount: Int, pickerShowing: Bool, deviceCount: Int) -> CGFloat {
+    /// Vertical space the chat scroll claims above the pill. Must match
+    /// `OverlayView.chatScrollHeight`.
+    private static let chatScrollHeight: CGFloat = 320
+
+    private func panelHeight(
+        attachmentCount: Int,
+        pickerShowing: Bool,
+        deviceCount: Int,
+        chatActive: Bool
+    ) -> CGFloat {
         var height = Self.baseHeight
         if attachmentCount > 0 {
             let rows = CGFloat(min(attachmentCount, AppState.maxAttachments)) * Self.rowHeight
@@ -118,15 +130,26 @@ class OverlayPanel {
         // open/close. SwiftUI handles the visual animation within the fixed panel.
         // This eliminates NSPanel ↔ SwiftUI animation desync entirely.
         height += Self.pickerExtraHeight(deviceCount: deviceCount)
+        // Chat is additive — when active, the scroll grows the panel
+        // upward, the pill stays at the bottom.
+        if chatActive {
+            height += Self.chatScrollHeight
+        }
         return height
     }
 
-    private func updatePanelHeight(attachmentCount: Int, pickerShowing: Bool, deviceCount: Int) {
+    private func updatePanelHeight(
+        attachmentCount: Int,
+        pickerShowing: Bool,
+        deviceCount: Int,
+        chatActive: Bool
+    ) {
         guard isVisible else { return }
         let newHeight = panelHeight(
             attachmentCount: attachmentCount,
             pickerShowing: pickerShowing,
-            deviceCount: deviceCount
+            deviceCount: deviceCount,
+            chatActive: chatActive
         )
         guard abs(panel.frame.height - newHeight) > 1 else { return }
 
@@ -141,12 +164,25 @@ class OverlayPanel {
             height: newHeight
         )
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = isCollapsing ? 0.35 : 0.25
-            context.timingFunction = CAMediaTimingFunction(
-                controlPoints: 0.25, 0.1, 0.25, 1.0
-            )
-            panel.animator().setFrame(newFrame, display: true)
+        if isCollapsing {
+            // Shrinking: SwiftUI's spring is animating the dark
+            // container down inside the panel. If we shrink the panel
+            // immediately we'd clip the in-flight spring. Wait for the
+            // spring to settle, then trim the (transparent) excess.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self = self,
+                      // Re-check size on fire — another resize may have
+                      // overtaken us in the meantime.
+                      abs(self.panel.frame.height - newHeight) > 1 else { return }
+                self.panel.setFrame(newFrame, display: true)
+            }
+        } else {
+            // Growing: snap the panel to the new size right away. The
+            // transparent area above the dark container is invisible,
+            // so the user sees only SwiftUI's spring expanding the
+            // pill — same feel as the input device picker, which
+            // doesn't resize the panel either.
+            panel.setFrame(newFrame, display: true)
         }
     }
 
