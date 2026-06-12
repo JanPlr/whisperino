@@ -7,6 +7,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppState.ensureAccessibility()
+        // Surface recordings orphaned by a crash / force-quit mid-dictation
+        // as recoverable History entries. Must run before the first
+        // recording so the in-flight file isn't misread as an orphan.
+        SettingsStore.shared.recoverOrphanedRecordings()
         // Pre-request microphone permission so the first recording attempt isn't
         // interrupted by the macOS permission dialog mid-press
         AVCaptureDevice.requestAccess(for: .audio) { _ in }

@@ -118,6 +118,27 @@ class AppState: ObservableObject {
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
 
+    /// Text surrounding the insertion point of the focused field,
+    /// captured (via Accessibility) when recording starts. Handed to the
+    /// refiner so the cleanup can continue an existing sentence with
+    /// matching case, language, and tone.
+    private var recordingFieldContext: String?
+
+    /// Apps that mangle long pastes: terminals collapse multi-line input
+    /// into "[Pasted N lines]" (Claude Code, Codex) or hide it behind
+    /// bracketed paste. For these we synthesize keystrokes instead so the
+    /// dictated text stays visible and editable.
+    private static let terminalBundleIDs: Set<String> = [
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "dev.warp.Warp-Stable",
+        "com.github.wez.wezterm",
+        "net.kovidgoyal.kitty",
+        "co.zeit.hyper",
+        "com.mitchellh.ghostty",
+        "org.alacritty",
+    ]
+
     /// Drives the waveform's rolling history. The rightmost bar tracks
     /// audio level in real-time via the recorder callback; this timer just
     /// shifts the value into history at a fixed cadence so the wave
@@ -264,7 +285,7 @@ class AppState: ObservableObject {
         showingInputPicker = false
         stopClipboardWatching()
         if let url = recorder.stop() {
-            try? FileManager.default.removeItem(at: url)
+            preserveOrDiscard(recordingAt: url, reason: "Cancelled — tap Retry to transcribe")
         }
         stopWaveformSampling()
         audioLevel = 0
@@ -389,7 +410,7 @@ class AppState: ObservableObject {
         case .recording, .paused:
             showingInputPicker = false
             if let url = recorder.stop() {
-                try? FileManager.default.removeItem(at: url)
+                preserveOrDiscard(recordingAt: url, reason: "Cancelled — tap Retry to transcribe")
             }
             stopWaveformSampling()
             audioLevel = 0
@@ -514,6 +535,18 @@ class AppState: ObservableObject {
         // Capture the frontmost app so we can re-activate it before pasting
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
 
+        // Snapshot the focused field's text now, while it's still focused —
+        // by paste time focus may have moved. Refinement-only feature, so
+        // skip the AX round-trip when it can't be used.
+        recordingFieldContext = nil
+        if !instruction {
+            let settings = store.settings
+            if settings.llmRefinementEnabled, settings.contextAwarenessEnabled,
+               !settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                recordingFieldContext = FieldContext.read()
+            }
+        }
+
         do {
             try recorder.start(deviceID: selectedInputDevice?.id) { [weak self] level in
                 DispatchQueue.main.async {
@@ -571,6 +604,8 @@ class AppState: ObservableObject {
 
         let instructionMode = isInstructionMode
         let attachments = attachedContexts
+        let fieldContext = recordingFieldContext
+        recordingFieldContext = nil
         // Snapshot history *before* this turn — drives both the API call
         // (Anthropic Messages format wants prior turns ordered chronologically)
         // and the auto-paste decision (only paste if this is the first turn).
@@ -584,8 +619,17 @@ class AppState: ObservableObject {
         }
 
         Task {
+            // Set once whisper succeeds. The catch block uses it to decide
+            // what survives a downstream failure: the transcribed words
+            // (LLM/agent error) or the audio file itself (whisper error).
+            var capturedRaw: String?
             do {
                 let rawText = try await transcriber.transcribe(audioURL: audioURL)
+                capturedRaw = rawText
+                // The words are out of the audio — the recording has
+                // served its purpose. Failures past this point keep the
+                // raw text instead.
+                try? FileManager.default.removeItem(at: audioURL)
 
                 guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     await MainActor.run {
@@ -659,7 +703,7 @@ class AppState: ObservableObject {
                         guard self.isChatActive else { return }
 
                         self.lastTranscriptionResult = finalText
-                        self.store.addTranscript(finalText, isInstruction: true)
+                        self.store.addTranscript(finalText, isInstruction: true, rawText: rawText)
 
                         // First turn → auto-paste once, then stay in chat
                         // so the user can iterate (the iteration goes back
@@ -728,7 +772,7 @@ class AppState: ObservableObject {
                         guard self.isChatActive else { return }
 
                         self.lastTranscriptionResult = finalText
-                        self.store.addTranscript(finalText, isInstruction: true)
+                        self.store.addTranscript(finalText, isInstruction: true, rawText: rawText)
 
                         if isFirstChatTurn {
                             // First reply pastes once into the focused app —
@@ -752,7 +796,8 @@ class AppState: ObservableObject {
                             finalText = try await refiner.refine(
                                 text: rawText,
                                 apiKey: settings.apiKey,
-                                dictionaryTerms: terms
+                                dictionaryTerms: terms,
+                                fieldContext: fieldContext
                             )
                         } catch {
                             finalText = rawText
@@ -763,13 +808,18 @@ class AppState: ObservableObject {
 
                     await MainActor.run {
                         self.lastTranscriptionResult = finalText
-                        self.store.addTranscript(finalText, isInstruction: false)
+                        // Keep the pre-refinement words when cleanup
+                        // changed them — History offers "Copy Original"
+                        // as the undo for a bad AI edit.
+                        self.store.addTranscript(finalText, isInstruction: false,
+                                                 rawText: finalText == rawText ? nil : rawText)
                         self.state = .result(text: finalText)
                         self.insertResult(finalText)
                         self.startDismissSequence()
                     }
                 }
             } catch {
+                let rawSnapshot = capturedRaw
                 await MainActor.run {
                     // If a streaming assistant turn was added but never
                     // completed, drop it so the chat doesn't show an
@@ -781,10 +831,36 @@ class AppState: ObservableObject {
                     }
                     self.isStreamingResponse = false
                     self.resetInstructionMode()
-                    self.state = .error(message: error.localizedDescription)
+
+                    // Never lose the dictation. Whisper succeeded → keep
+                    // the spoken words as a history entry. Whisper failed →
+                    // the audio file is still on disk; reference it so
+                    // History can offer a Retry.
+                    if let raw = rawSnapshot, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.store.addTranscript(raw, isInstruction: instructionMode)
+                        self.state = .error(message: "\(error.localizedDescription) — transcript saved to History")
+                    } else if rawSnapshot == nil {
+                        self.store.addRecoverableTranscript(audioURL: audioURL,
+                                                            reason: error.localizedDescription)
+                        self.state = .error(message: "\(error.localizedDescription) — recording saved to History")
+                    } else {
+                        self.state = .error(message: error.localizedDescription)
+                    }
                     self.autoDismiss(after: 3)
                 }
             }
+        }
+    }
+
+    /// A recording ended without being submitted (Esc, chat teardown).
+    /// Keep anything long enough to matter as a recoverable History entry;
+    /// discard sub-gate stubs (same 0.5s rule as submission).
+    private func preserveOrDiscard(recordingAt url: URL, reason: String) {
+        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        if duration >= 0.5 {
+            store.addRecoverableTranscript(audioURL: url, reason: reason)
+        } else {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
@@ -885,10 +961,26 @@ class AppState: ObservableObject {
         let targetPID = recordingTargetPID
         recordingTargetPID = nil
         resetInstructionMode()
+        deliver(text, targetPID: targetPID)
+    }
 
+    /// Hand `text` to the target app — keystrokes for terminals, the
+    /// clipboard-paste-restore dance for everything else.
+    private func deliver(_ text: String, targetPID: pid_t?) {
+        var targetApp: NSRunningApplication?
         if let pid = targetPID,
            let app = NSRunningApplication(processIdentifier: pid) {
+            targetApp = app
             app.activate()
+        }
+
+        // Terminals get typed input: a Cmd+V there collapses multi-line
+        // text into "[Pasted N lines]" (Claude Code, Codex) or hides it
+        // behind bracketed paste. Typing also leaves the clipboard alone.
+        let bundleID = (targetApp ?? NSWorkspace.shared.frontmostApplication)?.bundleIdentifier
+        if let bundleID, Self.terminalBundleIDs.contains(bundleID) {
+            typeText(text)
+            return
         }
 
         // Save current clipboard, paste transcription, then restore
@@ -928,6 +1020,41 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Synthesize the text as keystrokes. Newlines flatten to spaces — a
+    /// literal Return in a terminal would submit the prompt or run the
+    /// command mid-dictation, which is far worse than losing a paragraph
+    /// break in a line-oriented UI.
+    private func typeText(_ text: String) {
+        let flattened = text
+            .replacingOccurrences(of: #"\s*\n+\s*"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !flattened.isEmpty else { return }
+        let units = Array(flattened.utf16)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Give the target app's activation a beat to land before the
+            // first keystroke arrives.
+            usleep(120_000)
+            let source = CGEventSource(stateID: .combinedSessionState)
+            var index = 0
+            while index < units.count {
+                // CGEvent caps the unicode payload at 20 UTF-16 units.
+                let end = min(index + 20, units.count)
+                var chunk = Array(units[index..<end])
+                if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) {
+                    keyDown.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
+                    keyDown.post(tap: .cghidEventTap)
+                }
+                if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) {
+                    keyUp.post(tap: .cghidEventTap)
+                }
+                index = end
+                // Tiny gap so the terminal's input loop keeps up.
+                usleep(2_000)
+            }
+        }
+    }
+
     private func startDismissSequence() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             guard case .result = self?.state else { return }
@@ -964,47 +1091,12 @@ class AppState: ObservableObject {
         pasteClipboard()
     }
 
-    /// Send `text` to the focused app via the clipboard, then restore
-    /// whatever was there. Used by the per-bubble "paste this version"
-    /// action so the user can commit a later iteration of an AI reply.
+    /// Send `text` to the focused app — re-activating the original target
+    /// if we still know it, otherwise whatever is currently frontmost.
+    /// Used by the per-bubble "paste this version" action so the user can
+    /// commit a later iteration of an AI reply.
     func pasteIntoTargetApp(_ text: String) {
-        // Re-activate the original target if we still know it. Otherwise
-        // paste into whatever is currently frontmost.
-        if let pid = recordingTargetPID,
-           let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate()
-        }
-
-        let savedItems = NSPasteboard.general.pasteboardItems?.compactMap { item -> [String: Data]? in
-            var dict = [String: Data]()
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    dict[type.rawValue] = data
-                }
-            }
-            return dict.isEmpty ? nil : dict
-        } ?? []
-
-        // Same suppression dance as insertResult — our own pasteboard
-        // writes mustn't echo back as attachment chips.
-        clipboardWatchSuppressed = true
-
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        pasteClipboard()
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            NSPasteboard.general.clearContents()
-            for itemDict in savedItems {
-                let item = NSPasteboardItem()
-                for (type, data) in itemDict {
-                    item.setData(data, forType: NSPasteboard.PasteboardType(type))
-                }
-                NSPasteboard.general.writeObjects([item])
-            }
-            self?.clipboardBaselineChangeCount = NSPasteboard.general.changeCount
-            self?.clipboardWatchSuppressed = false
-        }
+        deliver(text, targetPID: recordingTargetPID)
     }
 
     /// Copy `text` to the system clipboard, no paste. Lightweight

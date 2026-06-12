@@ -72,8 +72,8 @@ class Transcriber {
                 )
                 output = output.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                // Clean up temp audio file
-                try? FileManager.default.removeItem(at: audioURL)
+                // The caller owns the audio file — it must survive a
+                // failed transcription so the user can retry from History.
 
                 if process.terminationStatus == 0 {
                     continuation.resume(returning: output)
@@ -87,7 +87,6 @@ class Transcriber {
             do {
                 try process.run()
             } catch {
-                try? FileManager.default.removeItem(at: audioURL)
                 continuation.resume(throwing: error)
             }
         }

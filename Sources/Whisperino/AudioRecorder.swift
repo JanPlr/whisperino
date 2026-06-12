@@ -127,8 +127,12 @@ class AudioRecorder {
     }
 
     func start(deviceID: AudioDeviceID? = nil, levelCallback: @escaping (Float) -> Void) throws {
-        let tempDir = FileManager.default.temporaryDirectory
-        let url = tempDir.appendingPathComponent("whisperino_\(UUID().uuidString).wav")
+        // Record into the persistent recordings dir, not the temp dir —
+        // the WAV is written continuously, so even a crash mid-dictation
+        // leaves a recoverable file (surfaced by recoverOrphanedRecordings
+        // on next launch). Callers own deletion once the text is safe.
+        let dir = SettingsStore.shared.recordingsDir
+        let url = dir.appendingPathComponent("whisperino_\(UUID().uuidString).wav")
         self.tempURL = url
         smoothedLevel = 0
         isPaused = false

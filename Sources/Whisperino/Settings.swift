@@ -83,6 +83,11 @@ struct AppSettings: Codable, Equatable {
     /// paste its response. Distinct from refinement so users can keep
     /// raw transcription if the API misbehaves.
     var aiModeEnabled: Bool = false
+    /// Read the focused text field's existing content (via Accessibility)
+    /// and pass it to the refiner, so dictating into a half-written
+    /// sentence continues it with matching case, language, and tone.
+    /// Rides along on the refinement call — inert while refinement is off.
+    var contextAwarenessEnabled: Bool = true
     var apiKey: String = ""
     var triggerKey: TriggerKey = .fn
     var soundEffectsEnabled: Bool = false
@@ -94,6 +99,7 @@ struct AppSettings: Codable, Equatable {
         // Default `aiModeEnabled` to whatever refinement was — pre-split
         // installs only had one toggle, and AI mode previously required it.
         aiModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .aiModeEnabled) ?? llmRefinementEnabled
+        contextAwarenessEnabled = try container.decodeIfPresent(Bool.self, forKey: .contextAwarenessEnabled) ?? true
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         // Migrate retired triggers (e.g. .optionQ) to the default rather
         // than failing the whole settings decode.
@@ -133,12 +139,27 @@ struct TranscriptEntry: Codable, Identifiable, Equatable {
     var text: String
     var createdAt: Date
     var isInstruction: Bool
+    /// Pre-refinement whisper output, kept when refinement changed the
+    /// text (or, for AI turns, what the user actually said). Lets the
+    /// user recover their literal words when the LLM mangles something.
+    var rawText: String?
+    /// Filename (within SettingsStore.recordingsDir) of a retained
+    /// recording that hasn't produced a transcript yet — failed, was
+    /// cancelled, or got orphaned by a crash. Non-nil = retryable.
+    var audioFilename: String?
+    /// Why this entry has no usable text yet. Non-nil marks the entry as
+    /// failed/recoverable in the History UI.
+    var failureReason: String?
 
-    init(id: UUID = UUID(), text: String, isInstruction: Bool = false, createdAt: Date = Date()) {
+    init(id: UUID = UUID(), text: String, isInstruction: Bool = false, createdAt: Date = Date(),
+         rawText: String? = nil, audioFilename: String? = nil, failureReason: String? = nil) {
         self.id = id
         self.text = text
         self.isInstruction = isInstruction
         self.createdAt = createdAt
+        self.rawText = rawText
+        self.audioFilename = audioFilename
+        self.failureReason = failureReason
     }
 }
 

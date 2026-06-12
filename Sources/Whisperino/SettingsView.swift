@@ -109,6 +109,12 @@ private struct GeneralTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                Toggle("Use surrounding text as context", isOn: $store.settings.contextAwarenessEnabled)
+                    .disabled(!hasAPIKey || !store.settings.llmRefinementEnabled)
+                Text("Reads what's already in the field you're dictating into (via Accessibility) so the cleanup can continue your sentence and match its language and tone. The surrounding text is sent along with your dictation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Toggle("AI mode (\(triggerLabel) + Shift)", isOn: $store.settings.aiModeEnabled)
                     .disabled(!hasAPIKey)
                 Text("Hold **\(triggerLabel) + Shift** (or add Shift while already dictating) → speak → **Cmd+C** any text or image to attach as context → tap **\(triggerLabel)** or press **Return** to submit. Claude generates a response and pastes it inline.")
@@ -364,6 +370,7 @@ private struct SnippetsTab: View {
 
 private struct HistoryTab: View {
     @ObservedObject private var store = SettingsStore.shared
+    @ObservedObject private var retryManager = RetryManager.shared
     @State private var selectedID: UUID?
 
     private static let timeFormatter: DateFormatter = {
@@ -372,6 +379,10 @@ private struct HistoryTab: View {
         f.timeStyle = .short
         return f
     }()
+
+    private var selectedEntry: TranscriptEntry? {
+        store.history.first { $0.id == selectedID }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -385,7 +396,11 @@ private struct HistoryTab: View {
                     ForEach(store.history) { entry in
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 4) {
-                                if entry.isInstruction {
+                                if entry.failureReason != nil {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.orange)
+                                } else if entry.isInstruction {
                                     Image(systemName: "pencil")
                                         .font(.system(size: 9))
                                         .foregroundStyle(.purple)
@@ -394,10 +409,18 @@ private struct HistoryTab: View {
                                     .font(.system(size: 10))
                                     .foregroundStyle(.secondary)
                             }
-                            Text(entry.text)
-                                .font(.system(size: 12))
-                                .lineLimit(2)
-                                .truncationMode(.tail)
+                            if let reason = entry.failureReason, entry.text.isEmpty {
+                                Text(reason)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.orange)
+                                    .lineLimit(2)
+                                    .truncationMode(.tail)
+                            } else {
+                                Text(entry.text)
+                                    .font(.system(size: 12))
+                                    .lineLimit(2)
+                                    .truncationMode(.tail)
+                            }
                         }
                         .padding(.vertical, 2)
                         .tag(entry.id)
@@ -410,13 +433,36 @@ private struct HistoryTab: View {
 
             HStack(spacing: 8) {
                 Button("Copy") {
-                    if let id = selectedID,
-                       let entry = store.history.first(where: { $0.id == id }) {
+                    if let entry = selectedEntry {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(entry.text, forType: .string)
                     }
                 }
-                .disabled(selectedID == nil)
+                .disabled(selectedEntry?.text.isEmpty ?? true)
+
+                // The pre-refinement whisper output — the undo for an AI
+                // edit that mangled something.
+                Button("Copy Original") {
+                    if let raw = selectedEntry?.rawText {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(raw, forType: .string)
+                    }
+                }
+                .disabled(selectedEntry?.rawText == nil)
+
+                if let entry = selectedEntry, entry.audioFilename != nil {
+                    Button {
+                        retryManager.retry(entry)
+                    } label: {
+                        if retryManager.retryingID == entry.id {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text("Retry")
+                        }
+                    }
+                    .disabled(retryManager.retryingID != nil)
+                }
 
                 Spacer()
 

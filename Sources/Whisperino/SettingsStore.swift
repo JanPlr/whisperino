@@ -10,6 +10,10 @@ class SettingsStore: ObservableObject {
     private let snippetsFile: URL
     private let agentsFile: URL
     private let historyFile: URL
+    /// Where in-flight recordings live. A recording stays here until its
+    /// transcript is safely in history (or it's pruned with its entry) —
+    /// so failures, cancels, and crashes are always recoverable.
+    let recordingsDir: URL
 
     static let maxHistoryEntries = 50
 
@@ -44,9 +48,11 @@ class SettingsStore: ObservableObject {
         snippetsFile = baseDir.appendingPathComponent("snippets.json")
         agentsFile = baseDir.appendingPathComponent("agents.json")
         historyFile = baseDir.appendingPathComponent("history.json")
+        recordingsDir = baseDir.appendingPathComponent("recordings")
 
-        // Ensure directory exists
+        // Ensure directories exist
         try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
 
         // Load or use defaults
         settings = Self.load(from: settingsFile) ?? AppSettings()
@@ -111,17 +117,76 @@ class SettingsStore: ObservableObject {
 
     // MARK: - History
 
-    func addTranscript(_ text: String, isInstruction: Bool = false) {
+    func addTranscript(_ text: String, isInstruction: Bool = false, rawText: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        history.insert(TranscriptEntry(text: trimmed, isInstruction: isInstruction), at: 0)
-        if history.count > Self.maxHistoryEntries {
-            history = Array(history.prefix(Self.maxHistoryEntries))
-        }
+        history.insert(TranscriptEntry(text: trimmed, isInstruction: isInstruction, rawText: rawText), at: 0)
+        pruneHistory()
+    }
+
+    /// Add an entry for a recording that produced no transcript (failure,
+    /// cancel, crash). The audio file is retained and referenced so the
+    /// History tab can offer a Retry.
+    func addRecoverableTranscript(audioURL: URL, reason: String, createdAt: Date = Date()) {
+        history.insert(TranscriptEntry(text: "", createdAt: createdAt,
+                                       audioFilename: audioURL.lastPathComponent,
+                                       failureReason: reason), at: 0)
+        pruneHistory()
+    }
+
+    /// A retry succeeded — fill in the text and release the audio file.
+    func resolveTranscript(id: UUID, text: String, rawText: String?) {
+        guard let index = history.firstIndex(where: { $0.id == id }) else { return }
+        deleteAudio(for: history[index])
+        history[index].text = text
+        history[index].rawText = rawText
+        history[index].audioFilename = nil
+        history[index].failureReason = nil
+    }
+
+    func setFailureReason(id: UUID, reason: String) {
+        guard let index = history.firstIndex(where: { $0.id == id }) else { return }
+        history[index].failureReason = reason
     }
 
     func clearHistory() {
+        for entry in history { deleteAudio(for: entry) }
         history.removeAll()
+    }
+
+    private func pruneHistory() {
+        while history.count > Self.maxHistoryEntries {
+            deleteAudio(for: history.removeLast())
+        }
+    }
+
+    private func deleteAudio(for entry: TranscriptEntry) {
+        guard let filename = entry.audioFilename else { return }
+        try? FileManager.default.removeItem(at: recordingsDir.appendingPathComponent(filename))
+    }
+
+    /// Called once at launch: any recording on disk that no history entry
+    /// references was orphaned by a crash or force-quit mid-dictation.
+    /// Surface it as a recoverable entry instead of silently losing it.
+    /// Must run before the first recording starts, or the in-flight file
+    /// would be misread as an orphan.
+    func recoverOrphanedRecordings() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: recordingsDir,
+                                                      includingPropertiesForKeys: [.fileSizeKey, .creationDateKey]) else { return }
+        let referenced = Set(history.compactMap { $0.audioFilename })
+        for url in files where url.pathExtension == "wav" && !referenced.contains(url.lastPathComponent) {
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
+            // Sub-second stubs aren't worth recovering (matches the 0.5s
+            // minimum-duration gate on live recordings).
+            guard (values?.fileSize ?? 0) >= 100_000 else {
+                try? fm.removeItem(at: url)
+                continue
+            }
+            addRecoverableTranscript(audioURL: url,
+                                     reason: "Recovered after quit — tap Retry",
+                                     createdAt: values?.creationDate ?? Date())
+        }
     }
 
     // MARK: - Agents
