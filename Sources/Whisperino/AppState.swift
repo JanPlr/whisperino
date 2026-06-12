@@ -107,7 +107,7 @@ class AppState: ObservableObject {
     static let maxAttachments = 5
 
     /// Number of bars shown in the waveform display.
-    static let waveformBarCount = 9
+    static let waveformBarCount = 13
 
     // MARK: - Chat (AI mode multi-turn)
 

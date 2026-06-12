@@ -171,6 +171,7 @@ struct OverlayView: View {
         .padding(16)
         .frame(width: 340, alignment: .leading)
         .background(Color.black)
+        .overlay(RetroTextureView())
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -314,11 +315,11 @@ struct OverlayView: View {
                                 .transition(.scale.combined(with: .opacity))
                         }
 
-                        HStack(spacing: 3.5) {
+                        HStack(spacing: 2) {
                             ForEach(0..<AppState.waveformBarCount, id: \.self) { i in
                                 Capsule()
                                     .fill(.white.opacity(0.78))
-                                    .frame(width: 3, height: barHeight(for: i))
+                                    .frame(width: 2, height: barHeight(for: i))
                             }
                         }
                         .frame(height: 16)
@@ -374,6 +375,7 @@ struct OverlayView: View {
             }
             .frame(width: (!cancelled && (hasAttachments || chatActive || showLivePreview)) ? 340 : nil)
             .background(Color.black)
+            .overlay(RetroTextureView())
             .clipShape(RoundedRectangle(cornerRadius: pillRadius, style: .continuous))
             .overlay(
                 Group {
@@ -422,6 +424,7 @@ struct OverlayView: View {
                     InputDevicePicker(appState: appState, isPresented: $appState.showingInputPicker)
                         .frame(width: 240)
                         .background(Color.black)
+                        .overlay(RetroTextureView())
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -466,6 +469,7 @@ struct OverlayView: View {
             .foregroundStyle(.white.opacity(isHoveringMic ? 1 : 0.8))
             .frame(width: 30, height: 30)
             .background(Circle().fill(Color.black))
+            .overlay(RetroTextureView().clipShape(Circle()))
             .overlay(
                 Circle().strokeBorder(
                     isHoveringMic || appState.showingInputPicker
@@ -545,7 +549,8 @@ struct OverlayView: View {
     /// visibly present across the whole pill as it rolls right-to-left,
     /// rather than collapsing to a right-side spike.
     private static let barShape: [CGFloat] = [
-        0.85, 0.90, 0.95, 1.0, 1.0, 1.0, 0.95, 0.90, 0.85
+        0.80, 0.85, 0.90, 0.94, 0.97, 1.0, 1.0,
+        1.0, 0.97, 0.94, 0.90, 0.85, 0.80
     ]
 
     private func barHeight(for index: Int) -> CGFloat {
@@ -559,7 +564,10 @@ struct OverlayView: View {
         let next = index < samples.count - 1 ? CGFloat(samples[index + 1]) : curr
         let smoothed = (prev + curr * 2 + next) / 4
         let shape = Self.barShape.indices.contains(index) ? Self.barShape[index] : 1.0
-        return max(3, 3 + smoothed * shape * 11)
+        // pow < 1 lifts quiet speech into clearly visible motion -
+        // linear mapping left normal talking almost flat.
+        let boosted = pow(smoothed, 0.6)
+        return max(3, min(16, 3 + boosted * shape * 13))
     }
 
     // MARK: - Refining / Generating (AI modes only)
@@ -617,6 +625,7 @@ private extension View {
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
             .background(Color.black)
+            .overlay(RetroTextureView().clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous)))
             .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay(
                 Group {
@@ -633,22 +642,23 @@ private extension View {
 
 // MARK: - Typing flow (transcription in flight)
 
-/// Speech-to-text made visible: a line of "ghost words" (redacted-text
-/// capsules) writes itself out left to right behind a gliding caret,
-/// holds for a beat, fades, and starts a fresh line. Reads as *text
-/// being typed* - deliberately nothing like the audio waveform, so
-/// "listening" and "transcribing" are visually distinct states.
+/// Speech-to-text made visible: word-length dashes write themselves
+/// out left to right behind a caret, hold for a beat, fade, and start
+/// a fresh line. Styled in the waveform's exact idiom - same white,
+/// same 3pt stroke (a resting waveform dot, stretched into a word) -
+/// and sized to the waveform's line width so the pill barely changes
+/// when listening hands over to transcribing.
 private struct TypingFlowView: View {
-    /// Widths of the ghost words, varied like real text.
-    private static let words: [CGFloat] = [13, 20, 9, 16]
-    private static let gap: CGFloat = 5
-    /// Cadence between word starts (s) - slightly longer than the write
-    /// time so there's a tiny natural pause between words. Fast: a warm
-    /// whisper server finishes sub-second, and the user should see a
-    /// COMPLETE line (~0.4s) within that window, not a half-drawn one.
-    private static let perWord: Double = 0.11
+    /// Widths of the ghost words, varied like real text. Sum + gaps ≈
+    /// the 13-bar waveform's width (~50pt).
+    private static let words: [CGFloat] = [9, 13, 7, 11]
+    private static let gap: CGFloat = 4
+    /// Cadence between word starts (s). Fast: a warm whisper server
+    /// finishes sub-second, and the user should see a COMPLETE line
+    /// (~0.35s) within that window, not a half-drawn one.
+    private static let perWord: Double = 0.1
     /// How long one word takes to ink out (s).
-    private static let writeTime: Double = 0.09
+    private static let writeTime: Double = 0.08
     /// Full line lingers, then fades, then the cycle restarts.
     private static let hold: Double = 0.35
     private static let fade: Double = 0.2
@@ -676,8 +686,8 @@ private struct TypingFlowView: View {
                 ForEach(Self.words.indices, id: \.self) { i in
                     let p = wordProgress(i, at: t)
                     Capsule()
-                        .fill(.white.opacity(0.55))
-                        .frame(width: Self.words[i] * p, height: 6)
+                        .fill(.white.opacity(0.78))
+                        .frame(width: Self.words[i] * p, height: 3)
                         .offset(x: wordStart(i))
                         .opacity(p > 0 ? 1 : 0)
                 }
@@ -687,9 +697,9 @@ private struct TypingFlowView: View {
                 RoundedRectangle(cornerRadius: 1)
                     .fill(.white.opacity(caretOpacity(at: t)))
                     .frame(width: 1.5, height: 11)
-                    .offset(x: caretX(at: t) + 2.5)
+                    .offset(x: caretX(at: t) + 2)
             }
-            .frame(width: Self.lineWidth + 6, height: 16, alignment: .leading)
+            .frame(width: Self.lineWidth + 4, height: 16, alignment: .leading)
             .opacity(lineOpacity(at: t))
         }
         .onAppear { start = Date() }
@@ -716,9 +726,7 @@ private struct TypingFlowView: View {
     }
 
     private func caretOpacity(at t: Double) -> Double {
-        // Solid while writing; soft 0.5s blink once the line is done
-        // (scaled down with the shorter hold so it still reads as a
-        // blink, not a slow dim).
+        // Solid while writing; soft 0.5s blink once the line is done.
         guard t >= Self.typingTime else { return 0.9 }
         let blink = 0.5 + 0.5 * cos((t - Self.typingTime) * 2 * .pi / 0.5)
         return 0.15 + 0.75 * blink
@@ -1201,11 +1209,11 @@ private struct ChatPillContent: View {
             case .recording, .paused:
                 // Live waveform mirrors what the standalone pill shows -
                 // we just inline it here when chat is open.
-                HStack(spacing: 2.5) {
+                HStack(spacing: 2) {
                     ForEach(0..<AppState.waveformBarCount, id: \.self) { i in
                         Capsule()
                             .fill(.white.opacity(0.78))
-                            .frame(width: 2.5, height: barHeight(for: i))
+                            .frame(width: 2, height: barHeight(for: i))
                     }
                 }
                 .frame(height: 16)
@@ -1289,8 +1297,67 @@ private struct ChatPillContent: View {
         let prev = index > 0 ? CGFloat(samples[index - 1]) : curr
         let next = index < samples.count - 1 ? CGFloat(samples[index + 1]) : curr
         let smoothed = (prev + curr * 2 + next) / 4
-        return max(3, 3 + smoothed * 11)
+        let boosted = pow(smoothed, 0.6)
+        return max(3, min(16, 3 + boosted * 13))
     }
+}
+
+// MARK: - Retro chrome texture
+
+/// Faint "hacker terminal" finish for the black chrome: scanlines, an
+/// offset halftone dot grid and random grain, all tinted phosphor-green
+/// and pre-rendered into one tile. A single tiled image draw, so it
+/// costs nothing per frame, and the seeded grain makes every surface
+/// carry the identical print.
+private struct RetroTextureView: View {
+    var body: some View {
+        Image(nsImage: Self.tile)
+            .resizable(resizingMode: .tile)
+            .allowsHitTesting(false)
+    }
+
+    /// 48×48pt tile. Alphas are deliberately tiny - the effect should
+    /// read as surface grain on the black, not as a pattern.
+    private static let tile: NSImage = {
+        let dim = 48
+        let image = NSImage(size: NSSize(width: dim, height: dim))
+        image.lockFocus()
+
+        // Phosphor tint - just green enough that the black reads CRT,
+        // not print ink.
+        let phosphor = NSColor(red: 0.78, green: 1.0, blue: 0.86, alpha: 1)
+
+        // Scanlines every 3pt.
+        phosphor.withAlphaComponent(0.05).setFill()
+        for y in stride(from: 0, to: dim, by: 3) {
+            NSRect(x: 0, y: y, width: dim, height: 1).fill()
+        }
+
+        // Halftone dot grid - 6pt step, every other row offset by half.
+        phosphor.withAlphaComponent(0.08).setFill()
+        var row = 0
+        for y in stride(from: 1, to: dim, by: 6) {
+            let xStart = row % 2 == 0 ? 1 : 4
+            for x in stride(from: xStart, to: dim, by: 6) {
+                NSBezierPath(ovalIn: NSRect(x: CGFloat(x), y: CGFloat(y), width: 1.4, height: 1.4)).fill()
+            }
+            row += 1
+        }
+
+        // Grain - seeded LCG so the tile is identical every launch.
+        var seed: UInt64 = 0x9E3779B97F4A7C15
+        func rnd() -> CGFloat {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return CGFloat((seed >> 33) % 1000) / 1000
+        }
+        for _ in 0..<(dim * dim / 7) {
+            phosphor.withAlphaComponent(0.015 + rnd() * 0.055).setFill()
+            NSRect(x: rnd() * CGFloat(dim - 1), y: rnd() * CGFloat(dim - 1), width: 1.0, height: 1.0).fill()
+        }
+
+        image.unlockFocus()
+        return image
+    }()
 }
 
 // MARK: - Pointer cursor helper
