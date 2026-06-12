@@ -35,7 +35,7 @@ private final class ChimePlayer {
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
 
-        // Two-tone chimes in the low register — felt more than heard.
+        // Two-tone chimes in the low register - felt more than heard.
         // Start: A3 → F3 (descending, "winding up")
         // Stop/submit: F3 → A3 (ascending, "submitted")
         startBuffer = synthesizeChime(notes: [(220, 0.10), (175, 0.20)], gap: 0.01)
@@ -71,20 +71,20 @@ private final class ChimePlayer {
         buffer.frameLength = frameCount
         guard let channel = buffer.floatChannelData?[0] else { return nil }
 
-        let attack = 0.020   // 20ms attack — soft, no click
+        let attack = 0.020   // 20ms attack - soft, no click
         let releaseTarget = 0.18   // ideal release; clamped per-note below
 
         var cursor = 0
         var phase = 0.0
         let twoPi = 2.0 * .pi
-        let amplitude = 0.09  // very subtle — felt more than heard
+        let amplitude = 0.09  // very subtle - felt more than heard
 
         for (i, (freq, duration)) in notes.enumerated() {
             let frames = Int(sampleRate * duration)
             let phaseIncrement = twoPi * freq / sampleRate
             // Clamp release so it fits within (duration - attack). Without this,
             // a note shorter than `releaseTarget` causes a discontinuity at the
-            // end of the attack — audible as a click on the first note.
+            // end of the attack - audible as a click on the first note.
             let release = max(0.005, min(releaseTarget, duration - attack))
 
             for f in 0..<frames {

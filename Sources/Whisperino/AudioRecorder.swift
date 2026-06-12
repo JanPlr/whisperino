@@ -15,6 +15,13 @@ class AudioRecorder {
     private var tempURL: URL?
     private var smoothedLevel: Float = 0
     private var isPaused = false
+    /// Guards `audioFile`/`tempURL` - the tap writes from the realtime
+    /// audio thread while `rotateChunk()` swaps files from the main
+    /// thread. Contention is rare (one rotation every ~40s) and the
+    /// critical sections are tiny, so a plain lock is fine.
+    private let fileLock = NSLock()
+    private var sessionID = ""
+    private var chunkIndex = 0
 
     /// List all available audio input devices via CoreAudio
     static func availableInputDevices() -> [AudioInputDevice] {
@@ -121,14 +128,15 @@ class AudioRecorder {
         let gate: Float = 0.14  // soft threshold ~ -45 dB
         if raw < gate { return 0 }
         let scaled = (raw - gate) / (1 - gate)
-        // pow(x, 0.65) — pulls mid-range values up (0.5 → 0.63, 0.3 → 0.45)
+        // pow(x, 0.65) - pulls mid-range values up (0.5 → 0.63, 0.3 → 0.45)
         // so normal voice reads as a strong, visible swing.
         return pow(scaled, 0.65)
     }
 
     func start(deviceID: AudioDeviceID? = nil, levelCallback: @escaping (Float) -> Void) throws {
-        let tempDir = FileManager.default.temporaryDirectory
-        let url = tempDir.appendingPathComponent("whisperino_\(UUID().uuidString).wav")
+        sessionID = UUID().uuidString
+        chunkIndex = 0
+        let url = chunkURL(index: 0)
         self.tempURL = url
         smoothedLevel = 0
         isPaused = false
@@ -170,7 +178,7 @@ class AudioRecorder {
                 let level = Self.gatedLevel(db: db)
 
                 // Onset-snap: if we were below silence threshold and a real
-                // signal arrives, jump straight to it — the *first* word
+                // signal arrives, jump straight to it - the *first* word
                 // out of silence has zero smoothing latency.
                 // Otherwise: aggressive attack while voice is active,
                 // brisk decay when it ends so the wave clears quickly.
@@ -184,11 +192,13 @@ class AudioRecorder {
                 levelCallback(self.smoothedLevel)
             }
 
+            self.fileLock.lock()
             do {
                 try self.audioFile?.write(from: buffer)
             } catch {
                 print("[whisperino] audio write error: \(error.localizedDescription)")
             }
+            self.fileLock.unlock()
         }
 
         engine.prepare()
@@ -201,7 +211,7 @@ class AudioRecorder {
     func switchDevice(deviceID: AudioDeviceID, levelCallback: @escaping (Float) -> Void) throws {
         guard audioEngine != nil else { return }
 
-        // Set the system default input device — AVAudioEngine always follows this
+        // Set the system default input device - AVAudioEngine always follows this
         guard Self.setDefaultInputDevice(deviceID) else {
             print("[whisperino] switchDevice: failed to set system default to \(deviceID)")
             return
@@ -213,7 +223,7 @@ class AudioRecorder {
         audioEngine = nil
         smoothedLevel = 0
 
-        // Start a fresh engine — it will use the new system default
+        // Start a fresh engine - it will use the new system default
         let newEngine = AVAudioEngine()
         let inputNode = newEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
@@ -244,11 +254,13 @@ class AudioRecorder {
                 levelCallback(self.smoothedLevel)
             }
 
+            self.fileLock.lock()
             do {
                 try self.audioFile?.write(from: buffer)
             } catch {
                 print("[whisperino] audio write error: \(error.localizedDescription)")
             }
+            self.fileLock.unlock()
         }
 
         newEngine.prepare()
@@ -264,10 +276,42 @@ class AudioRecorder {
         isPaused = false
     }
 
+    private func chunkURL(index: Int) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("whisperino_\(sessionID)_part\(index).wav")
+    }
+
+    /// Close the file being written and start a fresh one, returning the
+    /// finished chunk's URL so it can be transcribed while recording
+    /// continues. Returns nil if not recording or the swap fails (in
+    /// which case recording just keeps writing the current file -
+    /// nothing is lost, the chunk only gets longer).
+    func rotateChunk() -> URL? {
+        fileLock.lock()
+        defer { fileLock.unlock() }
+        guard audioEngine != nil, let current = audioFile, let finishedURL = tempURL else { return nil }
+
+        chunkIndex += 1
+        let newURL = chunkURL(index: chunkIndex)
+        do {
+            // Releasing the old AVAudioFile finalizes its WAV header.
+            let newFile = try AVAudioFile(forWriting: newURL, settings: current.fileFormat.settings)
+            audioFile = newFile
+            tempURL = newURL
+            return finishedURL
+        } catch {
+            print("[whisperino] chunk rotation failed: \(error.localizedDescription)")
+            chunkIndex -= 1
+            return nil
+        }
+    }
+
     func stop() -> URL? {
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil
+        fileLock.lock()
+        defer { fileLock.unlock() }
         audioFile = nil
         let url = tempURL
         tempURL = nil

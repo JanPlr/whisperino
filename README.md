@@ -6,7 +6,7 @@ Local voice transcription for macOS. Lives in your menu bar, runs fully on-devic
 
 **Hold Fn → speak → release.** Your words are transcribed and pasted into whatever text field is focused.
 
-**Want the LLM to answer instead of just transcribe?** Add Shift any time while you're holding Fn — the pill turns rainbow, AI mode is on, and the recording becomes latched. Cmd+C any text or images you want as context (no clicks needed). Tap Fn (or press Enter) to submit. Esc to cancel.
+**Want the LLM to answer instead of just transcribe?** Add Shift any time while you're holding Fn - the pill turns rainbow, AI mode is on, and the recording becomes latched. Cmd+C any text or images you want as context (no clicks needed). Tap Fn (or press Enter) to submit. Esc to cancel.
 
 ## Install
 
@@ -23,36 +23,48 @@ The script builds whisper.cpp + downloads the medium model (~1.5 GB), builds the
 
 After install, grant two permissions:
 
-- **Microphone** — allow on first record prompt.
-- **Accessibility** — needed for auto-paste. System Settings opens automatically after install; find Whisperino and toggle it ON.
+- **Microphone** - allow on first record prompt.
+- **Accessibility** - needed for auto-paste. System Settings opens automatically after install; find Whisperino and toggle it ON.
 
 ## Shortcuts
 
 | Shortcut | What it does |
 |----------|-------------|
 | **Hold Fn** | Dictate while held, submit on release |
-| **Double-tap Fn** | Latched dictation — single tap stops & submits |
+| **Double-tap Fn** | Latched dictation - single tap stops & submits |
 | **Add Shift** *(while holding Fn)* | Upgrade to AI mode (latched) |
 | **Fn + Shift** *(held together)* | Start in AI mode |
 | **Cmd+C** *(in AI mode)* | Auto-attach the copied text/image as context |
 | **Tap Fn or Return** *(in AI mode)* | Submit |
-| **Esc** | Cancel — recording is discarded |
-| Click menu bar icon | Toggle / Copy last / Settings / Quit |
+| **Esc** | Cancel - recording is discarded |
+| Click menu bar icon | Toggle / Copy last / Settings / Updates / Quit |
 
 ## How AI mode works
 
-1. Hold Fn — recording starts (white border).
-2. Press Shift any time during the recording — border crossfades to a rainbow gradient. Recording is now **latched** (release doesn't submit).
-3. While speaking, **Cmd+C anything** in any app — text or images get auto-attached and appear below the pill (up to 5).
+1. Hold Fn - recording starts (white border).
+2. Press Shift any time during the recording - border crossfades to a rainbow gradient. Recording is now **latched** (release doesn't submit).
+3. While speaking, **Cmd+C anything** in any app - text or images get auto-attached and appear below the pill (up to 5).
 4. When you're done: **single-tap Fn** (or press **Return**) to submit. The LLM (Claude Sonnet 4.6 via Langdock) generates a response and pastes it.
 
 If you've configured agents in Settings → Agents, mention an agent's name during your request to route it there instead.
+
+## Long recordings
+
+There's no practical length limit. While you talk, the recording is rotated into ~40s chunks (cut at silence, so no clipped words) and each finished chunk is transcribed in the background. When you stop, only the last chunk still needs processing - a 30-minute take resolves in seconds, and the pill shows live progress (`4/5`) plus a rolling preview of the text so far.
+
+Nothing gets lost:
+
+- The raw transcript so far is written to `~/.whisperino/recovery/last-raw-transcript.txt` after every chunk.
+- If a chunk fails to transcribe, its audio is kept in the same folder and the rest of the take continues.
+- If a later step fails (e.g. the AI call), the raw transcript is copied to your clipboard.
+
+Optional **live streaming** (Settings → General → "Stream dictation while you speak"): each chunk's text is pasted into the focused field the moment it's transcribed, so long dictations build up in your document in near-real-time. Streamed sessions skip Haiku enhancement, since the raw text has already landed.
 
 ## Settings
 
 Click the menu bar icon → **Settings**.
 
-- **General**: launch at login · sound effects · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
+- **General**: launch at login · sound effects · live dictation streaming · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
 - **Dictionary**: terms the LLM should always spell correctly (`Langdock` or `langdonk = Langdock` mappings)
 - **Snippets**: reusable text blocks
 - **History**: last 50 transcriptions
@@ -66,21 +78,33 @@ Click the menu bar icon → **Settings**.
 
 ## Updating
 
+Whisperino checks GitHub for new releases on launch and once a day. When an update is available, the menu bar menu shows **Update to vX.Y.Z…** - click it and the app downloads, installs, and relaunches itself. You can also check manually via menu → **Check for Updates…**.
+
+After an update, re-toggle Accessibility (off → on) when prompted - the code signature changes with each release, so macOS revokes the grant. The app takes you straight to the right Settings pane.
+
+Updating from source still works too:
+
 ```bash
 cd whisperino && git pull && ./build.sh
 ```
 
-After rebuilding, re-toggle Accessibility (off → on) since the code signature changes. The build script opens System Settings for you.
+## Releasing (maintainers)
+
+```bash
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+That's it. GitHub Actions ([release.yml](.github/workflows/release.yml)) builds the app with the version stamped from the tag, zips it, and publishes a GitHub Release with auto-generated notes. Installed apps pick it up on their next check.
 
 ## Troubleshooting
 
-- **Fn key doesn't trigger anything** — System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D.
-- **Paste doesn't work** — re-toggle Accessibility for Whisperino (off → on) after each rebuild.
-- **App doesn't appear in Accessibility list** — launch it first (`open /Applications/Whisperino.app`), then check.
+- **Fn key doesn't trigger anything** - System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D.
+- **Paste doesn't work** - re-toggle Accessibility for Whisperino (off → on) after each rebuild.
+- **App doesn't appear in Accessibility list** - launch it first (`open /Applications/Whisperino.app`), then check.
 
 ## Changelog
 
-### 2026-04-26 — Push-to-talk + AI-mode upgrade
+### 2026-04-26 - Push-to-talk + AI-mode upgrade
 
 - **Hold Fn** is now the primary dictation gesture. Release submits.
 - **Double-tap Fn** for latched dictation (hands-free, single tap stops).

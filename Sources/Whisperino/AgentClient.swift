@@ -37,7 +37,7 @@ enum AgentPhase: Equatable {
 
     /// SF Symbol that represents this phase in the chat step timeline.
     /// Tool names from the agent API arrive in snake_case (`web_search`)
-    /// or camelCase (`webSearch`) depending on the backend revision —
+    /// or camelCase (`webSearch`) depending on the backend revision -
     /// normalising to a key without separators lets one switch handle
     /// both shapes.
     var stepIcon: String {
@@ -59,7 +59,7 @@ enum AgentPhase: Equatable {
         }
     }
 
-    /// Title-case label for the step timeline. No trailing ellipsis —
+    /// Title-case label for the step timeline. No trailing ellipsis -
     /// the timeline visualises in-flight vs. completed via icon state,
     /// not punctuation.
     var stepTitle: String {
@@ -126,7 +126,7 @@ struct AgentClient {
             }
         }
 
-        // Build the user message text — include inline text contexts if any
+        // Build the user message text - include inline text contexts if any
         let fullMessage: String
         if textContexts.isEmpty {
             fullMessage = userMessage
@@ -214,7 +214,7 @@ struct AgentClient {
         }
 
         // Strip Langdock citation markers like 【...】 *and* common
-        // markdown that the agent occasionally emits — we render plain
+        // markdown that the agent occasionally emits - we render plain
         // text only, and pasted output should also be markdown-free.
         let cleaned = collectedText
             .replacingOccurrences(of: "【[^】]*】", with: "", options: .regularExpression)

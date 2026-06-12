@@ -6,10 +6,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let appState = AppState()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // After a self-update the Accessibility grant is gone (ad-hoc CDHash
+        // changed) - jump straight to the settings pane alongside the prompt.
+        UpdateChecker.handlePostUpdateLaunch()
         AppState.ensureAccessibility()
+        UpdateChecker.shared.startAutomaticChecks()
         // Pre-request microphone permission so the first recording attempt isn't
         // interrupted by the macOS permission dialog mid-press
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
+        // Boot the persistent whisper server now so the model is already
+        // in memory by the first dictation.
+        appState.warmUpTranscriber()
         statusBarController = StatusBarController(appState: appState)
 
         HotkeyManager.shared.register(
@@ -18,6 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             onUpgradeToInstruction: { [weak self] in self?.appState.upgradeToInstructionMode() },
             onCancel: { [weak self] in self?.appState.cancelRecording() },
             onSubmit: { [weak self] in self?.appState.submitOrFinish() },
+            onLatchChange: { [weak self] latched in self?.appState.isLatchedRecording = latched },
             isRecording: { [weak self] in
                 guard let state = self?.appState.state else { return false }
                 switch state {
@@ -25,8 +33,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 default: return false
                 }
             },
-            isChatActive: { [weak self] in self?.appState.isChatActive ?? false }
+            // Fallback card counts as "interactive overlay" so Esc/Enter
+            // reach it the same way they reach an open chat.
+            isChatActive: { [weak self] in
+                guard let appState = self?.appState else { return false }
+                return appState.isChatActive || appState.fallbackResult != nil
+            }
         )
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        appState.shutdownTranscriber()
     }
 }
 

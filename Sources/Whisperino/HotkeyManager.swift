@@ -4,19 +4,19 @@ import Foundation
 
 /// Hotkey behaviour:
 ///
-/// 1. **Hold trigger** (push-to-talk) — press to record, release to submit.
-/// 2. **Double-tap trigger** (toggle) — quickly tap twice to enter a latched
+/// 1. **Hold trigger** (push-to-talk) - press to record, release to submit.
+/// 2. **Double-tap trigger** (toggle) - quickly tap twice to enter a latched
 ///    recording, then a single tap stops and submits. Useful for hands-free
 ///    long dictation.
-/// 3. **Trigger + Shift** — instruction (AI) mode. Either press them together,
+/// 3. **Trigger + Shift** - instruction (AI) mode. Either press them together,
 ///    or start with the trigger alone and add Shift at any point during the
-///    recording — the mode upgrades and the recording becomes latched
+///    recording - the mode upgrades and the recording becomes latched
 ///    (release won't auto-submit; tap trigger again or press Enter to submit).
-/// 4. **Esc / Return** — cancel / submit while recording.
+/// 4. **Esc / Return** - cancel / submit while recording.
 ///
 /// The trigger is configurable in Settings. Two flavours:
-/// - **Modifier-only** (Fn) — driven by `flagsChanged`.
-/// - **Modifier + key combo** (⌥D) — driven by a `CGEventTap` that
+/// - **Modifier-only** (Fn) - driven by `flagsChanged`.
+/// - **Modifier + key combo** (⌥D) - driven by a `CGEventTap` that
 ///   intercepts the keystroke so the underlying character (e.g. "∂" for
 ///   ⌥D) isn't typed into the focused app.
 class HotkeyManager {
@@ -27,6 +27,7 @@ class HotkeyManager {
     private var onUpgradeToInstruction: (() -> Void)?
     private var onCancel: (() -> Void)?
     private var onSubmit: (() -> Void)?
+    private var onLatchChange: ((Bool) -> Void)?
     private var isRecordingCheck: (() -> Bool)?
     private var isChatActiveCheck: (() -> Bool)?
 
@@ -42,12 +43,12 @@ class HotkeyManager {
     private var stopPending = false
     private var latchTimeoutTask: DispatchWorkItem?
 
-    // Mode-decision delay — gives Shift a chance to register if pressed
+    // Mode-decision delay - gives Shift a chance to register if pressed
     // near-simultaneously with the trigger. Below human perception threshold.
     private var modeDecisionTask: DispatchWorkItem?
     private let modeDecisionDelay: TimeInterval = 0.018
 
-    // A "tap" is anything shorter than this — hold-to-talk requires the
+    // A "tap" is anything shorter than this - hold-to-talk requires the
     // press to last at least this long; otherwise the brief release
     // becomes the first half of a possible double-tap.
     private let shortTapThreshold: TimeInterval = 0.22
@@ -78,6 +79,7 @@ class HotkeyManager {
         onUpgradeToInstruction: @escaping () -> Void,
         onCancel: @escaping () -> Void,
         onSubmit: @escaping () -> Void,
+        onLatchChange: @escaping (Bool) -> Void,
         isRecording: @escaping () -> Bool,
         isChatActive: @escaping () -> Bool
     ) {
@@ -86,6 +88,7 @@ class HotkeyManager {
         self.onUpgradeToInstruction = onUpgradeToInstruction
         self.onCancel = onCancel
         self.onSubmit = onSubmit
+        self.onLatchChange = onLatchChange
         self.isRecordingCheck = isRecording
         self.isChatActiveCheck = isChatActive
         installFlagsMonitor()
@@ -106,9 +109,17 @@ class HotkeyManager {
         triggerIsDown = false
         shiftWasDown = false
         triggerPressTime = nil
-        isLatched = false
+        setLatched(false)
         stopPending = false
         installEventTap()
+    }
+
+    /// Single funnel for latch state - the overlay shows explicit
+    /// cancel/submit controls during a latched recording, so the UI has
+    /// to track every transition.
+    private func setLatched(_ value: Bool) {
+        isLatched = value
+        DispatchQueue.main.async { [weak self] in self?.onLatchChange?(value) }
     }
 
     // MARK: - Enter / Esc Key Monitor
@@ -175,7 +186,7 @@ class HotkeyManager {
             // Combo triggers: press/release come from the event tap. But if
             // the user releases the modifier (e.g. Option) without releasing
             // the combo key first, the tap won't see a keyUp with the
-            // modifier — so we treat modifier release as an implicit release
+            // modifier - so we treat modifier release as an implicit release
             // of the trigger.
             if triggerIsDown && !trigger.isDown(in: event.modifierFlags) {
                 triggerIsDown = false
@@ -191,7 +202,7 @@ class HotkeyManager {
         if triggerIsDown && shiftDown && !shiftWasDown
             && !hasBlockedModifiers
             && isRecordingCheck?() == true {
-            isLatched = true
+            setLatched(true)
             DispatchQueue.main.async { [weak self] in
                 self?.onUpgradeToInstruction?()
             }
@@ -205,25 +216,25 @@ class HotkeyManager {
 
         let isCurrentlyRecording = isRecordingCheck?() ?? false
 
-        // — Press during latched recording: prepare to stop on release —
+        // - Press during latched recording: prepare to stop on release -
         if isCurrentlyRecording && isLatched {
             stopPending = true
             return
         }
 
-        // — Press during latch-pending recording: this is the second tap
+        // - Press during latch-pending recording: this is the second tap
         //   of a double-tap → upgrade to latched mode (don't auto-submit
-        //   on release any more) —
+        //   on release any more) -
         if isCurrentlyRecording && !isLatched {
             latchTimeoutTask?.cancel()
             latchTimeoutTask = nil
-            isLatched = true
+            setLatched(true)
             return
         }
 
-        // — Fresh press: start a new recording. Tiny delay so a Shift
+        // - Fresh press: start a new recording. Tiny delay so a Shift
         //   pressed near-simultaneously is captured, picking instruction
-        //   mode. —
+        //   mode. -
         modeDecisionTask?.cancel()
         let task = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
@@ -236,10 +247,10 @@ class HotkeyManager {
             guard stillTrigger, !blockedNow else { return }
             self.modeDecisionTask = nil
             self.stopPending = false
-            // Instruction mode is always latched — release shouldn't
+            // Instruction mode is always latched - release shouldn't
             // auto-submit, the user will explicitly submit when they're
             // done adding context.
-            self.isLatched = nowShift
+            self.setLatched(nowShift)
             if nowShift {
                 self.onInstructionToggle?()
             } else {
@@ -251,8 +262,8 @@ class HotkeyManager {
     }
 
     private func handleTriggerRelease() {
-        // — If user released before the mode-decision fired, recording
-        //   never started; just discard the pending task —
+        // - If user released before the mode-decision fired, recording
+        //   never started; just discard the pending task -
         if let task = modeDecisionTask {
             task.cancel()
             modeDecisionTask = nil
@@ -267,16 +278,16 @@ class HotkeyManager {
         if isLatched {
             if stopPending {
                 // Single-tap during latched recording → submit on release
-                isLatched = false
+                setLatched(false)
                 stopPending = false
                 DispatchQueue.main.async { [weak self] in self?.onToggle?() }
             }
-            // Plain release while latched — no-op (latched recording stays)
+            // Plain release while latched - no-op (latched recording stays)
             return
         }
 
         if duration < shortTapThreshold {
-            // Brief tap — might be the first half of a double-tap. Keep the
+            // Brief tap - might be the first half of a double-tap. Keep the
             // recording going for `doubleTapWindow`; if a second press
             // arrives, we upgrade to latched. Otherwise, discard.
             latchTimeoutTask?.cancel()
@@ -293,7 +304,7 @@ class HotkeyManager {
             latchTimeoutTask = task
             DispatchQueue.main.asyncAfter(deadline: .now() + doubleTapWindow, execute: task)
         } else {
-            // Held long enough — push-to-talk submit
+            // Held long enough - push-to-talk submit
             DispatchQueue.main.async { [weak self] in self?.onToggle?() }
         }
     }
@@ -320,11 +331,11 @@ class HotkeyManager {
             },
             userInfo: userInfo
         ) else {
-            // Tap creation fails if Accessibility isn't granted yet — common
+            // Tap creation fails if Accessibility isn't granted yet - common
             // right after a fresh build (build.sh resets the permission).
             // Retry every 2s; the guard at the top makes this idempotent
             // once we eventually succeed.
-            print("[whisperino] CGEventTap install failed — retrying once Accessibility is granted")
+            print("[whisperino] CGEventTap install failed - retrying once Accessibility is granted")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.installEventTap()
             }
@@ -337,7 +348,7 @@ class HotkeyManager {
 
         eventTap = tap
         eventTapRunLoopSource = source
-        print("[whisperino] CGEventTap installed — combo triggers active")
+        print("[whisperino] CGEventTap installed - combo triggers active")
     }
 
     /// Tap callback: decides whether to consume the event (combo match) or
@@ -365,7 +376,7 @@ class HotkeyManager {
         // bits use the same layout, so a raw cast is safe for our checks).
         let flags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
         guard trigger.isDown(in: flags) else {
-            // Combo key pressed without the required modifier — let it
+            // Combo key pressed without the required modifier - let it
             // through as a normal keystroke.
             return Unmanaged.passUnretained(event)
         }

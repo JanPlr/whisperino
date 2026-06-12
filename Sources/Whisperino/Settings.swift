@@ -4,9 +4,9 @@ import Foundation
 /// User-selectable trigger for push-to-talk / dictation.
 ///
 /// Two flavours:
-/// - **Modifier-only** (Fn) — hold a single modifier. Driven by
+/// - **Modifier-only** (Fn) - hold a single modifier. Driven by
 ///   `NSEvent.flagsChanged`.
-/// - **Modifier + key combo** (Option+D) — hold a modifier and tap a
+/// - **Modifier + key combo** (Option+D) - hold a modifier and tap a
 ///   regular key. Driven by a `CGEventTap` in `HotkeyManager` which
 ///   intercepts the keystroke so the underlying character (e.g. "∂" for
 ///   ⌥D) isn't typed into the focused app.
@@ -34,7 +34,7 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
 
     /// Whether the trigger's modifier portion is currently held.
     /// For modifier-only triggers, this IS the trigger.
-    /// For combo triggers, the modifier alone isn't enough — the combo key
+    /// For combo triggers, the modifier alone isn't enough - the combo key
     /// must also be pressed (handled by the event tap).
     func isDown(in flags: NSEvent.ModifierFlags) -> Bool {
         switch self {
@@ -45,7 +45,7 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
     }
 
     /// Modifiers that, if held alongside the trigger, should suppress
-    /// activation — e.g. avoid hijacking Cmd+Fn system shortcuts.
+    /// activation - e.g. avoid hijacking Cmd+Fn system shortcuts.
     /// The trigger's own modifier family is excluded so pressing the
     /// trigger doesn't self-block.
     var blockedFlags: NSEvent.ModifierFlags {
@@ -86,12 +86,19 @@ struct AppSettings: Codable, Equatable {
     var apiKey: String = ""
     var triggerKey: TriggerKey = .fn
     var soundEffectsEnabled: Bool = false
+    /// Live streaming for plain dictation: as each ~40s chunk finishes
+    /// transcribing (while you're still talking), its text is pasted
+    /// straight into the focused input. Long recordings make visible
+    /// progress and a crash can only ever lose the last chunk. Sessions
+    /// that streamed live skip Haiku refinement - the raw text has
+    /// already been committed to the target field.
+    var liveStreamingEnabled: Bool = false
     init() {}
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         llmRefinementEnabled = try container.decodeIfPresent(Bool.self, forKey: .llmRefinementEnabled) ?? false
-        // Default `aiModeEnabled` to whatever refinement was — pre-split
+        // Default `aiModeEnabled` to whatever refinement was - pre-split
         // installs only had one toggle, and AI mode previously required it.
         aiModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .aiModeEnabled) ?? llmRefinementEnabled
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
@@ -103,7 +110,15 @@ struct AppSettings: Codable, Equatable {
             triggerKey = .fn
         }
         soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
+        liveStreamingEnabled = try container.decodeIfPresent(Bool.self, forKey: .liveStreamingEnabled) ?? false
     }
+}
+
+/// Lifetime dictation counters shown on the Home page. History is capped at
+/// 50 entries, so totals are accumulated here instead of recomputed from it.
+struct UsageStats: Codable, Equatable {
+    var totalWords: Int = 0
+    var totalTranscripts: Int = 0
 }
 
 struct DictionaryEntry: Codable, Identifiable, Equatable {

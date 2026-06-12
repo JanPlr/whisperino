@@ -10,6 +10,7 @@ class SettingsStore: ObservableObject {
     private let snippetsFile: URL
     private let agentsFile: URL
     private let historyFile: URL
+    private let statsFile: URL
 
     static let maxHistoryEntries = 50
 
@@ -17,7 +18,7 @@ class SettingsStore: ObservableObject {
         didSet {
             save(settings, to: settingsFile)
             // Trigger swap mid-session leaves the hotkey state machine
-            // referencing the old key — clear it so the next press starts fresh.
+            // referencing the old key - clear it so the next press starts fresh.
             if settings.triggerKey != oldValue.triggerKey {
                 HotkeyManager.shared.resetTriggerState()
             }
@@ -35,6 +36,9 @@ class SettingsStore: ObservableObject {
     @Published var history: [TranscriptEntry] {
         didSet { save(history, to: historyFile) }
     }
+    @Published var stats: UsageStats {
+        didSet { save(stats, to: statsFile) }
+    }
 
     private init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -44,6 +48,7 @@ class SettingsStore: ObservableObject {
         snippetsFile = baseDir.appendingPathComponent("snippets.json")
         agentsFile = baseDir.appendingPathComponent("agents.json")
         historyFile = baseDir.appendingPathComponent("history.json")
+        statsFile = baseDir.appendingPathComponent("stats.json")
 
         // Ensure directory exists
         try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
@@ -54,6 +59,20 @@ class SettingsStore: ObservableObject {
         snippets = Self.load(from: snippetsFile) ?? []
         agents = Self.load(from: agentsFile) ?? []
         history = Self.load(from: historyFile) ?? []
+        stats = Self.load(from: statsFile) ?? UsageStats()
+
+        // Backfill for installs that predate stats.json - seed the lifetime
+        // counters from whatever history survived the 50-entry cap.
+        if stats.totalTranscripts == 0 && !history.isEmpty {
+            stats = UsageStats(
+                totalWords: history.reduce(0) { $0 + Self.wordCount($1.text) },
+                totalTranscripts: history.count
+            )
+        }
+    }
+
+    static func wordCount(_ text: String) -> Int {
+        text.split { $0.isWhitespace || $0.isNewline }.count
     }
 
     // MARK: - Persistence
@@ -118,6 +137,8 @@ class SettingsStore: ObservableObject {
         if history.count > Self.maxHistoryEntries {
             history = Array(history.prefix(Self.maxHistoryEntries))
         }
+        stats.totalWords += Self.wordCount(trimmed)
+        stats.totalTranscripts += 1
     }
 
     func clearHistory() {

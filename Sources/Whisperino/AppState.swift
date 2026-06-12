@@ -28,7 +28,7 @@ struct AttachedContext: Identifiable {
     let preview: String
 }
 
-/// One entry in an AI-mode conversation. Ephemeral — never persisted —
+/// One entry in an AI-mode conversation. Ephemeral - never persisted -
 /// so we can keep `NSImage` references in attachments without worrying
 /// about Codable.
 struct ChatTurn: Identifiable {
@@ -62,8 +62,9 @@ class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
     /// Rolling buffer of recent audio levels for the waveform display.
-    /// Index 0 = oldest, last index = newest. Updated at a fixed rate so
-    /// the visual rolls smoothly even when the recorder callback bursts.
+    /// Index 0 = newest (leftmost bar), last index = oldest. Updated at a
+    /// fixed rate so the visual rolls smoothly even when the recorder
+    /// callback bursts.
     @Published var audioSamples: [Float] = Array(repeating: 0, count: AppState.waveformBarCount)
     @Published var recordingStartTime: Date?
     /// Accumulated clipboard attachments for instruction mode
@@ -72,6 +73,14 @@ class AppState: ObservableObject {
     @Published var isInstructionMode: Bool = false
     /// Whether the current request is routed to a Langdock Agent
     @Published var isAgentMode: Bool = false
+    /// True while the current recording is latched ("press and stay" -
+    /// double-tap or AI-mode upgrade): no held key anchors the session,
+    /// so the pill shows explicit ✕ / ✓ controls. Driven by HotkeyManager.
+    @Published var isLatchedRecording: Bool = false
+    /// Raw dictation that had nowhere to go - no focused text field at
+    /// paste time. Non-nil shows the fallback result card so the take
+    /// isn't lost; Copy or ✕ (or Esc) clears it.
+    @Published var fallbackResult: String? = nil
     /// Dynamic status text during agent execution (e.g. "Searching the web…")
     @Published var agentStatus: String? = nil
     /// Name of the currently active agent (shown in overlay)
@@ -84,6 +93,15 @@ class AppState: ObservableObject {
     @Published var showingInputPicker = false
     /// When true, the overlay skips state-change animation (used for cancel)
     var suppressStateAnimation = false
+
+    /// Raw text transcribed so far in the current take (rolling chunks).
+    /// Drives the live preview strip in the overlay and doubles as the
+    /// partial result we can salvage if a later stage fails.
+    @Published var liveTranscript: String = ""
+    /// Chunk progress for the transcribing pill ("3/5"). Total counts
+    /// every chunk submitted so far; done counts completed whisper runs.
+    @Published var chunksDone: Int = 0
+    @Published var chunksTotal: Int = 0
 
     /// Maximum number of attachments allowed
     static let maxAttachments = 5
@@ -118,10 +136,36 @@ class AppState: ObservableObject {
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
 
-    /// Drives the waveform's rolling history. The rightmost bar tracks
+    // MARK: Rolling chunked transcription
+
+    /// Pipeline transcribing finished chunks in the background while the
+    /// user is still speaking. One per take; nil when not recording.
+    private var transcriptionSession: TranscriptionSession?
+    /// Ticks once a second during recording to decide when to rotate the
+    /// audio file into a new chunk.
+    private var chunkTimer: Timer?
+    private var currentChunkStart: Date?
+    /// From this age on, the chunk is cut at the next silence so words
+    /// aren't clipped mid-sentence.
+    private static let chunkSoftSeconds: TimeInterval = 40
+    /// Absolute cap - rotate even mid-speech. Keeps every whisper run
+    /// bounded no matter how long the user talks without pausing.
+    private static let chunkHardSeconds: TimeInterval = 90
+    /// Below this gated level the room is considered silent (the meter
+    /// noise gate already forces ambient noise to 0).
+    private static let chunkSilenceLevel: Float = 0.02
+
+    /// Live streaming (raw dictation only): paste each chunk's text into
+    /// the focused field as it finishes transcribing. Latched at record
+    /// start so flipping the setting mid-take can't produce half-modes.
+    private var liveInsertActive = false
+    /// How many segments have already been pasted, to space-join them.
+    private var liveInsertedSegments = 0
+
+    /// Drives the waveform's rolling history. The leftmost bar tracks
     /// audio level in real-time via the recorder callback; this timer just
     /// shifts the value into history at a fixed cadence so the wave
-    /// visibly travels right-to-left.
+    /// visibly travels left-to-right.
     private var sampleTimer: Timer?
 
     /// Polls the system pasteboard during instruction mode so that anything
@@ -131,11 +175,22 @@ class AppState: ObservableObject {
     private var clipboardBaselineChangeCount: Int = 0
     /// While we're driving the pasteboard ourselves (auto-paste of an
     /// AI reply, restore of the user's prior clipboard), the watcher
-    /// must ignore the resulting changes — otherwise our own paste
+    /// must ignore the resulting changes - otherwise our own paste
     /// gets captured as a context chip on the next turn.
     private var clipboardWatchSuppressed: Bool = false
 
     var isSetUp: Bool { transcriber.isAvailable }
+
+    /// Pre-load the whisper model into the persistent server so the
+    /// first dictation doesn't pay the model-load cost. Call at launch.
+    func warmUpTranscriber() {
+        transcriber.warmUp()
+    }
+
+    /// Tear down the persistent whisper server. Call at app termination.
+    func shutdownTranscriber() {
+        transcriber.shutdown()
+    }
 
     // MARK: - Input Device Management
 
@@ -214,7 +269,7 @@ class AppState: ObservableObject {
         case .idle, .result, .error, .dismissing, .cancelled:
             startRecording(instruction: instruction)
         case .recording:
-            // No min-duration gate here — push-to-talk users may briefly
+            // No min-duration gate here - push-to-talk users may briefly
             // tap Fn. stopRecording() discards anything <0.5s itself.
             stopRecording()
         case .paused:
@@ -248,9 +303,15 @@ class AppState: ObservableObject {
     // MARK: - Cancel
 
     func cancelRecording() {
+        // Esc while the fallback result card is up = close the card.
+        // Nothing else can be in flight in that state.
+        if fallbackResult != nil {
+            dismissFallback()
+            return
+        }
         // Esc with chat open and no recording = close the conversation.
         // Have to branch here so cancelRecording stays the single Esc
-        // sink — the alternative is forking the hotkey wiring per-state.
+        // sink - the alternative is forking the hotkey wiring per-state.
         let isRecordingNow: Bool
         switch state {
         case .recording, .paused: isRecordingNow = true
@@ -262,7 +323,9 @@ class AppState: ObservableObject {
         }
 
         showingInputPicker = false
+        isLatchedRecording = false
         stopClipboardWatching()
+        abandonTranscriptionSession()
         if let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
@@ -272,7 +335,7 @@ class AppState: ObservableObject {
         recordingTargetPID = nil
         resetInstructionMode()
 
-        // Don't show the cancel-flash animation when a chat is up — it
+        // Don't show the cancel-flash animation when a chat is up - it
         // collides visually with the bubbles. Just go back to chat-idle.
         if isChatActive {
             state = .idle
@@ -289,7 +352,11 @@ class AppState: ObservableObject {
         case .recording, .paused:
             stopRecording()
         default:
-            if isChatActive { closeChat() }
+            if isChatActive {
+                closeChat()
+            } else if fallbackResult != nil {
+                dismissFallback()
+            }
         }
     }
 
@@ -298,21 +365,23 @@ class AppState: ObservableObject {
     private func startWaveformSampling() {
         audioSamples = Array(repeating: 0, count: Self.waveformBarCount)
         sampleTimer?.invalidate()
-        // 22 Hz — every ~45ms the wave rolls one step. With a per-step decay
+        // 22 Hz - every ~45ms the wave rolls one step. With a per-step decay
         // factor, the historical "trail" fades AND moves left, so when voice
         // stops the pill clears within ~250ms instead of holding stale
         // snapshots until they roll off.
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 22.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             var s = self.audioSamples
-            // Gentle per-tick fade — the wave keeps enough amplitude to
+            // Gentle per-tick fade - the wave keeps enough amplitude to
             // visibly travel across the pill before it disappears off the
-            // left edge (after ~9 ticks ≈ 410ms total visible duration).
+            // right edge (after ~9 ticks ≈ 410ms total visible duration).
             for i in 0..<s.count { s[i] *= 0.92 }
-            // Roll left + append current live level (overwritten by next
-            // audio callback, so the rightmost stays real-time).
-            s.removeFirst()
-            s.append(self.audioLevel)
+            // Roll right + insert the current live level at the front
+            // (overwritten by the next audio callback, so the leftmost
+            // bar stays real-time). Newest-first → the wave travels
+            // left to right.
+            s.removeLast()
+            s.insert(self.audioLevel, at: 0)
             self.audioSamples = s
         }
     }
@@ -355,7 +424,7 @@ class AppState: ObservableObject {
     // MARK: - Pasteboard auto-capture (instruction mode only)
 
     /// Begin watching the system pasteboard. Anything copied while this is
-    /// running gets auto-attached as context — no manual paperclip click.
+    /// running gets auto-attached as context - no manual paperclip click.
     /// Started when instruction mode begins, stopped when recording ends.
     private func startClipboardWatching() {
         // Snapshot the current change count so we only react to *new* copies.
@@ -383,11 +452,12 @@ class AppState: ObservableObject {
         chatIdleTimer?.invalidate()
         chatIdleTimer = nil
 
-        // If a recording is in flight, stop the recorder silently — we're
+        // If a recording is in flight, stop the recorder silently - we're
         // tearing the whole UI down, no need for the cancel-flash animation.
         switch state {
         case .recording, .paused:
             showingInputPicker = false
+            abandonTranscriptionSession()
             if let url = recorder.stop() {
                 try? FileManager.default.removeItem(at: url)
             }
@@ -402,7 +472,7 @@ class AppState: ObservableObject {
         chatHistory.removeAll()
         isStreamingResponse = false
         // Chat is the lifecycle owner of clipboard watching during AI
-        // sessions — when chat ends, watching ends. Random Cmd+Cs after
+        // sessions - when chat ends, watching ends. Random Cmd+Cs after
         // the user closes shouldn't accumulate as attachments.
         stopClipboardWatching()
         resetInstructionMode()
@@ -420,7 +490,7 @@ class AppState: ObservableObject {
     }
 
     /// Pause the idle countdown without rescheduling. Used while the
-    /// user is hovering the panel (reading / scrolling) — they're
+    /// user is hovering the panel (reading / scrolling) - they're
     /// engaged, so we shouldn't tick toward auto-close.
     func pauseChatIdleTimer() {
         chatIdleTimer?.invalidate()
@@ -434,13 +504,13 @@ class AppState: ObservableObject {
         guard let lastIdx = chatHistory.indices.last,
               chatHistory[lastIdx].role == .assistant else { return }
 
-        // "Thinking" is too generic to deserve a row — every phase
+        // "Thinking" is too generic to deserve a row - every phase
         // change between tool calls would emit one and the timeline
         // would be all thinking.
         if case .thinking = phase { return }
 
         // "Generating response" is the moment the assistant starts
-        // producing the answer — the answer text appearing IS the
+        // producing the answer - the answer text appearing IS the
         // signal, so a separate row would just clutter the timeline.
         // We still need to mark the previous tool call as completed so
         // it stops pulsing, even though we don't add a row.
@@ -454,7 +524,7 @@ class AppState: ObservableObject {
 
         let title = phase.stepTitle
         if let last = chatHistory[lastIdx].agentSteps.last, last.title == title {
-            // Same phase fired twice — ignore the duplicate.
+            // Same phase fired twice - ignore the duplicate.
             return
         }
 
@@ -473,6 +543,8 @@ class AppState: ObservableObject {
     // MARK: - Recording
 
     private func startRecording(instruction: Bool) {
+        // A fresh take supersedes a lingering fallback card.
+        fallbackResult = nil
         guard isSetUp else {
             state = .error(message: "Run setup.sh first")
             autoDismiss(after: 4)
@@ -483,7 +555,7 @@ class AppState: ObservableObject {
 
         if instruction {
             // AI mode requires API key + the AI-mode toggle. Refinement
-            // is independent — users may want raw transcription but still
+            // is independent - users may want raw transcription but still
             // use AI mode, or vice versa.
             let settings = store.settings
             if settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -498,13 +570,13 @@ class AppState: ObservableObject {
             }
             // Fresh AI session resets stale attachments. A chat already
             // in flight keeps whatever the user pre-attached via Cmd+C
-            // between turns — those count as context for *this* turn.
+            // between turns - those count as context for *this* turn.
             if !isChatActive {
                 clearAllAttachments()
             }
         }
 
-        // Recording counts as activity — pause the chat idle countdown so
+        // Recording counts as activity - pause the chat idle countdown so
         // a slow speaker doesn't get the conversation closed under them.
         if isChatActive {
             chatIdleTimer?.invalidate()
@@ -519,15 +591,16 @@ class AppState: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     self.audioLevel = level
-                    // Real-time tracking: rightmost bar reflects live voice
+                    // Real-time tracking: leftmost bar reflects live voice
                     // immediately, no timer-tick wait. The timer below only
-                    // handles rolling history from right to left.
+                    // handles rolling history from left to right.
                     if !self.audioSamples.isEmpty {
-                        self.audioSamples[self.audioSamples.count - 1] = level
+                        self.audioSamples[0] = level
                     }
                 }
             }
             startWaveformSampling()
+            startTranscriptionSession(instruction: instruction)
             // Auto-attach anything the user copies while in instruction mode
             if instruction { startClipboardWatching() }
             SoundEffects.playStart()
@@ -539,16 +612,97 @@ class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Rolling chunked transcription
+
+    /// Create the per-take pipeline and start the rotation timer. Long
+    /// recordings get transcribed in ~40–90s chunks *while the user is
+    /// still talking*, so stopping a 30-minute take only waits on the
+    /// final chunk instead of one giant multi-minute whisper run.
+    private func startTranscriptionSession(instruction: Bool) {
+        liveTranscript = ""
+        chunksDone = 0
+        chunksTotal = 0
+        liveInsertedSegments = 0
+        liveInsertActive = !instruction && store.settings.liveStreamingEnabled
+
+        let session = TranscriptionSession(transcriber: transcriber)
+        session.onProgress = { [weak self] progress in
+            guard let self = self else { return }
+            self.liveTranscript = progress.text
+            self.chunksDone = progress.chunksDone
+            self.chunksTotal = max(self.chunksTotal, progress.chunksTotal)
+            // Live streaming: commit this chunk's text to the focused
+            // field right away. Fires both while recording and while the
+            // tail chunks finish after stop - the final path then skips
+            // its own paste because everything already landed.
+            if self.liveInsertActive, !progress.newSegment.isEmpty {
+                let prefix = self.liveInsertedSegments == 0 ? "" : " "
+                self.liveInsertedSegments += 1
+                self.pasteIntoTargetApp(prefix + progress.newSegment)
+            }
+        }
+        transcriptionSession = session
+
+        currentChunkStart = Date()
+        chunkTimer?.invalidate()
+        chunkTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.chunkTimerTick()
+        }
+    }
+
+    private func chunkTimerTick() {
+        guard case .recording = state,
+              let chunkStart = currentChunkStart,
+              let session = transcriptionSession else { return }
+
+        let elapsed = Date().timeIntervalSince(chunkStart)
+        // Prefer cutting at silence so words aren't clipped; the hard cap
+        // guarantees rotation even if the user never pauses for breath.
+        let silent = audioLevel < Self.chunkSilenceLevel
+        let shouldRotate = (elapsed >= Self.chunkSoftSeconds && silent)
+            || elapsed >= Self.chunkHardSeconds
+        guard shouldRotate, let finishedChunk = recorder.rotateChunk() else { return }
+
+        currentChunkStart = Date()
+        session.submit(chunkURL: finishedChunk)
+        chunksTotal = session.chunksSubmitted
+    }
+
+    /// Tear down the rolling pipeline without consuming its result
+    /// (cancel / close-chat paths).
+    private func abandonTranscriptionSession() {
+        chunkTimer?.invalidate()
+        chunkTimer = nil
+        currentChunkStart = nil
+        transcriptionSession?.cancel()
+        transcriptionSession = nil
+        liveTranscript = ""
+        liveInsertActive = false
+        chunksDone = 0
+        chunksTotal = 0
+    }
+
     private func stopRecording() {
         showingInputPicker = false
+        // The latch ends with the take (Enter-submit bypasses the
+        // HotkeyManager release path, so clear it here too).
+        isLatchedRecording = false
         // Instruction mode means a chat will (or already does) carry
-        // forward — keep clipboard watching alive so the user can
+        // forward - keep clipboard watching alive so the user can
         // pre-attach context for the next turn between recordings.
         // Plain dictation has no notion of follow-up, so it stops.
         if !isInstructionMode {
             stopClipboardWatching()
         }
+        // Recording is over - no more rotations. The session itself stays
+        // alive: it still has to chew through any queued chunks plus the
+        // final one we're about to hand it.
+        chunkTimer?.invalidate()
+        chunkTimer = nil
+        currentChunkStart = nil
+
         guard let audioURL = recorder.stop() else {
+            abandonTranscriptionSession()
             stopWaveformSampling()
             resetInstructionMode()
             state = .idle
@@ -562,6 +716,7 @@ class AppState: ObservableObject {
 
         guard duration >= 0.5 else {
             try? FileManager.default.removeItem(at: audioURL)
+            abandonTranscriptionSession()
             resetInstructionMode()
             state = .idle
             return
@@ -571,7 +726,7 @@ class AppState: ObservableObject {
 
         let instructionMode = isInstructionMode
         let attachments = attachedContexts
-        // Snapshot history *before* this turn — drives both the API call
+        // Snapshot history *before* this turn - drives both the API call
         // (Anthropic Messages format wants prior turns ordered chronologically)
         // and the auto-paste decision (only paste if this is the first turn).
         let preChatHistory = chatHistory
@@ -583,9 +738,21 @@ class AppState: ObservableObject {
             self?.clearAllAttachments()
         }
 
+        // Hand the final chunk to the rolling pipeline. Everything before
+        // it has been transcribing in the background since ~40s into the
+        // take, so even an hour-long recording only waits on the tail.
+        let session = transcriptionSession ?? TranscriptionSession(transcriber: transcriber)
+        transcriptionSession = nil
+        session.submit(chunkURL: audioURL)
+        chunksTotal = session.chunksSubmitted
+        // Stays true through the tail chunks so onProgress keeps pasting
+        // them; cleared once finish() resolves.
+        let liveInsertWasActive = liveInsertActive
+
         Task {
             do {
-                let rawText = try await transcriber.transcribe(audioURL: audioURL)
+                let rawText = try await session.finish()
+                await MainActor.run { self.liveInsertActive = false }
 
                 guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     await MainActor.run {
@@ -594,7 +761,7 @@ class AppState: ObservableObject {
                             self.resetInstructionMode()
                             self.autoDismiss(after: 2)
                         } else {
-                            // Chat is open — silently drop the empty take.
+                            // Chat is open - silently drop the empty take.
                             self.resetInstructionMode()
                             self.state = .idle
                             self.bumpChatIdleTimer()
@@ -612,7 +779,7 @@ class AppState: ObservableObject {
                 // Agent path: only on the *first* turn, since agents own
                 // their own conversation semantics. Once we're in a Claude
                 // chat we don't suddenly hand over to an agent mid-thread.
-                // Renders inside the chat panel — user bubble, then a
+                // Renders inside the chat panel - user bubble, then a
                 // small step timeline (web search, data analysis, …)
                 // that resolves into the final text bubble.
                 if instructionMode, isFirstChatTurn, !settings.apiKey.isEmpty,
@@ -723,7 +890,7 @@ class AppState: ObservableObject {
 
                         // Bail out if the user closed the chat mid-stream
                         // (Esc / X). closeChat already cleared chatHistory
-                        // and set state to .idle — don't paste after the
+                        // and set state to .idle - don't paste after the
                         // user just told us they're done.
                         guard self.isChatActive else { return }
 
@@ -731,7 +898,7 @@ class AppState: ObservableObject {
                         self.store.addTranscript(finalText, isInstruction: true)
 
                         if isFirstChatTurn {
-                            // First reply pastes once into the focused app —
+                            // First reply pastes once into the focused app -
                             // the user can keep iterating in the chat to
                             // refine, but we don't keep stamping new pastes.
                             self.state = .result(text: finalText)
@@ -742,8 +909,19 @@ class AppState: ObservableObject {
                         self.state = .idle
                         self.bumpChatIdleTimer()
                     }
+                } else if liveInsertWasActive {
+                    // Live streaming already pasted every chunk into the
+                    // focused field as it finished - including the tail,
+                    // whose onProgress fired before finish() resolved.
+                    // Nothing left to insert; just record and dismiss.
+                    await MainActor.run {
+                        self.lastTranscriptionResult = rawText
+                        self.store.addTranscript(rawText, isInstruction: false)
+                        self.state = .result(text: rawText)
+                        self.startDismissSequence()
+                    }
                 } else {
-                    // Raw transcription (non-AI) path — Haiku cleanup if
+                    // Raw transcription (non-AI) path - Haiku cleanup if
                     // enabled, paste, dismiss as before.
                     let finalText: String
                     if settings.llmRefinementEnabled && !settings.apiKey.isEmpty {
@@ -765,8 +943,14 @@ class AppState: ObservableObject {
                         self.lastTranscriptionResult = finalText
                         self.store.addTranscript(finalText, isInstruction: false)
                         self.state = .result(text: finalText)
-                        self.insertResult(finalText)
-                        self.startDismissSequence()
+                        if self.insertResult(finalText) {
+                            self.startDismissSequence()
+                        } else {
+                            // Nowhere to paste - keep the take visible in
+                            // the fallback card (state stays .result so
+                            // the panel stays up).
+                            self.fallbackResult = finalText
+                        }
                     }
                 }
             } catch {
@@ -781,8 +965,18 @@ class AppState: ObservableObject {
                     }
                     self.isStreamingResponse = false
                     self.resetInstructionMode()
-                    self.state = .error(message: error.localizedDescription)
-                    self.autoDismiss(after: 3)
+                    // Salvage whatever the rolling pipeline got through
+                    // before the failure (e.g. the AI call died after a
+                    // 20-minute dictation). The raw text also survives in
+                    // ~/.whisperino/recovery/last-raw-transcript.txt.
+                    if !self.liveTranscript.isEmpty {
+                        self.copyToClipboard(self.liveTranscript)
+                        self.state = .error(message: "Failed - raw transcript copied to clipboard")
+                        self.autoDismiss(after: 4)
+                    } else {
+                        self.state = .error(message: error.localizedDescription)
+                        self.autoDismiss(after: 3)
+                    }
                 }
             }
         }
@@ -793,7 +987,7 @@ class AppState: ObservableObject {
         isAgentMode = false
         agentStatus = nil
         activeAgentName = nil
-        // Don't wipe attachments when chat is open — the user may have
+        // Don't wipe attachments when chat is open - the user may have
         // pre-attached new clipboard items between turns and is waiting
         // to send them in the next follow-up. The deferred clear in
         // stopRecording handles consuming attachments for the current
@@ -881,10 +1075,16 @@ class AppState: ObservableObject {
 
     // MARK: - Paste
 
-    private func insertResult(_ text: String) {
+    /// Returns false when there is no editable text element focused in
+    /// the target app - the Cmd+V would land nowhere, so the caller
+    /// should fall back to showing the result card instead.
+    @discardableResult
+    private func insertResult(_ text: String) -> Bool {
         let targetPID = recordingTargetPID
         recordingTargetPID = nil
         resetInstructionMode()
+
+        guard Self.hasEditableFocusTarget(pid: targetPID) else { return false }
 
         if let pid = targetPID,
            let app = NSRunningApplication(processIdentifier: pid) {
@@ -926,13 +1126,64 @@ class AppState: ObservableObject {
             self?.clipboardBaselineChangeCount = NSPasteboard.general.changeCount
             self?.clipboardWatchSuppressed = false
         }
+        return true
+    }
+
+    /// Whether the app we'd paste into has a focused, editable text
+    /// element right now. AX-based; errs on "yes" whenever the answer
+    /// is unknowable (no Accessibility grant, opaque app) so we never
+    /// wrongly withhold a paste.
+    private static func hasEditableFocusTarget(pid: pid_t?) -> Bool {
+        guard AXIsProcessTrusted() else { return true }
+
+        let appElement: AXUIElement = pid.map(AXUIElementCreateApplication)
+            ?? AXUIElementCreateSystemWide()
+
+        var focusedRef: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(
+            appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef
+        )
+        // Apps that don't speak AX at all (some Electron builds) report
+        // apiDisabled / notImplemented - can't tell, so assume editable.
+        guard err == .success else { return err != .noValue }
+        guard let focused = focusedRef, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+            return false
+        }
+        let element = focused as! AXUIElement
+
+        // Editable if the element's value can be written (covers text
+        // fields, text areas, web inputs, most rich editors).
+        var settable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
+           settable.boolValue {
+            return true
+        }
+
+        // Role fallback for editors that don't report a settable value
+        // (e.g. web-based rich text surfaces).
+        var roleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
+           let role = roleRef as? String {
+            return ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXWebArea"].contains(role)
+        }
+        return false
+    }
+
+    /// Close the fallback result card and take the panel down.
+    func dismissFallback() {
+        guard fallbackResult != nil else { return }
+        fallbackResult = nil
+        if case .result = state { state = .idle }
     }
 
     private func startDismissSequence() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+        // Tiny hold so the paste visibly lands, then the pill exits -
+        // slight scale-down + blur + fade, 0.14s (OverlayView's
+        // unified-pill exit) - before the panel goes idle.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard case .result = self?.state else { return }
             self?.state = .dismissing
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
                 guard case .dismissing = self?.state else { return }
                 self?.state = .idle
             }
@@ -985,7 +1236,7 @@ class AppState: ObservableObject {
             return dict.isEmpty ? nil : dict
         } ?? []
 
-        // Same suppression dance as insertResult — our own pasteboard
+        // Same suppression dance as insertResult - our own pasteboard
         // writes mustn't echo back as attachment chips.
         clipboardWatchSuppressed = true
 
@@ -1009,7 +1260,7 @@ class AppState: ObservableObject {
 
     /// Copy `text` to the system clipboard, no paste. Lightweight
     /// counterpart to pasteIntoTargetApp for the chat bubble actions.
-    /// Same suppression dance as the auto-paste — if we don't mute the
+    /// Same suppression dance as the auto-paste - if we don't mute the
     /// watcher across our own write, the watcher's next tick captures
     /// the copied text as a context chip on the next turn.
     func copyToClipboard(_ text: String) {

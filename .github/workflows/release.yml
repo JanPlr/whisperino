@@ -1,0 +1,33 @@
+name: Release
+
+# Push a tag like v1.2.0 and this builds the app, zips it, and publishes
+# a GitHub Release. The in-app updater (UpdateChecker.swift) picks it up
+# from the releases API.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14 # arm64 — app requires Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build app bundle
+        run: VERSION="${GITHUB_REF_NAME#v}" ./build.sh --bundle-only
+
+      - name: Zip app
+        run: ditto -c -k --keepParent build/Whisperino.app "Whisperino-${GITHUB_REF_NAME}.zip"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "Whisperino-${GITHUB_REF_NAME}.zip" \
+            --title "Whisperino ${GITHUB_REF_NAME}" \
+            --generate-notes

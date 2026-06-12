@@ -16,12 +16,17 @@ class SettingsWindowController {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 380),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 660),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.title = "Whisperino Settings"
+        window.title = "Whisperino"
+        // Flow-style chrome: content (sidebar) runs under a transparent
+        // titlebar, with only the traffic lights visible.
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
         window.center()
         window.contentView = NSHostingView(rootView: SettingsView())
         window.isReleasedWhenClosed = false

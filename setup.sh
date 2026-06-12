@@ -63,6 +63,17 @@ cp "$CLI_BIN" "$INSTALL_DIR/bin/whisper-cli"
 chmod +x "$INSTALL_DIR/bin/whisper-cli"
 echo "==> Installed whisper-cli to $INSTALL_DIR/bin/"
 
+# Persistent server - keeps the model warm in memory so transcriptions
+# skip the per-run model load entirely. The app falls back to
+# whisper-cli when this binary is absent.
+if [ -f "build/bin/whisper-server" ]; then
+    cp "build/bin/whisper-server" "$INSTALL_DIR/bin/whisper-server"
+    chmod +x "$INSTALL_DIR/bin/whisper-server"
+    echo "==> Installed whisper-server to $INSTALL_DIR/bin/"
+else
+    echo "Warning: whisper-server not found in build output - transcription will use the slower per-run CLI"
+fi
+
 # Download model
 MODEL_FILE="$INSTALL_DIR/models/ggml-${MODEL_NAME}.bin"
 if [ -f "$MODEL_FILE" ]; then

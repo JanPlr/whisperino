@@ -17,6 +17,9 @@ class StatusBarController: NSObject, NSMenuDelegate {
         super.init()
 
         menu.delegate = self
+        // We toggle isEnabled by hand (updater states, setup warning) -
+        // autoenablesItems would override that on every open.
+        menu.autoenablesItems = false
         setupButton()
         buildMenu()
         observeState()
@@ -65,6 +68,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private var dictationView: HotkeyMenuItemView?
     private var aiModeView: HotkeyMenuItemView?
     private var setupItem: NSMenuItem?
+    private var updateItem: NSMenuItem?
 
     private func buildMenu() {
         let triggerLabel = store.settings.triggerKey.shortLabel
@@ -82,7 +86,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
         dictationItem = dict
         dictationView = dictView
 
-        // AI mode action — same custom view pattern
+        // AI mode action - same custom view pattern
         let aiView = HotkeyMenuItemView(
             title: "Start AI Mode",
             shortcut: "\(triggerLabel) + ⇧",
@@ -95,8 +99,8 @@ class StatusBarController: NSObject, NSMenuDelegate {
         aiModeItem = ai
         aiModeView = aiView
 
-        // Setup-warning row — only shown if Whisper isn't installed
-        let setup = NSMenuItem(title: "⚠︎  Whisper not installed — run setup.sh", action: nil, keyEquivalent: "")
+        // Setup-warning row - only shown if Whisper isn't installed
+        let setup = NSMenuItem(title: "⚠︎  Whisper not installed - run setup.sh", action: nil, keyEquivalent: "")
         setup.isEnabled = false
         setup.isHidden = true
         menu.addItem(setup)
@@ -115,6 +119,12 @@ class StatusBarController: NSObject, NSMenuDelegate {
         settingsItem.target = self
         settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
         menu.addItem(settingsItem)
+
+        let update = NSMenuItem(title: "Check for Updates…", action: #selector(updateAction), keyEquivalent: "")
+        update.target = self
+        update.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "Updates")
+        menu.addItem(update)
+        updateItem = update
 
         let quitItem = NSMenuItem(title: "Quit Whisperino", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
@@ -144,6 +154,22 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
         // Show setup warning only when Whisper isn't installed
         setupItem?.isHidden = appState.isSetUp
+
+        // Reflect updater state
+        switch UpdateChecker.shared.status {
+        case .idle:
+            updateItem?.title = "Check for Updates…"
+            updateItem?.isEnabled = true
+        case .checking:
+            updateItem?.title = "Checking for Updates…"
+            updateItem?.isEnabled = false
+        case .available(let release):
+            updateItem?.title = "Update to v\(release.version)…"
+            updateItem?.isEnabled = true
+        case .downloading:
+            updateItem?.title = "Downloading Update…"
+            updateItem?.isEnabled = false
+        }
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -191,6 +217,17 @@ class StatusBarController: NSObject, NSMenuDelegate {
         SettingsWindowController.shared.show()
     }
 
+    @objc private func updateAction() {
+        switch UpdateChecker.shared.status {
+        case .available(let release):
+            UpdateChecker.shared.offerInstall(release)
+        case .idle:
+            UpdateChecker.shared.checkManually()
+        case .checking, .downloading:
+            break
+        }
+    }
+
     @objc private func saveLastAsSnippet() {
         guard let text = appState.lastTranscriptionResult else { return }
         let name = "Snippet \(store.snippets.count + 1)"
@@ -220,13 +257,16 @@ class StatusBarController: NSObject, NSMenuDelegate {
                         self.overlayPanel.present()
                     }
                 case .dismissing:
-                    self.overlayPanel.dismiss()
+                    // Keep the panel up - SwiftUI is playing the
+                    // shrink-to-center animation inside it. The switch
+                    // to .idle right after takes the panel down.
+                    break
                 case .cancelled:
                     // Let cancel animation play, then dismiss, then go idle
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                         self?.overlayPanel.dismiss()
                         // Set idle after panel is fully gone
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                             guard case .cancelled = self?.appState.state else { return }
                             self?.appState.suppressStateAnimation = true
                             self?.appState.state = .idle
@@ -262,7 +302,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         switch state {
         case .recording:
-            // Red is explicitly colored — not a template
+            // Red is explicitly colored - not a template
             button.image = Self.makeIcon(barColor: .systemRed, asTemplate: false)
         case .transcribing:
             button.image = Self.makeIcon(barColor: .systemGray, asTemplate: false)

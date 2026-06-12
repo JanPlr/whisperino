@@ -28,7 +28,7 @@ class OverlayPanel {
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
-        // `.none` — we run our own alpha fade in present()/dismiss(). The
+        // `.none` - we run our own alpha fade in present()/dismiss(). The
         // default `.utilityWindow` adds a separate OS-level fade that
         // overlaps ours and shows a faint gray rectangle for a frame or
         // two until both animations settle.
@@ -38,7 +38,7 @@ class OverlayPanel {
             rootView: OverlayView(appState: appState)
         )
         hostingView.wantsLayer = true
-        // `nil`, not `.clear` — `.clear` is still a CGColor (transparent
+        // `nil`, not `.clear` - `.clear` is still a CGColor (transparent
         // black) and on some macOS versions composites as a one-pixel
         // gray fringe under the SwiftUI shadow. `nil` means "no layer
         // background at all" which is what we actually want.
@@ -70,14 +70,10 @@ class OverlayPanel {
         isVisible = true
         dismissGeneration += 1
         positionAtBottomCenter()
-        panel.alphaValue = 0
+        // Instant - the pill should be there the moment recording
+        // starts. Any fade-in here reads as input lag.
+        panel.alphaValue = 1
         panel.orderFront(nil)
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = 1
-        }
     }
 
     func dismiss() {
@@ -87,7 +83,7 @@ class OverlayPanel {
         let gen = dismissGeneration
 
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.3
+            context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
@@ -130,7 +126,7 @@ class OverlayPanel {
         // open/close. SwiftUI handles the visual animation within the fixed panel.
         // This eliminates NSPanel ↔ SwiftUI animation desync entirely.
         height += Self.pickerExtraHeight(deviceCount: deviceCount)
-        // Chat is additive — when active, the scroll grows the panel
+        // Chat is additive - when active, the scroll grows the panel
         // upward, the pill stays at the bottom.
         if chatActive {
             height += Self.chatScrollHeight
@@ -171,7 +167,7 @@ class OverlayPanel {
             // spring to settle, then trim the (transparent) excess.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 guard let self = self,
-                      // Re-check size on fire — another resize may have
+                      // Re-check size on fire - another resize may have
                       // overtaken us in the meantime.
                       abs(self.panel.frame.height - newHeight) > 1 else { return }
                 self.panel.setFrame(newFrame, display: true)
@@ -180,7 +176,7 @@ class OverlayPanel {
             // Growing: snap the panel to the new size right away. The
             // transparent area above the dark container is invisible,
             // so the user sees only SwiftUI's spring expanding the
-            // pill — same feel as the input device picker, which
+            // pill - same feel as the input device picker, which
             // doesn't resize the panel either.
             panel.setFrame(newFrame, display: true)
         }
@@ -191,7 +187,10 @@ class OverlayPanel {
         let screenFrame = screen.visibleFrame
         let panelSize = panel.frame.size
         let x = screenFrame.midX - panelSize.width / 2
-        let y = screenFrame.minY + 30
+        // visibleFrame.minY already sits on top of the Dock; hug it.
+        // The pill itself floats 10pt above the panel's bottom edge
+        // (OverlayView's bottom padding), so this keeps a small gap.
+        let y = screenFrame.minY
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }
