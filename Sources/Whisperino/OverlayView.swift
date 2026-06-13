@@ -66,14 +66,12 @@ struct OverlayView: View {
                 // turning the morph into crossfades.
                 case .recording, .paused, .cancelled,
                      .transcribing, .refining, .result, .dismissing:
-                    // AI modes show a labelled status pill once work
-                    // starts; the raw dictation path stays in the
-                    // unified pill throughout.
-                    if (appState.isInstructionMode || appState.isAgentMode) && isProcessingState {
-                        refiningView.padding(.top, 6)
-                    } else {
-                        recordingView.padding(.top, 6)
-                    }
+                    // One pill the whole way - no separate "Generating…"
+                    // status pill for AI takes. On the first turn the pill
+                    // just stays put until the chat opens; the chat sliding
+                    // up is the signal that the model is working, so a
+                    // labelled interstitial is redundant.
+                    recordingView.padding(.top, 6)
                 case .error(let message):
                     errorView(message: message).padding(.top, 6)
                 }
@@ -216,7 +214,7 @@ struct OverlayView: View {
 
     /// Height reserved for the chat scroll area when chat is active.
     /// Internal scroll handles longer conversations past this.
-    static let chatScrollHeight: CGFloat = 320
+    static let chatScrollHeight: CGFloat = 360
 
     @State private var isHoveringPill = false
     @State private var isHoveringMic = false
@@ -234,17 +232,24 @@ struct OverlayView: View {
         let chatActive = appState.isChatActive
         let hasAttachments = (appState.isInstructionMode || chatActive) && !appState.attachedContexts.isEmpty
         let cancelled = isCancelled
-        // Recording stopped → same pill, typing-flow content. The pill
-        // element never changes; only its content and width do.
+        // Recording stopped → same pill, typing-flow content. Only the
+        // RAW dictation path morphs into the typing flow; AI takes don't.
+        // In chat the latched cluster stays up the whole time (see
+        // `latched` below). On the first AI turn - after stop, before the
+        // chat opens - the pill just rests (no typing-flow, no "Generating…"
+        // pill); the chat sliding up is the signal the model is working.
         let processing = isProcessingState && !chatActive
-        // Long takes: once the first rolling chunk has transcribed, show
-        // the tail of the raw text above the waveform - proof the take is
-        // making progress and being saved as the user keeps talking.
-        let showLivePreview = !chatActive && !cancelled && !processing && !appState.liveTranscript.isEmpty
-        // Latched ("press and stay") takes have no held key anchoring
-        // them, so the pill carries its own controls: ✕ to discard on
-        // the left, ✓ to submit on the right.
-        let latched = appState.isLatchedRecording && !chatActive && !cancelled && !processing
+            && !appState.isInstructionMode && !appState.isAgentMode
+        // The latched cluster - mic-select ○, ✕ to discard, waveform,
+        // ✓ to submit - is the persistent anchor for the WHOLE AI flow.
+        // It shows for any latched take, and through every AI stage:
+        // the first take, the generation gap, and the open chat all keep
+        // the identical cluster - it never morphs into a status pill or a
+        // plain waveform. The user keeps talking (auto-listen / Fn),
+        // accepts with ✓, or clears everything with ✕.
+        let latched = (appState.isLatchedRecording || chatActive
+            || appState.isInstructionMode || appState.isAgentMode)
+            && !cancelled && !processing
         // Every pill is a full capsule, 30pt tall in ALL modes (radius
         // 15 = half height): waveform row 16pt + 7 padding; latched
         // swaps in 22pt ✕/✓ buttons with 4pt padding — same 30pt.
@@ -262,58 +267,17 @@ struct OverlayView: View {
                     .transition(.scale.combined(with: .opacity))
             }
 
-            // === The pill (with optional chat scroll docked on top) ===
+            // === The bottom pill. In chat mode it's a small standalone
+            // capsule (mic + trigger-key indicator, or the live waveform);
+            // the conversation floats in a detached card above it,
+            // mirroring the input-device picker. Outside chat it's the
+            // usual dictation pill, optionally widened for instruction-mode
+            // attachment chips.
             VStack(spacing: 0) {
-                if chatActive {
-                    // Same transition the input device picker uses
-                    // (.opacity + .move(edge: .top)) so the chat reads
-                    // as "the pill expanded upward" rather than a
-                    // separate slab sliding into place. The
-                    // panel itself is also growing on this gesture.
-                    ChatScroll(appState: appState)
-                        .frame(height: Self.chatScrollHeight)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-
-                    Rectangle()
-                        .fill(.white.opacity(0.06))
-                        .frame(height: 1)
-                        .padding(.horizontal, 8)
-                        .transition(.opacity)
-                }
-
-                if showLivePreview {
-                    Text(appState.liveTranscript)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .lineLimit(2)
-                        // Head truncation - the *latest* words are what
-                        // reassure the user, not the opening sentence.
-                        .truncationMode(.head)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.top, 7)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-
-                    Rectangle()
-                        .fill(.white.opacity(0.06))
-                        .frame(height: 1)
-                        .padding(.horizontal, 8)
-                        .padding(.top, 7)
-                        .transition(.opacity)
-                }
-
                 HStack(spacing: 10) {
-                    if (hasAttachments || chatActive) && !cancelled { Spacer(minLength: 0) }
+                    if hasAttachments && !chatActive && !cancelled { Spacer(minLength: 0) }
 
-                    if chatActive {
-                        // Chat-aware pill content. The waveform only
-                        // shows during *actual* recording - during
-                        // transcribing / refining we'd just be showing
-                        // flat bars next to status text, which read as
-                        // confused "listening" UI. So those states get
-                        // a simple centered indicator and nothing else.
-                        ChatPillContent(appState: appState)
-                    } else if processing {
+                    if processing {
                         // Same pill, new content: the typing flow takes
                         // the waveform's place and the pill's width
                         // springs out to fit it.
@@ -354,33 +318,27 @@ struct OverlayView: View {
                         }
                     }
 
-                    if (hasAttachments || chatActive) && !cancelled { Spacer(minLength: 0) }
+                    if hasAttachments && !chatActive && !cancelled { Spacer(minLength: 0) }
                 }
                 .padding(.horizontal, latched ? 4 : 11)
                 .padding(.vertical, latched ? 4 : 7)
                 .contentShape(Rectangle())
                 .onHover { isHoveringWaveform = $0 }
                 .onTapGesture {
-                    // In chat-idle, tapping the pill = "finish" (paste latest
-                    // and close, per the user's spec). Otherwise it toggles
-                    // recording as before.
-                    //
-                    // Latched mode is the exception: the pill carries explicit
-                    // ✕ / ✓ controls, so a tap on the body must NOT submit -
-                    // only the ✓ checkmark does. Otherwise a stray click on
-                    // the waveform would end the take.
-                    if chatActive, case .idle = appState.state {
-                        if let latest = appState.chatHistory.last(where: { $0.role == .assistant }),
-                           !latest.text.isEmpty {
-                            appState.pasteIntoTargetApp(latest.text)
-                        }
-                        appState.closeChat()
-                    } else if !processing && !latched {
+                    // Latched mode (including chat) carries explicit ✕ / ✓
+                    // controls, so a tap on the pill body must do nothing -
+                    // only the buttons act, and Fn toggles recording.
+                    // Otherwise a stray click on the waveform would end the
+                    // take or close the chat. The plain (hold-to-talk) pill
+                    // still toggles recording on body tap.
+                    if !processing && !latched {
                         appState.toggleRecording()
                     }
                 }
 
-                if hasAttachments && !cancelled {
+                // Instruction-mode (one-shot) attachments stay inside the
+                // pill. In chat mode they live in the floating card instead.
+                if hasAttachments && !chatActive && !cancelled {
                     Rectangle()
                         .fill(.white.opacity(0.08))
                         .frame(height: 1)
@@ -401,7 +359,7 @@ struct OverlayView: View {
                     .padding(.vertical, 6)
                 }
             }
-            .frame(width: (!cancelled && (hasAttachments || chatActive || showLivePreview)) ? 340 : nil)
+            .frame(width: (!cancelled && hasAttachments && !chatActive) ? 340 : nil)
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: pillRadius, style: .continuous))
             .overlay(
@@ -444,26 +402,46 @@ struct OverlayView: View {
             // transcribing state rather than snapping.
             .animation(.spring(response: 0.3, dampingFraction: 0.72), value: processing)
             }
-            // Input device picker - anchored to the mic satellite (left
-            // edges aligned, 6pt above its 32pt circle), popping out of
-            // the button like a menu instead of sliding in from the
-            // screen edge.
+            // Input device picker for NON-chat latched takes - anchored to
+            // the mic satellite (left edges aligned, 6pt above its 32pt
+            // circle), popping out of the button like a menu. In chat the
+            // picker instead replaces the conversation card (centered
+            // crossfade, above), so this only fires outside chat.
             .overlay(alignment: .bottomLeading) {
-                if appState.showingInputPicker && latched {
-                    InputDevicePicker(appState: appState, isPresented: $appState.showingInputPicker)
-                        .frame(width: 240)
-                        .background(Color.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
-                        )
+                if appState.showingInputPicker && latched && !chatActive {
+                    inputDevicePickerCard
                         .offset(y: -36)
                         .transition(
                             .scale(scale: 0.96, anchor: .bottomLeading)
                                 .combined(with: .opacity)
                         )
                 }
+            }
+        }
+        // Detached floating element above the cluster. Normally the
+        // conversation card; while the mic picker is open it takes the
+        // card's place and the two crossfade (chat fades out, picker fades
+        // in, and back). Anchored to the whole ZStack so it's centered on
+        // the panel - not on the pill, which sits right-of-center once the
+        // mic satellite joins the cluster. Floats 6pt above the pill, grows
+        // upward, never pushes the cluster from its spot.
+        .overlay(alignment: .bottom) {
+            if chatActive && !cancelled {
+                Group {
+                    if appState.showingInputPicker {
+                        inputDevicePickerCard
+                            .transition(.opacity)
+                    } else {
+                        floatingChatCard(showAttachments: hasAttachments)
+                            .transition(.opacity)
+                    }
+                }
+                // Pill is 30pt tall; -(30 + 6) lands the floating element's
+                // bottom edge 6pt above the pill's top.
+                .offset(y: -36)
+                .transition(
+                    .opacity.combined(with: .scale(scale: 0.97, anchor: .bottom))
+                )
             }
         }
         .onHover { hovering in
@@ -485,6 +463,72 @@ struct OverlayView: View {
         .animation(.easeInOut(duration: 0.15), value: isHoveringMic)
         .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.attachedContexts.count)
         .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.isLatchedRecording)
+    }
+
+    /// The detached conversation card that floats above the pill in chat
+    /// mode. Holds the scrollable bubbles plus (in chat) any attachment
+    /// chips. Its own dark rounded panel with a hairline border - the same
+    /// chrome as the input-device picker - so it reads as a separate
+    /// floating element, not part of the pill.
+    private func floatingChatCard(showAttachments: Bool) -> some View {
+        VStack(spacing: 0) {
+            ChatScroll(appState: appState)
+                .frame(height: Self.chatScrollHeight)
+
+            if showAttachments {
+                Rectangle()
+                    .fill(.white.opacity(0.08))
+                    .frame(height: 1)
+                    .padding(.horizontal, 8)
+
+                VStack(spacing: 2) {
+                    ForEach(appState.attachedContexts) { ctx in
+                        attachmentRow(ctx)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    if appState.attachedContexts.count < AppState.maxAttachments {
+                        addMoreHint
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+            }
+        }
+        .frame(width: 360)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
+        )
+        // Hovering the card counts as reading the conversation - hold the
+        // auto-close timer the same way the pill's onHover does. The card
+        // floats outside the pill's frame, so the pill's own onHover never
+        // fires here.
+        .onHover { hovering in
+            if hovering {
+                appState.pauseChatIdleTimer()
+            } else {
+                appState.bumpChatIdleTimer()
+            }
+        }
+    }
+
+    /// The input-device picker in its floating panel chrome. Used in two
+    /// spots: anchored to the mic satellite for non-chat latched takes,
+    /// and (in chat) centered above the pill where it crossfades with the
+    /// conversation card. Same dark panel + hairline border as the card.
+    private var inputDevicePickerCard: some View {
+        InputDevicePicker(appState: appState, isPresented: $appState.showingInputPicker)
+            .frame(width: 240)
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
+            )
     }
 
     /// Mic circle to the left of the pill - exactly the latched row's
@@ -570,6 +614,7 @@ struct OverlayView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
+        .allowsHitTesting(false)
     }
 
     /// Gentle shape mask - barely attenuates the edges so the wave is
@@ -595,30 +640,6 @@ struct OverlayView: View {
         // linear mapping left normal talking almost flat.
         let boosted = pow(smoothed, 0.6)
         return max(3, min(16, 3 + boosted * shape * 13))
-    }
-
-    // MARK: - Refining / Generating (AI modes only)
-
-    private var refiningView: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "pencil")
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.6))
-            if appState.isAgentMode {
-                Text("\(appState.activeAgentName ?? "Agent"): \(appState.agentStatus ?? "Working\u{2026}")")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .contentTransition(.numericText())
-                    .animation(.easeInOut(duration: 0.25), value: appState.agentStatus)
-            } else {
-                Text("Generating\u{2026}")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.75))
-            }
-        }
-        .overlayChrome(instruction: true)
     }
 
     // MARK: - Error
@@ -777,7 +798,7 @@ private struct AttachmentRowView: View {
         HStack(spacing: 6) {
             // Thumbnail or text icon
             if case .image(let image) = ctx.content {
-                Image(nsImage: image)
+                Image(nsImage: ctx.thumbnail ?? image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: 24, height: 24)
@@ -803,6 +824,7 @@ private struct AttachmentRowView: View {
                 .foregroundStyle(.white.opacity(0.5))
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .allowsHitTesting(false)
 
             Spacer(minLength: 0)
 
@@ -964,9 +986,9 @@ private struct GlowBorder: View {
 
 // MARK: - Chat scroll (sits above the pill when chat-active)
 
-/// The scrollable list of message bubbles. Lives inside the same dark
-/// rounded panel as the pill, mirroring the InputDevicePicker pattern -
-/// content expands above; the pill stays fixed at the bottom.
+/// The scrollable list of message bubbles. Hosted by `floatingChatCard`,
+/// the detached panel that floats above the pill - the conversation grows
+/// upward while the pill stays fixed at the bottom.
 private struct ChatScroll: View {
     @ObservedObject var appState: AppState
 
@@ -1043,6 +1065,10 @@ private struct ChatBubble: View {
                     .foregroundStyle(.white.opacity(0.92))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    // Non-hit-testable so macOS doesn't show the text
+                    // I-beam over the bubble - it's a read-only panel,
+                    // the arrow cursor is correct.
+                    .allowsHitTesting(false)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 7)
                     .background(
@@ -1066,7 +1092,7 @@ private struct ChatBubble: View {
     private func attachmentChip(_ ctx: AttachedContext) -> some View {
         switch ctx.content {
         case .image(let image):
-            Image(nsImage: image)
+            Image(nsImage: ctx.thumbnail ?? image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 26, height: 26)
@@ -1117,6 +1143,8 @@ private struct ChatBubble: View {
                     .foregroundStyle(.white.opacity(0.88))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    // See userBubble - keep the arrow cursor over text.
+                    .allowsHitTesting(false)
             }
 
             HStack(spacing: 12) {
@@ -1206,6 +1234,8 @@ private struct AgentStepTimeline: View {
                 }
             }
         }
+        // Read-only - keep the arrow cursor (no text I-beam).
+        .allowsHitTesting(false)
     }
 
     private func iconOpacity(for step: AgentStepEvent) -> Double {
@@ -1216,115 +1246,6 @@ private struct AgentStepTimeline: View {
     private func textOpacity(for step: AgentStepEvent) -> Double {
         if dim { return 0.4 }
         return step.completed ? 0.5 : 0.78
-    }
-}
-
-// MARK: - Inline pill status (right of the waveform during chat)
-
-/// Single source of truth for what the pill shows during a chat
-/// session. Branches on state so the pill area never simultaneously
-/// shows a waveform *and* a status label - that combination read as
-/// "listening" even when we were actually transcribing or thinking.
-private struct ChatPillContent: View {
-    @ObservedObject var appState: AppState
-    @State private var pulse = false
-
-    var body: some View {
-        Group {
-            switch appState.state {
-            case .recording, .paused:
-                // Live waveform mirrors what the standalone pill shows -
-                // we just inline it here when chat is open.
-                HStack(spacing: 2) {
-                    ForEach(0..<AppState.waveformBarCount, id: \.self) { i in
-                        Capsule()
-                            .fill(.white.opacity(0.78))
-                            .frame(width: 2, height: barHeight(for: i))
-                    }
-                }
-                .frame(height: 16)
-                .animation(.easeOut(duration: 0.04), value: appState.audioSamples)
-
-            case .transcribing, .refining:
-                // No status label here. The animated border on the panel
-                // and the streaming bubble (once tokens arrive) carry the
-                // "AI is working" signal - a duplicate label in the pill
-                // just adds noise. Long takes are the one exception:
-                // chunk progress shows the backlog draining instead of
-                // an unexplained wait. Empty area keeps layout stable.
-                if appState.chunksTotal > 1 && appState.chunksDone < appState.chunksTotal {
-                    Text("\(appState.chunksDone)/\(appState.chunksTotal)")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.45))
-                        .contentTransition(.numericText())
-                        .animation(.easeInOut(duration: 0.2), value: appState.chunksDone)
-                        .frame(height: 16)
-                } else {
-                    Color.clear.frame(height: 16)
-                }
-
-            case .error(let msg):
-                Text(msg)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.orange.opacity(0.85))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(height: 16)
-
-            default:
-                idleIndicator
-            }
-        }
-    }
-
-    // Calm chat-idle indicator - subtle mic + key glyph. Replaces the
-    // waveform when no recording is in flight so the pill doesn't *look*
-    // like it's listening when it isn't.
-    private var idleIndicator: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "mic")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(pulse ? 0.55 : 0.32))
-
-            Text(SettingsStore.shared.settings.triggerKey.shortLabel)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.55))
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1.5)
-                .background(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(.white.opacity(0.18), lineWidth: 0.5)
-                )
-        }
-        .frame(height: 16)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-                pulse = true
-            }
-        }
-    }
-
-    private func workingLabel(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            ProgressView()
-                .controlSize(.mini)
-                .scaleEffect(0.7)
-            Text(text)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.55))
-        }
-        .frame(height: 16)
-    }
-
-    private func barHeight(for index: Int) -> CGFloat {
-        let samples = appState.audioSamples
-        guard samples.indices.contains(index) else { return 3 }
-        let curr = CGFloat(samples[index])
-        let prev = index > 0 ? CGFloat(samples[index - 1]) : curr
-        let next = index < samples.count - 1 ? CGFloat(samples[index + 1]) : curr
-        let smoothed = (prev + curr * 2 + next) / 4
-        let boosted = pow(smoothed, 0.6)
-        return max(3, min(16, 3 + boosted * 13))
     }
 }
 

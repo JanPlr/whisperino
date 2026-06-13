@@ -135,7 +135,7 @@ class OverlayPanel {
 
     /// Vertical space the chat scroll claims above the pill. Must match
     /// `OverlayView.chatScrollHeight`.
-    private static let chatScrollHeight: CGFloat = 320
+    private static let chatScrollHeight: CGFloat = 360
 
     private func panelHeight(
         attachmentCount: Int,

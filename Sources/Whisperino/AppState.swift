@@ -21,11 +21,40 @@ enum ClipboardContent {
     case image(NSImage)
 }
 
+extension NSImage {
+    /// A copy scaled so its longest side is at most `maxDimension` points.
+    /// Used to make tiny attachment thumbnails once, instead of handing a
+    /// full-resolution screenshot to a 24pt image view that re-scales it
+    /// on every frame. Returns self if already small enough.
+    func downscaled(maxDimension: CGFloat) -> NSImage {
+        let longest = max(size.width, size.height)
+        guard longest > maxDimension, longest > 0 else { return self }
+        let scale = maxDimension / longest
+        let target = NSSize(width: size.width * scale, height: size.height * scale)
+        let thumb = NSImage(size: target)
+        thumb.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        draw(
+            in: NSRect(origin: .zero, size: target),
+            from: NSRect(origin: .zero, size: size),
+            operation: .copy,
+            fraction: 1
+        )
+        thumb.unlockFocus()
+        return thumb
+    }
+}
+
 /// A single attached context item (clipboard text or image)
 struct AttachedContext: Identifiable {
     let id = UUID()
     let content: ClipboardContent
     let preview: String
+    /// A small pre-rendered preview for the attachment chip. Rendering a
+    /// full-resolution screenshot at 24pt and re-scaling it on every
+    /// relayout/animation frame is what made attaching feel laggy; we
+    /// downsize once at attach time and show this instead. `nil` for text.
+    var thumbnail: NSImage? = nil
 }
 
 /// One entry in an AI-mode conversation. Ephemeral - never persisted -
@@ -129,6 +158,27 @@ class AppState: ObservableObject {
     /// 20s after the last activity, the chat auto-dismisses.
     private var chatIdleTimer: Timer?
     private static let chatIdleTimeout: TimeInterval = 20
+
+    // MARK: Hands-free conversation
+    //
+    // After the model finishes a reply we re-open the mic automatically so
+    // the user can just keep talking - no key press between turns. A short
+    // pause after they speak auto-submits the turn; if they never speak we
+    // give up and fall back to the normal idle countdown.
+    /// True while an auto-started follow-up listen is in flight. Only these
+    /// takes auto-submit on silence - manual takes never do.
+    @Published private(set) var isAutoListening = false
+    private var autoListenMonitor: Timer?
+    private var autoListenSawSpeech = false
+    private var autoListenLastVoice: Date?
+    private var autoListenStarted: Date?
+    /// Audio level above which we count the user as actively speaking.
+    private static let autoListenSpeechLevel: Float = 0.06
+    /// Silence after speech that ends (auto-submits) the turn.
+    private static let autoListenSilenceSeconds: TimeInterval = 1.6
+    /// If no speech arrives this soon after the mic re-opens, stop listening
+    /// and hand back to the idle countdown rather than record the room.
+    private static let autoListenGiveUpSeconds: TimeInterval = 6
 
     private(set) var lastTranscriptionResult: String?
     private let recorder = AudioRecorder()
@@ -307,6 +357,7 @@ class AppState: ObservableObject {
     // MARK: - Cancel
 
     func cancelRecording() {
+        stopAutoListenMonitor()
         // Esc while the fallback result card is up = close the card.
         // Nothing else can be in flight in that state.
         if fallbackResult != nil {
@@ -349,19 +400,81 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Enter / "finish" gesture. While recording, submits the current
-    /// take. While chat-idle, closes the chat (the user is done).
+    /// Enter / "finish" gesture (the ✓ button / Enter). While recording,
+    /// submits the current take. While chat-idle, "accept": paste the
+    /// latest answer into the target app, then close the conversation -
+    /// the affirmative counterpart to ✕ (discard everything).
     func submitOrFinish() {
         switch state {
         case .recording, .paused:
             stopRecording()
         default:
             if isChatActive {
+                if let latest = chatHistory.last(where: { $0.role == .assistant }),
+                   !latest.text.isEmpty {
+                    pasteIntoTargetApp(latest.text)
+                }
                 closeChat()
             } else if fallbackResult != nil {
                 dismissFallback()
             }
         }
+    }
+
+    // MARK: - Hands-free follow-up listening
+
+    /// Called when a chat reply finishes. Re-opens the mic so the user can
+    /// answer without pressing anything; a pause after they speak submits
+    /// the turn. Falls back to the idle countdown if we can't (or the user
+    /// stays silent), so a one-off chat still closes itself.
+    private func beginFollowUpListening() {
+        guard isChatActive, case .idle = state else { bumpChatIdleTimer(); return }
+        startRecording(instruction: true)
+        // start may have bailed (mic error, missing key) - if it didn't put
+        // us into recording, don't pretend we're listening.
+        guard case .recording = state else { bumpChatIdleTimer(); return }
+
+        isAutoListening = true
+        autoListenSawSpeech = false
+        autoListenLastVoice = nil
+        autoListenStarted = Date()
+        autoListenMonitor?.invalidate()
+        autoListenMonitor = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.autoListenTick()
+        }
+    }
+
+    private func autoListenTick() {
+        guard isAutoListening, case .recording = state else {
+            stopAutoListenMonitor()
+            return
+        }
+        let now = Date()
+        if audioLevel >= Self.autoListenSpeechLevel {
+            autoListenSawSpeech = true
+            autoListenLastVoice = now
+        }
+        if autoListenSawSpeech {
+            // Spoke, then paused → submit the turn (loops back to a fresh
+            // listen once the reply lands).
+            if let last = autoListenLastVoice,
+               now.timeIntervalSince(last) >= Self.autoListenSilenceSeconds {
+                stopAutoListenMonitor()
+                stopRecording()
+            }
+        } else if let started = autoListenStarted,
+                  now.timeIntervalSince(started) >= Self.autoListenGiveUpSeconds {
+            // Never spoke → stop listening without submitting an empty take.
+            // cancelRecording leaves us in chat-idle with the idle countdown.
+            stopAutoListenMonitor()
+            cancelRecording()
+        }
+    }
+
+    private func stopAutoListenMonitor() {
+        autoListenMonitor?.invalidate()
+        autoListenMonitor = nil
+        isAutoListening = false
     }
 
     // MARK: - Waveform sampling
@@ -406,7 +519,11 @@ class AppState: ObservableObject {
         if let image = NSImage(pasteboard: pb) {
             let w = Int(image.size.width)
             let h = Int(image.size.height)
-            let ctx = AttachedContext(content: .image(image), preview: "Image (\(w)×\(h))")
+            let ctx = AttachedContext(
+                content: .image(image),
+                preview: "Image (\(w)×\(h))",
+                thumbnail: image.downscaled(maxDimension: 48)
+            )
             attachedContexts.append(ctx)
         } else if let text = pb.string(forType: .string), !text.isEmpty {
             let preview = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(50))
@@ -453,6 +570,7 @@ class AppState: ObservableObject {
     /// Tear down the chat conversation and dismiss the overlay. Used by
     /// Esc, the X button, Enter while chat-idle, and the idle timeout.
     func closeChat() {
+        stopAutoListenMonitor()
         chatIdleTimer?.invalidate()
         chatIdleTimer = nil
 
@@ -547,6 +665,9 @@ class AppState: ObservableObject {
     // MARK: - Recording
 
     private func startRecording(instruction: Bool) {
+        // Clear any prior hands-free monitor; beginFollowUpListening
+        // re-arms it after this call when it's an auto-started take.
+        stopAutoListenMonitor()
         // A fresh take supersedes a lingering fallback card.
         fallbackResult = nil
         guard isSetUp else {
@@ -687,6 +808,9 @@ class AppState: ObservableObject {
     }
 
     private func stopRecording() {
+        // The take is ending - whether by auto-submit, Fn, or ✓ - so the
+        // hands-free monitor's job is done either way.
+        stopAutoListenMonitor()
         showingInputPicker = false
         // The latch ends with the take (Enter-submit bypasses the
         // HotkeyManager release path, so clear it here too).
@@ -838,7 +962,9 @@ class AppState: ObservableObject {
                         self.state = .result(text: finalText)
                         self.insertResult(finalText)
                         self.state = .idle
-                        self.bumpChatIdleTimer()
+                        // Reply done → re-open the mic for a hands-free
+                        // follow-up (falls back to the idle countdown).
+                        self.beginFollowUpListening()
                     }
                 } else if instructionMode {
                     // Chat path: append user turn + streaming assistant turn,
@@ -911,7 +1037,9 @@ class AppState: ObservableObject {
                             self.resetInstructionMode()
                         }
                         self.state = .idle
-                        self.bumpChatIdleTimer()
+                        // Reply done → re-open the mic for a hands-free
+                        // follow-up (falls back to the idle countdown).
+                        self.beginFollowUpListening()
                     }
                 } else if liveInsertWasActive {
                     // Live streaming already pasted every chunk into the
