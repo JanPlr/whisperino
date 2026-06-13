@@ -14,6 +14,10 @@ final class UpdateChecker {
     private static let repo = "JanPlr/whisperino"
     private static let justUpdatedKey = "updaterJustUpdated"
 
+    /// Posted on the main thread whenever `status` changes, so the status-bar
+    /// icon can show/hide its "update available" badge without polling.
+    static let statusDidChange = Notification.Name("WhisperinoUpdateStatusDidChange")
+
     struct Release {
         let version: String   // "1.2.0" - tag without the leading "v"
         let assetURL: URL
@@ -28,7 +32,9 @@ final class UpdateChecker {
     }
 
     /// Read/written on the main thread only.
-    private(set) var status: Status = .idle
+    private(set) var status: Status = .idle {
+        didSet { NotificationCenter.default.post(name: Self.statusDidChange, object: nil) }
+    }
 
     static var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"

@@ -9,6 +9,20 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private let menu: NSMenu
     private let store = SettingsStore.shared
 
+    /// Small blue dot pinned to the icon's top-right corner, shown only when
+    /// the updater has found a newer release. It's a sibling view (not baked
+    /// into the icon) so the waveform stays a template image that auto-adapts
+    /// to the light/dark menu bar, while the dot stays its own solid blue.
+    private let updateBadge: NSView = {
+        let dot = NSView()
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = NSColor.systemBlue.cgColor
+        dot.layer?.cornerRadius = 3
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.isHidden = true
+        return dot
+    }()
+
     init(appState: AppState) {
         self.appState = appState
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -57,6 +71,24 @@ class StatusBarController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         button.image = Self.makeIcon(barColor: .black, asTemplate: true)
         statusItem.menu = menu
+
+        // 6pt blue dot in the top-right corner of the button.
+        button.addSubview(updateBadge)
+        NSLayoutConstraint.activate([
+            updateBadge.widthAnchor.constraint(equalToConstant: 6),
+            updateBadge.heightAnchor.constraint(equalToConstant: 6),
+            updateBadge.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -2),
+            updateBadge.topAnchor.constraint(equalTo: button.topAnchor, constant: 3),
+        ])
+    }
+
+    /// Reflect the updater's current status on the menu-bar badge.
+    private func refreshUpdateBadge() {
+        if case .available = UpdateChecker.shared.status {
+            updateBadge.isHidden = false
+        } else {
+            updateBadge.isHidden = true
+        }
     }
 
     // Menu items we mutate dynamically based on app state.
@@ -296,6 +328,14 @@ class StatusBarController: NSObject, NSMenuDelegate {
                 }
             }
             .store(in: &cancellables)
+
+        // Show / hide the menu-bar badge as the updater's status changes
+        // (background check finds a release, user starts the download, etc.).
+        NotificationCenter.default.publisher(for: UpdateChecker.statusDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshUpdateBadge() }
+            .store(in: &cancellables)
+        refreshUpdateBadge()
     }
 
     private func updateStatusIcon(for state: TranscriptionState) {
