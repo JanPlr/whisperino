@@ -4,6 +4,7 @@ import SwiftUI
 
 class OverlayPanel {
     private let panel: NSPanel
+    private let appState: AppState
     private var isVisible = false
     private var dismissGeneration = 0
     private var cancellable: AnyCancellable?
@@ -14,6 +15,7 @@ class OverlayPanel {
     private static let rowHeight: CGFloat = 32
 
     init(appState: AppState) {
+        self.appState = appState
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 380, height: Self.baseHeight),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -67,8 +69,33 @@ class OverlayPanel {
 
     func present() {
         guard !isVisible else { return }
+        // Re-enumerate input devices now, while still hidden (the sink's
+        // updatePanelHeight no-ops until isVisible). Recording is starting,
+        // so the CoreAudio HAL is warm and returns the SAME device count the
+        // first mic-tap will see. The launch-time pre-load can run against a
+        // cold HAL with a different count; reserving height off that stale
+        // count, then having the first tap re-count, is what resized the
+        // panel mid-open - the "jump". Refreshing here makes the reserved
+        // height match what the picker will actually show.
+        appState.refreshInputDevices()
         isVisible = true
         dismissGeneration += 1
+        // Size to the full reserved height (including the picker's space)
+        // BEFORE showing. dismiss() trims the frame back to baseHeight, so
+        // without this the panel would appear too short and the first
+        // state change (e.g. the first mic tap opening the picker) would
+        // grow it mid-animation - the visible "jump" on first open.
+        let fullHeight = panelHeight(
+            attachmentCount: appState.attachedContexts.count,
+            pickerShowing: appState.showingInputPicker,
+            deviceCount: appState.inputDevices.count,
+            chatActive: !appState.chatHistory.isEmpty
+        )
+        if abs(panel.frame.height - fullHeight) > 1 {
+            var frame = panel.frame
+            frame.size.height = fullHeight
+            panel.setFrame(frame, display: false)
+        }
         positionAtBottomCenter()
         // Instant - the pill should be there the moment recording
         // starts. Any fade-in here reads as input lag.

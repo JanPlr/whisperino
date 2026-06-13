@@ -186,7 +186,6 @@ struct OverlayView: View {
         .padding(16)
         .frame(width: 340, alignment: .leading)
         .background(Color.black)
-        .overlay(RetroTextureView())
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -365,13 +364,18 @@ struct OverlayView: View {
                     // In chat-idle, tapping the pill = "finish" (paste latest
                     // and close, per the user's spec). Otherwise it toggles
                     // recording as before.
+                    //
+                    // Latched mode is the exception: the pill carries explicit
+                    // ✕ / ✓ controls, so a tap on the body must NOT submit -
+                    // only the ✓ checkmark does. Otherwise a stray click on
+                    // the waveform would end the take.
                     if chatActive, case .idle = appState.state {
                         if let latest = appState.chatHistory.last(where: { $0.role == .assistant }),
                            !latest.text.isEmpty {
                             appState.pasteIntoTargetApp(latest.text)
                         }
                         appState.closeChat()
-                    } else if !processing {
+                    } else if !processing && !latched {
                         appState.toggleRecording()
                     }
                 }
@@ -399,7 +403,6 @@ struct OverlayView: View {
             }
             .frame(width: (!cancelled && (hasAttachments || chatActive || showLivePreview)) ? 340 : nil)
             .background(Color.black)
-            .overlay(RetroTextureView())
             .clipShape(RoundedRectangle(cornerRadius: pillRadius, style: .continuous))
             .overlay(
                 Group {
@@ -407,9 +410,11 @@ struct OverlayView: View {
                         EmptyView()
                     } else if isHoveringLatchedCancel {
                         GlowBorder(cornerRadius: pillRadius, color: Color(red: 0.9, green: 0.25, blue: 0.25))
-                    } else if isHoveringWaveform {
+                    } else if isHoveringLatchedSubmit {
                         GlowBorder(cornerRadius: pillRadius, color: Color(red: 0.25, green: 0.78, blue: 0.45))
-                    } else if isHoveringPill {
+                    } else if !latched && isHoveringWaveform {
+                        GlowBorder(cornerRadius: pillRadius, color: Color(red: 0.25, green: 0.78, blue: 0.45))
+                    } else if !latched && isHoveringPill {
                         GlowBorder(cornerRadius: pillRadius, color: Color(red: 0.25, green: 0.78, blue: 0.45))
                     } else {
                         // Calm dictation border vs. animated AI gradient.
@@ -448,7 +453,6 @@ struct OverlayView: View {
                     InputDevicePicker(appState: appState, isPresented: $appState.showingInputPicker)
                         .frame(width: 240)
                         .background(Color.black)
-                        .overlay(RetroTextureView())
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -493,7 +497,6 @@ struct OverlayView: View {
             .foregroundStyle(.white.opacity(isHoveringMic ? 1 : 0.8))
             .frame(width: 30, height: 30)
             .background(Circle().fill(Color.black))
-            .overlay(RetroTextureView().clipShape(Circle()))
             .overlay(
                 Circle().strokeBorder(
                     isHoveringMic || appState.showingInputPicker
@@ -649,7 +652,6 @@ private extension View {
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
             .background(Color.black)
-            .overlay(RetroTextureView().clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous)))
             .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay(
                 Group {
@@ -1324,64 +1326,6 @@ private struct ChatPillContent: View {
         let boosted = pow(smoothed, 0.6)
         return max(3, min(16, 3 + boosted * 13))
     }
-}
-
-// MARK: - Retro chrome texture
-
-/// Faint "hacker terminal" finish for the black chrome: scanlines, an
-/// offset halftone dot grid and random grain, all tinted phosphor-green
-/// and pre-rendered into one tile. A single tiled image draw, so it
-/// costs nothing per frame, and the seeded grain makes every surface
-/// carry the identical print.
-private struct RetroTextureView: View {
-    var body: some View {
-        Image(nsImage: Self.tile)
-            .resizable(resizingMode: .tile)
-            .allowsHitTesting(false)
-    }
-
-    /// 48×48pt tile. Alphas are deliberately tiny - the effect should
-    /// read as surface grain on the black, not as a pattern.
-    private static let tile: NSImage = {
-        let dim = 48
-        let image = NSImage(size: NSSize(width: dim, height: dim))
-        image.lockFocus()
-
-        // Phosphor tint - just green enough that the black reads CRT,
-        // not print ink.
-        let phosphor = NSColor(red: 0.78, green: 1.0, blue: 0.86, alpha: 1)
-
-        // Scanlines every 3pt.
-        phosphor.withAlphaComponent(0.05).setFill()
-        for y in stride(from: 0, to: dim, by: 3) {
-            NSRect(x: 0, y: y, width: dim, height: 1).fill()
-        }
-
-        // Halftone dot grid - 6pt step, every other row offset by half.
-        phosphor.withAlphaComponent(0.08).setFill()
-        var row = 0
-        for y in stride(from: 1, to: dim, by: 6) {
-            let xStart = row % 2 == 0 ? 1 : 4
-            for x in stride(from: xStart, to: dim, by: 6) {
-                NSBezierPath(ovalIn: NSRect(x: CGFloat(x), y: CGFloat(y), width: 1.4, height: 1.4)).fill()
-            }
-            row += 1
-        }
-
-        // Grain - seeded LCG so the tile is identical every launch.
-        var seed: UInt64 = 0x9E3779B97F4A7C15
-        func rnd() -> CGFloat {
-            seed = seed &* 6364136223846793005 &+ 1442695040888963407
-            return CGFloat((seed >> 33) % 1000) / 1000
-        }
-        for _ in 0..<(dim * dim / 7) {
-            phosphor.withAlphaComponent(0.015 + rnd() * 0.055).setFill()
-            NSRect(x: rnd() * CGFloat(dim - 1), y: rnd() * CGFloat(dim - 1), width: 1.0, height: 1.0).fill()
-        }
-
-        image.unlockFocus()
-        return image
-    }()
 }
 
 // MARK: - Pointer cursor helper
