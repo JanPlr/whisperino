@@ -15,7 +15,7 @@ jobs:
   release:
     runs-on: macos-14 # arm64 — app requires Apple Silicon
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build app bundle
         run: VERSION="${GITHUB_REF_NAME#v}" ./build.sh --bundle-only
