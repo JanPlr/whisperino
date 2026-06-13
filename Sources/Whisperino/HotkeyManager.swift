@@ -43,19 +43,33 @@ class HotkeyManager {
     private var stopPending = false
     private var latchTimeoutTask: DispatchWorkItem?
 
+    // Time of the most recent *fresh* press (not a latch-stop tap, not the
+    // second half of a double-tap). Double-tap detection is press-to-press
+    // off this value, deliberately independent of whether the first tap's
+    // recording is still alive - that decoupling is what makes the gesture
+    // robust. Cleared whenever a press resolves to something that can't be
+    // the first half of a pair (a deliberate hold, or a lone tap that timed
+    // out), so press-and-hold can never be mistaken for a double-tap.
+    private var lastPressTime: Date?
+
     // Mode-decision delay - gives Shift a chance to register if pressed
     // near-simultaneously with the trigger. Below human perception threshold.
     private var modeDecisionTask: DispatchWorkItem?
     private let modeDecisionDelay: TimeInterval = 0.018
 
-    // A "tap" is anything shorter than this - hold-to-talk requires the
-    // press to last at least this long; otherwise the brief release
-    // becomes the first half of a possible double-tap.
-    private let shortTapThreshold: TimeInterval = 0.22
+    // A press held at least this long is an unambiguous push-to-talk hold:
+    // release submits immediately. Anything shorter is ambiguous - it might
+    // be the first half of a double-tap, so we wait out `doubleTapWindow`
+    // before deciding what it was. Takes under 0.5s are discarded downstream
+    // (AppState.stopRecording), so a hold that yields real dictation is
+    // always longer than this - making 0.45 a divider that can never steal
+    // a genuine push-to-talk.
+    private let holdThreshold: TimeInterval = 0.45
 
-    // How long to wait for a second tap before treating the recording
-    // as an accidental tap and discarding it.
-    private let doubleTapWindow: TimeInterval = 0.40
+    // Max gap (press-to-press) for two taps to count as a double-tap, and
+    // how long a lone ambiguous tap waits for a partner before it submits
+    // (and gets discarded if it was too short to be real dictation).
+    private let doubleTapWindow: TimeInterval = 0.45
 
     // Enter / Esc monitors (work during recording)
     private var keyDownMonitor: Any?
@@ -109,6 +123,7 @@ class HotkeyManager {
         triggerIsDown = false
         shiftWasDown = false
         triggerPressTime = nil
+        lastPressTime = nil
         setLatched(false)
         stopPending = false
         installEventTap()
@@ -211,30 +226,45 @@ class HotkeyManager {
     }
 
     private func handleTriggerPress(blocked: Bool) {
-        triggerPressTime = Date()
+        let now = Date()
+        triggerPressTime = now
         guard !blocked else { return }
 
         let isCurrentlyRecording = isRecordingCheck?() ?? false
 
-        // - Press during latched recording: prepare to stop on release -
+        // - Press during latched recording: prepare to stop on release.
+        //   Checked first so a tap on a latched take always means "stop",
+        //   never "start a double-tap". -
         if isCurrentlyRecording && isLatched {
             stopPending = true
             return
         }
 
-        // - Press during latch-pending recording: this is the second tap
-        //   of a double-tap → upgrade to latched mode (don't auto-submit
-        //   on release any more) -
-        if isCurrentlyRecording && !isLatched {
-            latchTimeoutTask?.cancel()
-            latchTimeoutTask = nil
+        // - Second tap of a double-tap → latch. Detected purely from the
+        //   press-to-press gap, so it fires whether or not the first tap's
+        //   recording is still alive: a slightly-long first tap, a fast
+        //   double-click that beat the mode-decision delay, anything. This
+        //   is the decoupling that makes the gesture reliable. `lastPressTime`
+        //   is only set on a fresh press and cleared once a press resolves to
+        //   a deliberate hold, so a real push-to-talk never lands here. -
+        if let last = lastPressTime, now.timeIntervalSince(last) < doubleTapWindow {
+            lastPressTime = nil
+            modeDecisionTask?.cancel(); modeDecisionTask = nil
+            latchTimeoutTask?.cancel(); latchTimeoutTask = nil
+            stopPending = false
             setLatched(true)
+            if !isCurrentlyRecording {
+                // First tap never produced a live recording (too fast, or it
+                // already submitted) → start one now so the latch holds something.
+                DispatchQueue.main.async { [weak self] in self?.onToggle?() }
+            }
             return
         }
 
-        // - Fresh press: start a new recording. Tiny delay so a Shift
-        //   pressed near-simultaneously is captured, picking instruction
-        //   mode. -
+        // - Fresh press: remember it for double-tap detection, then start a
+        //   new recording. Tiny delay so a Shift pressed near-simultaneously
+        //   is captured, picking instruction mode. -
+        lastPressTime = now
         modeDecisionTask?.cancel()
         let task = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
@@ -262,8 +292,10 @@ class HotkeyManager {
     }
 
     private func handleTriggerRelease() {
-        // - If user released before the mode-decision fired, recording
-        //   never started; just discard the pending task -
+        // - Released before the mode-decision fired: recording never started.
+        //   Discard the pending start, but KEEP `lastPressTime` so a fast
+        //   follow-up press is still recognised as a double-tap (and starts
+        //   the recording latched). -
         if let task = modeDecisionTask {
             task.cancel()
             modeDecisionTask = nil
@@ -286,27 +318,31 @@ class HotkeyManager {
             return
         }
 
-        if duration < shortTapThreshold {
-            // Brief tap - might be the first half of a double-tap. Keep the
-            // recording going for `doubleTapWindow`; if a second press
-            // arrives, we upgrade to latched. Otherwise, discard.
-            latchTimeoutTask?.cancel()
-            let task = DispatchWorkItem { [weak self] in
-                guard let self = self else { return }
-                self.latchTimeoutTask = nil
-                if self.isRecordingCheck?() ?? false && !self.isLatched {
-                    // No follow-up tap arrived → submit (stopRecording
-                    // discards anything <0.5s itself, so accidental brief
-                    // taps don't generate noise).
-                    DispatchQueue.main.async { self.onToggle?() }
-                }
-            }
-            latchTimeoutTask = task
-            DispatchQueue.main.asyncAfter(deadline: .now() + doubleTapWindow, execute: task)
-        } else {
-            // Held long enough - push-to-talk submit
+        if duration >= holdThreshold {
+            // Held long enough to be an unambiguous push-to-talk → submit
+            // now. Clear `lastPressTime`: a deliberate hold is never the
+            // first half of a double-tap, so a quick press afterwards must
+            // start a fresh recording, not latch onto this one.
+            lastPressTime = nil
             DispatchQueue.main.async { [weak self] in self?.onToggle?() }
+            return
         }
+
+        // Ambiguous short tap - might be the first half of a double-tap.
+        // Keep the recording going for `doubleTapWindow`; the press handler
+        // latches if a second tap arrives. Otherwise submit (stopRecording
+        // discards anything <0.5s itself, so a lone brief tap is silent).
+        latchTimeoutTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.latchTimeoutTask = nil
+            self.lastPressTime = nil
+            if self.isRecordingCheck?() ?? false && !self.isLatched {
+                DispatchQueue.main.async { self.onToggle?() }
+            }
+        }
+        latchTimeoutTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + doubleTapWindow, execute: task)
     }
 
     // MARK: - CGEventTap (combo triggers)
