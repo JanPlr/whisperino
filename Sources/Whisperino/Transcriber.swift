@@ -1,5 +1,15 @@
 import Foundation
 
+/// Thread-safe-by-convention buffer for piping stdout/stderr off the
+/// process's drain queues into the termination handler. The DispatchGroup
+/// around the reads establishes the happens-before ordering, so the
+/// `@unchecked Sendable` is sound; it just spares us a captured-`var` data
+/// race the strict-concurrency checker (correctly) can't prove safe.
+private final class PipeBuffers: @unchecked Sendable {
+    var out = Data()
+    var err = Data()
+}
+
 enum TranscriberError: LocalizedError {
     case notInstalled
     case processFailed(status: Int32)
@@ -237,17 +247,16 @@ class Transcriber {
             // only after termination deadlocks on long recordings: once the
             // transcript exceeds the 64KB pipe buffer, whisper blocks on
             // write and never exits, so the termination handler never fires.
-            var outData = Data()
-            var errData = Data()
+            let buffers = PipeBuffers()
             let drainGroup = DispatchGroup()
             drainGroup.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                outData = stdout.fileHandleForReading.readDataToEndOfFile()
+                buffers.out = stdout.fileHandleForReading.readDataToEndOfFile()
                 drainGroup.leave()
             }
             drainGroup.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                errData = stderr.fileHandleForReading.readDataToEndOfFile()
+                buffers.err = stderr.fileHandleForReading.readDataToEndOfFile()
                 drainGroup.leave()
             }
 
@@ -255,13 +264,13 @@ class Transcriber {
                 // Pipes hit EOF when the process exits, so this returns fast.
                 drainGroup.wait()
                 let output = Self.cleanOutput(
-                    String(data: outData, encoding: .utf8) ?? ""
+                    String(data: buffers.out, encoding: .utf8) ?? ""
                 )
 
                 if process.terminationStatus == 0 {
                     continuation.resume(returning: output)
                 } else {
-                    if let err = String(data: errData, encoding: .utf8), !err.isEmpty {
+                    if let err = String(data: buffers.err, encoding: .utf8), !err.isEmpty {
                         print("[whisperino] whisper-cli stderr: \(err.suffix(500))")
                     }
                     continuation.resume(throwing: TranscriberError.processFailed(
