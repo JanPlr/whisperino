@@ -399,18 +399,35 @@ final class HotkeyMenuItemView: NSView {
     }
 
     private func applyColors() {
-        let baseAlpha: CGFloat = isItemEnabled ? 1.0 : 0.4
+        // Assign dynamic system colors *directly* — never via
+        // `.withAlphaComponent`, which snapshots the color against
+        // whatever `NSAppearance.current` is at call time (during
+        // `menuWillOpen` that's off the draw cycle and unreliable),
+        // freezing it in the wrong light/dark variant. Left as-is the
+        // fields resolve `.labelColor` etc. at draw time against the
+        // menu's real appearance. Disabled dimming rides the view's
+        // `alphaValue` instead of being baked into the color.
         if isMouseInside && isItemEnabled {
             // Selected/highlighted → standard system colors invert
             titleField.textColor = .selectedMenuItemTextColor
-            shortcutField.textColor = NSColor.selectedMenuItemTextColor.withAlphaComponent(0.7)
+            shortcutField.textColor = .selectedMenuItemTextColor
+            shortcutField.alphaValue = 0.7
             iconView.contentTintColor = .selectedMenuItemTextColor
         } else {
-            titleField.textColor = NSColor.labelColor.withAlphaComponent(baseAlpha)
-            shortcutField.textColor = NSColor.secondaryLabelColor.withAlphaComponent(baseAlpha)
-            iconView.contentTintColor = NSColor.labelColor.withAlphaComponent(baseAlpha)
+            titleField.textColor = .labelColor
+            shortcutField.textColor = .secondaryLabelColor
+            shortcutField.alphaValue = 1.0
+            iconView.contentTintColor = .labelColor
         }
+        alphaValue = isItemEnabled ? 1.0 : 0.4
         needsDisplay = true
+    }
+
+    /// Menu custom views don't always re-resolve dynamic colors when the
+    /// host switches light/dark — re-apply so the labels track the menu.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
     }
 
     override func mouseEntered(with event: NSEvent) {

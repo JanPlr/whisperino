@@ -17,6 +17,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Boot the persistent whisper server now so the model is already
         // in memory by the first dictation.
         appState.warmUpTranscriber()
+        // Pre-load the input device list so the first time the picker is
+        // opened the panel height is already correct. Without this, the
+        // first open populates devices in the same transaction as the
+        // open animation, so the count jump (0 → N) rides the spring and
+        // the picker visibly "flies in."
+        appState.refreshInputDevices()
         statusBarController = StatusBarController(appState: appState)
 
         HotkeyManager.shared.register(

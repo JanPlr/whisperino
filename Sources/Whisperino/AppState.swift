@@ -81,6 +81,10 @@ class AppState: ObservableObject {
     /// paste time. Non-nil shows the fallback result card so the take
     /// isn't lost; Copy or ✕ (or Esc) clears it.
     @Published var fallbackResult: String? = nil
+    /// Seconds the fallback card lingers before auto-dismissing. The
+    /// overlay's countdown ring animates over this same duration.
+    static let fallbackTimeout: TimeInterval = 8
+    private var fallbackTimer: Timer?
     /// Dynamic status text during agent execution (e.g. "Searching the web…")
     @Published var agentStatus: String? = nil
     /// Name of the currently active agent (shown in overlay)
@@ -948,8 +952,8 @@ class AppState: ObservableObject {
                         } else {
                             // Nowhere to paste - keep the take visible in
                             // the fallback card (state stays .result so
-                            // the panel stays up).
-                            self.fallbackResult = finalText
+                            // the panel stays up), but only briefly.
+                            self.showFallback(finalText)
                         }
                     }
                 }
@@ -1169,9 +1173,23 @@ class AppState: ObservableObject {
         return false
     }
 
+    /// Show the rescue card and arm the auto-dismiss timer so it never
+    /// lingers forever.
+    private func showFallback(_ text: String) {
+        fallbackResult = text
+        fallbackTimer?.invalidate()
+        fallbackTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.fallbackTimeout, repeats: false
+        ) { [weak self] _ in
+            self?.dismissFallback()
+        }
+    }
+
     /// Close the fallback result card and take the panel down.
     func dismissFallback() {
         guard fallbackResult != nil else { return }
+        fallbackTimer?.invalidate()
+        fallbackTimer = nil
         fallbackResult = nil
         if case .result = state { state = .idle }
     }

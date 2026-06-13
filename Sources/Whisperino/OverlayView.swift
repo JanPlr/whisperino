@@ -99,6 +99,9 @@ struct OverlayView: View {
     @State private var copiedFallback = false
     @State private var isHoveringFallbackClose = false
     @State private var isHoveringFallbackCopy = false
+    /// Drains 1→0 over `AppState.fallbackTimeout`, drawing the countdown
+    /// ring around the ✕. Reset on each card appearance.
+    @State private var fallbackCountdown: CGFloat = 1
 
     /// Wispr-style rescue card: the transcription couldn't be pasted
     /// (no focused text field), so it's shown here with a Copy button
@@ -122,10 +125,22 @@ struct OverlayView: View {
                     .foregroundStyle(.white.opacity(isHoveringFallbackClose ? 1 : 0.8))
                     .frame(width: 26, height: 26)
                     .background(
-                        Circle().strokeBorder(
-                            .white.opacity(isHoveringFallbackClose ? 0.7 : 0.35),
-                            lineWidth: 1
-                        )
+                        // Track ring + draining countdown arc, starting
+                        // at 12 o'clock and sweeping clockwise.
+                        ZStack {
+                            Circle().strokeBorder(
+                                .white.opacity(isHoveringFallbackClose ? 0.7 : 0.18),
+                                lineWidth: 1
+                            )
+                            Circle()
+                                .trim(from: 0, to: fallbackCountdown)
+                                .stroke(
+                                    .white.opacity(isHoveringFallbackClose ? 0.9 : 0.55),
+                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+                                )
+                                .rotationEffect(.degrees(-90))
+                                .padding(0.75)
+                        }
                     )
                     .contentShape(Circle())
                     .onHover { isHoveringFallbackClose = $0 }
@@ -178,6 +193,15 @@ struct OverlayView: View {
                 .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
         )
         .transition(.scale(scale: 0.95).combined(with: .opacity))
+        .onAppear {
+            // Snap full, then drain over the same window AppState's
+            // auto-dismiss timer uses, so the ring empties exactly as
+            // the card vanishes.
+            fallbackCountdown = 1
+            withAnimation(.linear(duration: AppState.fallbackTimeout)) {
+                fallbackCountdown = 0
+            }
+        }
     }
 
     /// Vertical room the SwiftUI body claims inside the panel. Pill alone
