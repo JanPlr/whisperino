@@ -9,6 +9,12 @@ class OverlayPanel {
     private var isVisible = false
     private var dismissGeneration = 0
     private var cancellable: AnyCancellable?
+    private var trackTimer: Timer?
+    /// The origin we last asked the panel to move to. Compared against (rather
+    /// than the live frame) so the 60fps tracker doesn't restart an in-flight
+    /// slide every tick - during an animator move `panel.frame.origin` reports
+    /// the intermediate value, not the destination.
+    private var targetOrigin: NSPoint?
 
     /// Base panel height with no attachments or picker
     private static let baseHeight: CGFloat = 180
@@ -70,6 +76,36 @@ class OverlayPanel {
                 chatActive: chatActive
             )
         }
+
+    }
+
+    deinit {
+        trackTimer?.invalidate()
+    }
+
+    /// The pill rides a `.canJoinAllSpaces` panel, so it follows the user
+    /// across Spaces - but its frame is set for whatever window was front when
+    /// it appeared. Waiting for an activeSpaceDidChange notification to move it
+    /// left a visible beat where the pill sat at the old coordinates (covering
+    /// the new Space's Dock) before jumping. Instead, while the pill is up we
+    /// re-anchor every frame: the instant a new Space lands and the frontmost
+    /// window resolves, the very next tick snaps the pill into place - no
+    /// perceptible lag - and it also tracks the target window being moved or
+    /// resized mid-recording.
+    private func startTracking() {
+        trackTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.positionAtBottomCenter()
+        }
+        // .common so it keeps firing during menu/scroll tracking too.
+        RunLoop.main.add(timer, forMode: .common)
+        trackTimer = timer
+    }
+
+    private func stopTracking() {
+        trackTimer?.invalidate()
+        trackTimer = nil
+        targetOrigin = nil
     }
 
     func present() {
@@ -101,7 +137,8 @@ class OverlayPanel {
             frame.size.height = fullHeight
             panel.setFrame(frame, display: false)
         }
-        positionAtBottomCenter()
+        positionAtBottomCenter(instant: true)
+        startTracking()
         // Instant - the pill should be there the moment recording
         // starts. Any fade-in here reads as input lag.
         panel.alphaValue = 1
@@ -111,6 +148,7 @@ class OverlayPanel {
     func dismiss() {
         guard isVisible else { return }
         isVisible = false
+        stopTracking()
         dismissGeneration += 1
         let gen = dismissGeneration
 
@@ -214,15 +252,29 @@ class OverlayPanel {
         }
     }
 
-    private func positionAtBottomCenter() {
-        let panelSize = panel.frame.size
+    private func positionAtBottomCenter(instant: Bool = false) {
+        guard let target = computeTargetOrigin() else { return }
+        targetOrigin = target
+        if instant {
+            // Initial appearance (or forced): snap, no glide-in.
+            panel.setFrameOrigin(target)
+        } else {
+            easeOriginTowardTarget()
+        }
+    }
 
-        // The app frontmost as the pill appears is the dictation target.
+    /// The bottom-centre origin the pill should occupy right now: anchored to
+    /// the bottom edge of the frontmost window (the "bottom-most element" the
+    /// user is working in). A normal window's bottom sits just above the Dock;
+    /// a window that fills the screen (fullscreen / Dock-hidden) reaches the
+    /// physical screen edge, so the pill drops all the way down. One rule,
+    /// both cases. Falls back to the visible-frame bottom centre with no AX
+    /// grant or no focused window. Returns nil only when there's no screen.
+    private func computeTargetOrigin() -> NSPoint? {
+        let panelSize = panel.frame.size
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let window = pid.flatMap { Self.focusedWindowFrameCocoa(pid: $0) }
 
-        // Pick the screen the target window sits on (matched by horizontal
-        // span, coordinate-system-agnostic), else the main screen.
         let screen: NSScreen? = {
             if let mx = window?.midX,
                let hit = NSScreen.screens.first(where: { $0.frame.minX <= mx && mx <= $0.frame.maxX }) {
@@ -230,27 +282,35 @@ class OverlayPanel {
             }
             return NSScreen.main ?? NSScreen.screens.first
         }()
-        guard let screen else { return }
+        guard let screen else { return nil }
         let visible = screen.visibleFrame
 
-        if let window {
-            // Anchor the pill to the BOTTOM EDGE OF THE TARGET WINDOW - the
-            // "bottom-most element" the user is working in. A normal window's
-            // bottom sits just above the Dock, so the pill rides there; a
-            // window that fills the screen (fullscreen or Dock-hidden) has its
-            // bottom at the physical screen edge, so the pill drops all the
-            // way down. One rule, both cases, no fullscreen guesswork.
-            let x = window.midX - panelSize.width / 2
-            // Never let it sit below the physical screen bottom.
-            let y = max(window.minY, screen.frame.minY)
-            // Keep horizontally on-screen for off-centre / narrow windows.
-            let clampedX = min(max(x, visible.minX + 8), visible.maxX - panelSize.width - 8)
-            panel.setFrameOrigin(NSPoint(x: clampedX, y: y))
-        } else {
-            // No AX window info (no grant / opaque app): bottom-centre of the
-            // visible frame, as before.
-            panel.setFrameOrigin(NSPoint(x: visible.midX - panelSize.width / 2, y: visible.minY))
+        guard let window else {
+            return NSPoint(x: visible.midX - panelSize.width / 2, y: visible.minY)
         }
+        let x = window.midX - panelSize.width / 2
+        let y = max(window.minY, screen.frame.minY)
+        let clampedX = min(max(x, visible.minX + 8), visible.maxX - panelSize.width - 8)
+        return NSPoint(x: clampedX, y: y)
+    }
+
+    /// Move the panel one frame's worth toward `targetOrigin`. Driven by the
+    /// 60fps tracker, this produces a quick, smooth glide when the target jumps
+    /// (Space/app switch) and a tight follow for small deltas - all via plain
+    /// setFrameOrigin, so there's no NSWindow-animator state to fight and no
+    /// feedback loop with the tracker. Snaps the last sub-pixel to settle.
+    private func easeOriginTowardTarget() {
+        guard let target = targetOrigin else { return }
+        let cur = panel.frame.origin
+        let dx = target.x - cur.x
+        let dy = target.y - cur.y
+        if abs(dx) < 0.75, abs(dy) < 0.75 {
+            if dx != 0 || dy != 0 { panel.setFrameOrigin(target) }
+            return
+        }
+        // ~0.32/frame ≈ settles in ~7 frames (~120ms) at 60fps: fast but eased.
+        let f: CGFloat = 0.32
+        panel.setFrameOrigin(NSPoint(x: cur.x + dx * f, y: cur.y + dy * f))
     }
 
     /// Focused window frame of `pid` in Cocoa (bottom-left origin) screen

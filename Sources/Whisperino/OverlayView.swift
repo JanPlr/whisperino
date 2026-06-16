@@ -280,22 +280,13 @@ struct OverlayView: View {
                     if processing {
                         // Same pill, new content: the typing flow takes
                         // the waveform's place and the pill's width
-                        // springs out to fit it.
-                        HStack(spacing: 8) {
-                            TypingFlowView()
-                            // Multi-chunk takes show how much is left -
-                            // long recordings are mostly pre-transcribed
-                            // by stop time, so this reads "4/5" briefly.
-                            if appState.chunksTotal > 1 && appState.chunksDone < appState.chunksTotal {
-                                Text("\(appState.chunksDone)/\(appState.chunksTotal)")
-                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.45))
-                                    .contentTransition(.numericText())
-                                    .animation(.easeInOut(duration: 0.2), value: appState.chunksDone)
-                            }
-                        }
-                        .frame(height: 16)
-                        .transition(.opacity)
+                        // springs out to fit it. Multi-chunk progress is
+                        // tracked in the background (chunksDone/chunksTotal)
+                        // but never shown - the user only sees the normal
+                        // typing animation regardless of recording length.
+                        TypingFlowView()
+                            .frame(height: 16)
+                            .transition(.opacity)
                     } else {
                         if latched {
                             latchedCancelButton
