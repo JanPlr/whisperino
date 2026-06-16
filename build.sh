@@ -10,13 +10,21 @@ APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 BUNDLE_ONLY=false
 [ "$1" = "--bundle-only" ] && BUNDLE_ONLY=true
 
-# Version: $VERSION env wins (CI sets it from the tag), else nearest git tag,
-# else a dev placeholder. Stamped into the bundle's Info.plist below so the
-# in-app update check can compare against GitHub releases.
+# Version resolution, in priority order:
+#   1. $VERSION env       — CI sets this from the pushed tag.
+#   2. git describe       — a tagged checkout builds the exact tag.
+#   3. committed Info.plist — the source of truth that ships in the repo, so
+#      a ZIP download / shallow clone / worktree (where no git tag is
+#      reachable) still reports a real version instead of 0.0.0.
+# release.sh keeps (2) and (3) in lockstep, so they always agree.
+# Stamped into the bundle's Info.plist below for the in-app update check.
 if [ -z "$VERSION" ]; then
-    # `|| true`: with no tags yet, git describe fails - under set -e /
-    # pipefail that would kill the script before the fallback below.
+    # `|| true`: with no tags reachable, git describe fails — under set -e /
+    # pipefail that would kill the script before the fallbacks below.
     VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)
+fi
+if [ -z "$VERSION" ]; then
+    VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist 2>/dev/null || true)
 fi
 VERSION="${VERSION:-0.0.0}"
 

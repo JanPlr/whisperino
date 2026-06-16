@@ -91,10 +91,12 @@ cd whisperino && git pull && ./build.sh
 ## Releasing (maintainers)
 
 ```bash
-git tag v1.2.0 && git push origin v1.2.0
+./release.sh 1.2.0
 ```
 
-That's it. GitHub Actions ([release.yml](.github/workflows/release.yml)) builds the app with the version stamped from the tag, zips it, and publishes a GitHub Release with auto-generated notes. Installed apps pick it up on their next check.
+That's it. [release.sh](release.sh) bumps the version in `Info.plist`, commits, tags `v1.2.0`, and pushes. The pushed tag triggers GitHub Actions ([release.yml](.github/workflows/release.yml)), which builds the app (version stamped from the tag), zips it, and publishes a GitHub Release with auto-generated notes. Installed apps pick it up on their next check.
+
+The committed `Info.plist` version is the source of truth, kept in lockstep with the tag — so a `git clone`, a worktree, or even a "Download ZIP" build all report the correct version, not `0.0.0`.
 
 ## Troubleshooting
 
