@@ -1,11 +1,17 @@
 import AppKit
 import AVFoundation
+import ServiceManagement
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController!
     private let appState = AppState()
 
+    // Launch at login is on by default, but only registered once - a user who
+    // turns it off in Settings stays off across restarts.
+    private static let didSeedLaunchAtLoginKey = "didSeedLaunchAtLogin"
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.seedLaunchAtLogin()
         // After a self-update the Accessibility grant is gone (ad-hoc CDHash
         // changed) - jump straight to the settings pane alongside the prompt.
         UpdateChecker.handlePostUpdateLaunch()
@@ -50,6 +56,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         appState.shutdownTranscriber()
+    }
+
+    private static func seedLaunchAtLogin() {
+        guard !UserDefaults.standard.bool(forKey: didSeedLaunchAtLoginKey) else { return }
+        UserDefaults.standard.set(true, forKey: didSeedLaunchAtLoginKey)
+        if SMAppService.mainApp.status != .enabled {
+            try? SMAppService.mainApp.register()
+        }
     }
 }
 
