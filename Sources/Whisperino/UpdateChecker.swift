@@ -81,8 +81,15 @@ final class UpdateChecker {
         if case .checking = status { return }
         status = .checking
 
-        let url = URL(string: "https://api.github.com/repos/\(Self.repo)/releases/latest")!
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
+        // Fetch the full list (not /releases/latest) and pick the highest
+        // version ourselves - GitHub's "latest" is sorted by the tagged
+        // commit's date, not by version. .reloadIgnoringLocalCacheData skips
+        // URLSession's shared cache, so a stale response from an earlier check
+        // can never make "Update now" install an older release.
+        let url = URL(string: "https://api.github.com/repos/\(Self.repo)/releases?per_page=100")!
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error {
@@ -91,7 +98,7 @@ final class UpdateChecker {
                     return
                 }
                 guard let data,
-                      let release = Self.parseRelease(data) else {
+                      let release = Self.parseLatestRelease(data) else {
                     // No releases yet, or no zip asset - treat as up to date
                     self.status = .idle
                     completion?(.success(nil))
@@ -108,9 +115,20 @@ final class UpdateChecker {
         }.resume()
     }
 
-    private static func parseRelease(_ data: Data) -> Release? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tag = json["tag_name"] as? String,
+    /// Parse the /releases array and return the highest-version installable
+    /// release - skipping drafts, pre-releases, and any without a zip asset.
+    private static func parseLatestRelease(_ data: Data) -> Release? {
+        guard let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+        return array
+            .filter { ($0["draft"] as? Bool) != true && ($0["prerelease"] as? Bool) != true }
+            .compactMap(parseRelease)
+            .max { isNewer($1.version, than: $0.version) }
+    }
+
+    private static func parseRelease(_ json: [String: Any]) -> Release? {
+        guard let tag = json["tag_name"] as? String,
               let page = (json["html_url"] as? String).flatMap(URL.init(string:)),
               let assets = json["assets"] as? [[String: Any]],
               let zip = assets.first(where: { ($0["name"] as? String)?.hasSuffix(".zip") == true }),
