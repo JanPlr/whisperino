@@ -190,6 +190,14 @@ class AppState: ObservableObject {
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
 
+    /// Whether, at the moment recording started, the target app had a
+    /// focused editable text element. Captured then - not at paste time -
+    /// because that's when the target is reliably frontmost and its field
+    /// genuinely focused (our overlay is non-activating and the detached
+    /// chat tile hasn't stolen focus yet). Defaults to true so we paste
+    /// whenever the answer is unknown rather than withholding.
+    private var recordingTargetEditable = true
+
     // MARK: Rolling chunked transcription
 
     /// Pipeline transcribing finished chunks in the background while the
@@ -708,8 +716,12 @@ class AppState: ObservableObject {
             chatIdleTimer = nil
         }
 
-        // Capture the frontmost app so we can re-activate it before pasting
+        // Capture the frontmost app so we can re-activate it before pasting,
+        // and whether it has a focused editable field *right now* - while the
+        // target is frontmost and its caret is live, which is the only moment
+        // this can be read reliably.
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        recordingTargetEditable = Self.focusedElementIsEditable()
 
         do {
             try recorder.start(deviceID: selectedInputDevice?.id) { [weak self] level in
@@ -1078,9 +1090,9 @@ class AppState: ObservableObject {
                         if self.insertResult(finalText) {
                             self.startDismissSequence()
                         } else {
-                            // Nowhere to paste - keep the take visible in
-                            // the fallback card (state stays .result so
-                            // the panel stays up), but only briefly.
+                            // No editable field was focused when recording
+                            // began - surface the take in the rescue card so
+                            // the user can copy it manually.
                             self.showFallback(finalText)
                         }
                     }
@@ -1207,23 +1219,107 @@ class AppState: ObservableObject {
 
     // MARK: - Paste
 
-    /// Returns false when there is no editable text element focused in
-    /// the target app - the Cmd+V would land nowhere, so the caller
-    /// should fall back to showing the result card instead.
+    /// Paste the finished take into the app that was frontmost when
+    /// recording began. Returns false only when we positively determined -
+    /// at record start, the one reliable moment - that there was no editable
+    /// field focused; the caller then shows the rescue card instead. In
+    /// every other case (a field was focused, OR we couldn't tell) we paste,
+    /// so a real text field never gets withheld.
     @discardableResult
     private func insertResult(_ text: String) -> Bool {
         let targetPID = recordingTargetPID
+        let editable = recordingTargetEditable
         recordingTargetPID = nil
         resetInstructionMode()
 
-        guard Self.hasEditableFocusTarget(pid: targetPID) else { return false }
+        guard editable else { return false }
 
-        if let pid = targetPID,
-           let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate()
+        deliverPaste(text, reactivating: targetPID)
+        return true
+    }
+
+    /// Whether the system-wide focused UI element is an editable text
+    /// surface. Read at record start, when the target app is frontmost and
+    /// its caret is live - the only point this is dependable.
+    ///
+    /// Biases hard toward "yes": no Accessibility grant, an app that doesn't
+    /// speak AX, or any failed query all return true so we never withhold a
+    /// paste. We only return false when the API positively tells us either
+    /// that nothing is focused or that the focused thing has no text
+    /// behaviour at all.
+    private static func focusedElementIsEditable() -> Bool {
+        guard AXIsProcessTrusted() else { return true }
+
+        // System-wide focused element = the focused element of the frontmost
+        // app. This is the robust query (the per-app variant returns stale /
+        // no value when the app isn't key). At record start the target *is*
+        // frontmost, so this is exactly the field the user is dictating into.
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(
+            systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef
+        )
+        // Couldn't read focus at all (AX disabled for the app, opaque
+        // Electron, transient error) → assume editable and paste.
+        guard err == .success else { return true }
+        // Attribute present but empty → genuinely nothing focused.
+        guard let focused = focusedRef, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+            return false
+        }
+        let element = focused as! AXUIElement
+
+        func stringAttr(_ attr: String) -> String? {
+            var ref: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attr as CFString, &ref) == .success else { return nil }
+            return ref as? String
         }
 
-        // Save current clipboard, paste transcription, then restore
+        let role = stringAttr(kAXRoleAttribute as String)
+        let subrole = stringAttr(kAXSubroleAttribute as String)
+        var settable = DarwinBoolean(false)
+        let valueSettable = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
+
+        return classifyEditable(role: role, subrole: subrole, valueSettable: valueSettable, element: element)
+    }
+
+    /// Decide editability from role first. Real text-input roles/subroles
+    /// are editable; container surfaces (a web document, scroll area, group,
+    /// window…) are NOT - they expose a text-selection range for page-text
+    /// selection, but you can't type into them, so treating that range as
+    /// "editable" was what suppressed the rescue card when no input was
+    /// focused. Unknown roles fall back to capability checks.
+    private static func classifyEditable(role: String?, subrole: String?, valueSettable: Bool, element: AXUIElement) -> Bool {
+        if let subrole, ["AXSecureTextField", "AXSearchField", "AXTextField", "AXTextArea"].contains(subrole) {
+            return true
+        }
+        if let role {
+            let inputRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
+            if inputRoles.contains(role) { return true }
+
+            // Container / non-input focus targets. A web area is the whole
+            // document, never a typeable field, so reject it even if its
+            // value happens to be settable.
+            let containerRoles: Set<String> = [
+                "AXWebArea", "AXScrollArea", "AXGroup", "AXSplitGroup", "AXWindow",
+                "AXStaticText", "AXImage", "AXButton", "AXList", "AXTable", "AXOutline",
+                "AXLink", "AXHeading", "AXMenuBar", "AXMenu", "AXMenuItem", "AXMenuButton",
+                "AXCell", "AXRow", "AXColumn", "AXToolbar", "AXTabGroup", "AXRadioButton",
+                "AXCheckBox", "AXPopUpButton", "AXSlider", "AXDisclosureTriangle", "AXUnknown",
+            ]
+            if containerRoles.contains(role) { return false }
+        }
+
+        // Unknown / unlisted role: trust a writable value (native editors
+        // that don't advertise a standard role).
+        return valueSettable
+    }
+
+    /// The single paste path: stash the clipboard, bring the target app
+    /// forward, synthesize Cmd+V, then restore the clipboard. Used by both
+    /// the auto-paste of a finished take and the per-bubble "paste this
+    /// version" action.
+    private func deliverPaste(_ text: String, reactivating pid: pid_t?) {
+        // Snapshot the clipboard so we can put it back afterwards.
         let savedItems = NSPasteboard.general.pasteboardItems?.compactMap { item -> [String: Data]? in
             var dict = [String: Data]()
             for type in item.types {
@@ -1238,88 +1334,47 @@ class AppState: ObservableObject {
         // so our own clipboard mutations don't get captured as chips.
         clipboardWatchSuppressed = true
 
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        pasteClipboard()
+        // Bring the target app forward. It's usually still frontmost (our
+        // overlay is a non-activating panel), but the detached chat tile
+        // can take activation - so re-assert it and give the OS a beat to
+        // make the app key before the keystroke lands, otherwise Cmd+V is
+        // delivered to the wrong place.
+        let reactivated: Bool
+        if let pid, let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate()
+            reactivated = true
+        } else {
+            reactivated = false
+        }
 
-        // Restore previous clipboard after paste completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        let fire: () -> Void = { [weak self] in
+            guard let self else { return }
             NSPasteboard.general.clearContents()
-            for itemDict in savedItems {
-                let item = NSPasteboardItem()
-                for (type, data) in itemDict {
-                    item.setData(data, forType: NSPasteboard.PasteboardType(type))
+            NSPasteboard.general.setString(text, forType: .string)
+            self.pasteClipboard()
+
+            // Restore the previous clipboard once the paste has landed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                NSPasteboard.general.clearContents()
+                for itemDict in savedItems {
+                    let item = NSPasteboardItem()
+                    for (type, data) in itemDict {
+                        item.setData(data, forType: NSPasteboard.PasteboardType(type))
+                    }
+                    NSPasteboard.general.writeObjects([item])
                 }
-                NSPasteboard.general.writeObjects([item])
-            }
-            // Now that the dust has settled, snap the watcher's
-            // baseline forward and re-enable it. Anything the user
-            // copies after this point is a real attachment candidate.
-            self?.clipboardBaselineChangeCount = NSPasteboard.general.changeCount
-            self?.clipboardWatchSuppressed = false
-        }
-        return true
-    }
-
-    /// Whether the app we'd paste into has a focused, editable text
-    /// element right now. AX-based; errs on "yes" whenever the answer
-    /// is unknowable (no Accessibility grant, opaque app) so we never
-    /// wrongly withhold a paste.
-    private static func hasEditableFocusTarget(pid: pid_t?) -> Bool {
-        guard AXIsProcessTrusted() else { return true }
-
-        let appElement: AXUIElement = pid.map(AXUIElementCreateApplication)
-            ?? AXUIElementCreateSystemWide()
-
-        var focusedRef: CFTypeRef?
-        let err = AXUIElementCopyAttributeValue(
-            appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef
-        )
-        // Apps that don't speak AX at all (some Electron builds) report
-        // apiDisabled / notImplemented - can't tell, so assume editable.
-        guard err == .success else { return err != .noValue }
-        guard let focused = focusedRef, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
-            return false
-        }
-        let element = focused as! AXUIElement
-
-        // Editable if the element's value can be written (covers most
-        // native text fields, text areas, and rich editors).
-        var settable = DarwinBoolean(false)
-        if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
-           settable.boolValue {
-            return true
-        }
-
-        // Most reliable cross-platform signal: a focused element that
-        // exposes text-editing attributes is something you can type into.
-        // Web/Electron chat inputs (browsers, Slack, Langdock, etc.) report
-        // their AXValue as *not* settable, so the check above misses them -
-        // but they still surface a selection range / character count, just
-        // like native fields do. Buttons, lists, images and the desktop do
-        // not. This is what makes paste land in web chat boxes.
-        var namesRef: CFArray?
-        if AXUIElementCopyAttributeNames(element, &namesRef) == .success,
-           let names = namesRef as? [String] {
-            let textSignals: Set<String> = [
-                kAXSelectedTextRangeAttribute as String,
-                kAXSelectedTextAttribute as String,
-                kAXNumberOfCharactersAttribute as String,
-                kAXInsertionPointLineNumberAttribute as String,
-            ]
-            if names.contains(where: { textSignals.contains($0) }) {
-                return true
+                // Snap the watcher's baseline forward and re-enable it.
+                // Anything copied after this point is a real attachment.
+                self?.clipboardBaselineChangeCount = NSPasteboard.general.changeCount
+                self?.clipboardWatchSuppressed = false
             }
         }
 
-        // Role fallback for editors that report neither a settable value
-        // nor text attributes (e.g. some web-based rich text surfaces).
-        var roleRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
-           let role = roleRef as? String {
-            return ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXWebArea"].contains(role)
+        if reactivated {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: fire)
+        } else {
+            fire()
         }
-        return false
     }
 
     /// Show the rescue card and arm the auto-dismiss timer so it never
@@ -1386,43 +1441,9 @@ class AppState: ObservableObject {
     /// whatever was there. Used by the per-bubble "paste this version"
     /// action so the user can commit a later iteration of an AI reply.
     func pasteIntoTargetApp(_ text: String) {
-        // Re-activate the original target if we still know it. Otherwise
-        // paste into whatever is currently frontmost.
-        if let pid = recordingTargetPID,
-           let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate()
-        }
-
-        let savedItems = NSPasteboard.general.pasteboardItems?.compactMap { item -> [String: Data]? in
-            var dict = [String: Data]()
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    dict[type.rawValue] = data
-                }
-            }
-            return dict.isEmpty ? nil : dict
-        } ?? []
-
-        // Same suppression dance as insertResult - our own pasteboard
-        // writes mustn't echo back as attachment chips.
-        clipboardWatchSuppressed = true
-
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        pasteClipboard()
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            NSPasteboard.general.clearContents()
-            for itemDict in savedItems {
-                let item = NSPasteboardItem()
-                for (type, data) in itemDict {
-                    item.setData(data, forType: NSPasteboard.PasteboardType(type))
-                }
-                NSPasteboard.general.writeObjects([item])
-            }
-            self?.clipboardBaselineChangeCount = NSPasteboard.general.changeCount
-            self?.clipboardWatchSuppressed = false
-        }
+        // Re-activate the original target if we still know it; otherwise
+        // deliverPaste falls through to whatever is currently frontmost.
+        deliverPaste(text, reactivating: recordingTargetPID)
     }
 
     /// Copy `text` to the system clipboard, no paste. Lightweight

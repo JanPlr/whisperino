@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Combine
 import SwiftUI
 
@@ -23,7 +24,11 @@ class OverlayPanel {
             defer: false
         )
 
-        panel.level = .floating
+        // Sit above ordinary and floating windows so the pill is never
+        // buried behind another app's panels. `.fullScreenAuxiliary` +
+        // `.canJoinAllSpaces` (below) carry it over fullscreen apps and
+        // across Spaces; the high level keeps it on top everywhere else.
+        panel.level = .screenSaver
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -210,14 +215,71 @@ class OverlayPanel {
     }
 
     private func positionAtBottomCenter() {
-        guard let screen = NSScreen.main else { return }
-        let screenFrame = screen.visibleFrame
         let panelSize = panel.frame.size
-        let x = screenFrame.midX - panelSize.width / 2
-        // visibleFrame.minY already sits on top of the Dock; hug it.
-        // The pill itself floats 10pt above the panel's bottom edge
-        // (OverlayView's bottom padding), so this keeps a small gap.
-        let y = screenFrame.minY
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+
+        // The app frontmost as the pill appears is the dictation target.
+        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let window = pid.flatMap { Self.focusedWindowFrameCocoa(pid: $0) }
+
+        // Pick the screen the target window sits on (matched by horizontal
+        // span, coordinate-system-agnostic), else the main screen.
+        let screen: NSScreen? = {
+            if let mx = window?.midX,
+               let hit = NSScreen.screens.first(where: { $0.frame.minX <= mx && mx <= $0.frame.maxX }) {
+                return hit
+            }
+            return NSScreen.main ?? NSScreen.screens.first
+        }()
+        guard let screen else { return }
+        let visible = screen.visibleFrame
+
+        if let window {
+            // Anchor the pill to the BOTTOM EDGE OF THE TARGET WINDOW - the
+            // "bottom-most element" the user is working in. A normal window's
+            // bottom sits just above the Dock, so the pill rides there; a
+            // window that fills the screen (fullscreen or Dock-hidden) has its
+            // bottom at the physical screen edge, so the pill drops all the
+            // way down. One rule, both cases, no fullscreen guesswork.
+            let x = window.midX - panelSize.width / 2
+            // Never let it sit below the physical screen bottom.
+            let y = max(window.minY, screen.frame.minY)
+            // Keep horizontally on-screen for off-centre / narrow windows.
+            let clampedX = min(max(x, visible.minX + 8), visible.maxX - panelSize.width - 8)
+            panel.setFrameOrigin(NSPoint(x: clampedX, y: y))
+        } else {
+            // No AX window info (no grant / opaque app): bottom-centre of the
+            // visible frame, as before.
+            panel.setFrameOrigin(NSPoint(x: visible.midX - panelSize.width / 2, y: visible.minY))
+        }
+    }
+
+    /// Focused window frame of `pid` in Cocoa (bottom-left origin) screen
+    /// coordinates, via the Accessibility API. Returns nil without an AX
+    /// grant or if the app exposes no focused window.
+    private static func focusedWindowFrameCocoa(pid: pid_t) -> CGRect? {
+        guard AXIsProcessTrusted() else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        var winRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
+              let w = winRef, CFGetTypeID(w) == AXUIElementGetTypeID() else { return nil }
+        let win = w as! AXUIElement
+
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(win, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(win, kAXSizeAttribute as CFString, &sizeRef) == .success
+        else { return nil }
+
+        var pos = CGPoint.zero
+        var size = CGSize.zero
+        AXValueGetValue(posRef as! AXValue, .cgPoint, &pos)
+        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+
+        // AX is top-left origin measured from the primary (menu-bar) screen;
+        // Cocoa is bottom-left. Flip the window's BOTTOM edge into Cocoa Y.
+        guard let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero })
+            ?? NSScreen.main else { return nil }
+        let cocoaY = primary.frame.maxY - (pos.y + size.height)
+        return CGRect(x: pos.x, y: cocoaY, width: size.width, height: size.height)
     }
 }
