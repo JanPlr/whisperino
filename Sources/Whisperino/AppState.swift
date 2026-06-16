@@ -1283,16 +1283,37 @@ class AppState: ObservableObject {
         }
         let element = focused as! AXUIElement
 
-        // Editable if the element's value can be written (covers text
-        // fields, text areas, web inputs, most rich editors).
+        // Editable if the element's value can be written (covers most
+        // native text fields, text areas, and rich editors).
         var settable = DarwinBoolean(false)
         if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
            settable.boolValue {
             return true
         }
 
-        // Role fallback for editors that don't report a settable value
-        // (e.g. web-based rich text surfaces).
+        // Most reliable cross-platform signal: a focused element that
+        // exposes text-editing attributes is something you can type into.
+        // Web/Electron chat inputs (browsers, Slack, Langdock, etc.) report
+        // their AXValue as *not* settable, so the check above misses them -
+        // but they still surface a selection range / character count, just
+        // like native fields do. Buttons, lists, images and the desktop do
+        // not. This is what makes paste land in web chat boxes.
+        var namesRef: CFArray?
+        if AXUIElementCopyAttributeNames(element, &namesRef) == .success,
+           let names = namesRef as? [String] {
+            let textSignals: Set<String> = [
+                kAXSelectedTextRangeAttribute as String,
+                kAXSelectedTextAttribute as String,
+                kAXNumberOfCharactersAttribute as String,
+                kAXInsertionPointLineNumberAttribute as String,
+            ]
+            if names.contains(where: { textSignals.contains($0) }) {
+                return true
+            }
+        }
+
+        // Role fallback for editors that report neither a settable value
+        // nor text attributes (e.g. some web-based rich text surfaces).
         var roleRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
            let role = roleRef as? String {
