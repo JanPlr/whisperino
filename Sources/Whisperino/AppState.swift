@@ -6,7 +6,6 @@ import SwiftUI
 enum TranscriptionState: Equatable {
     case idle
     case recording
-    case paused
     case transcribing
     case refining
     case result(text: String)
@@ -278,7 +277,6 @@ class AppState: ObservableObject {
     func selectInputDevice(_ device: AudioInputDevice) {
         selectedInputDevice = device
 
-        // If recording is active, hot-swap the input device by restarting the engine
         guard case .recording = state else { return }
         do {
             try recorder.switchDevice(deviceID: device.id) { [weak self] level in
@@ -334,8 +332,6 @@ class AppState: ObservableObject {
             // No min-duration gate here - push-to-talk users may briefly
             // tap Fn. stopRecording() discards anything <0.5s itself.
             stopRecording()
-        case .paused:
-            stopRecording()
         case .transcribing, .refining:
             break
         }
@@ -345,21 +341,6 @@ class AppState: ObservableObject {
 
     func toggleRecording() {
         toggleRecording(instruction: isInstructionMode)
-    }
-
-    // MARK: - Pause / Resume
-
-    func pauseRecording() {
-        guard case .recording = state else { return }
-        recorder.pause()
-        audioLevel = 0.3
-        state = .paused
-    }
-
-    func resumeRecording() {
-        guard case .paused = state else { return }
-        recorder.resume()
-        state = .recording
     }
 
     // MARK: - Cancel
@@ -377,7 +358,7 @@ class AppState: ObservableObject {
         // sink - the alternative is forking the hotkey wiring per-state.
         let isRecordingNow: Bool
         switch state {
-        case .recording, .paused: isRecordingNow = true
+        case .recording: isRecordingNow = true
         default: isRecordingNow = false
         }
         if !isRecordingNow && isChatActive {
@@ -414,7 +395,7 @@ class AppState: ObservableObject {
     /// the affirmative counterpart to ✕ (discard everything).
     func submitOrFinish() {
         switch state {
-        case .recording, .paused:
+        case .recording:
             stopRecording()
         default:
             if isChatActive {
@@ -585,7 +566,7 @@ class AppState: ObservableObject {
         // If a recording is in flight, stop the recorder silently - we're
         // tearing the whole UI down, no need for the cancel-flash animation.
         switch state {
-        case .recording, .paused:
+        case .recording:
             showingInputPicker = false
             abandonTranscriptionSession()
             if let url = recorder.stop() {
@@ -1429,12 +1410,6 @@ class AppState: ObservableObject {
         keyUp?.flags = .maskCommand
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
-    }
-
-    func insertSnippet(_ snippet: Snippet) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(snippet.text, forType: .string)
-        pasteClipboard()
     }
 
     /// Send `text` to the focused app via the clipboard, then restore

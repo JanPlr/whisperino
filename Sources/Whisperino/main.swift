@@ -35,7 +35,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             isRecording: { [weak self] in
                 guard let state = self?.appState.state else { return false }
                 switch state {
-                case .recording, .paused: return true
+                case .recording: return true
                 default: return false
                 }
             },

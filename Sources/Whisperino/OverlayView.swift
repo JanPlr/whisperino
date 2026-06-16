@@ -44,10 +44,9 @@ struct OverlayView: View {
     var body: some View {
         Group {
             if appState.isChatActive {
-                // Chat is open → always show the unified pill (with chat
-                // scroll docked on top), regardless of recording / refining
-                // / idle. The pill's content reacts to state internally
-                // so the layout doesn't jump.
+                // Chat open → the unified pill (with chat scroll docked on
+                // top), whatever the recording state. Content reacts to
+                // state internally so the layout doesn't jump.
                 recordingView.padding(.top, 6)
             } else if appState.fallbackResult != nil {
                 // The take had no text field to land in - show it in a
@@ -57,20 +56,15 @@ struct OverlayView: View {
                 switch appState.state {
                 case .idle:
                     Color.clear.frame(width: 0, height: 0)
-                // One case for the ENTIRE take lifecycle - recording
-                // through transcribing, result and dismiss - so the
-                // pill is one stable element the whole way: the
-                // waveform morphs into the typing flow (width springs
-                // wider), then the same pill scales/blurs/fades out.
+                // One case for the ENTIRE take lifecycle so the pill is a
+                // single stable element the whole way: the waveform morphs
+                // into the typing flow, then the same pill fades out.
                 // Separate cases re-created the view at each state hop,
-                // turning the morph into crossfades.
-                case .recording, .paused, .cancelled,
+                // turning the morph into crossfades. There's no separate
+                // "Generating…" pill for AI takes - the chat sliding up is
+                // the signal the model is working.
+                case .recording, .cancelled,
                      .transcribing, .refining, .result, .dismissing:
-                    // One pill the whole way - no separate "Generating…"
-                    // status pill for AI takes. On the first turn the pill
-                    // just stays put until the chat opens; the chat sliding
-                    // up is the signal that the model is working, so a
-                    // labelled interstitial is redundant.
                     recordingView.padding(.top, 6)
                 case .error(let message):
                     errorView(message: message).padding(.top, 6)
@@ -225,65 +219,49 @@ struct OverlayView: View {
     // MARK: - Recording
 
     private var recordingView: some View {
-        // Chips are visible whenever there's something attached and the
-        // user is in an AI context - instruction mode (one-shot) or any
-        // chat state. Without `chatActive`, pre-attached items between
-        // turns wouldn't render.
+        // Chips show whenever something is attached and we're in an AI
+        // context - instruction mode (one-shot) or any chat state.
         let chatActive = appState.isChatActive
         let hasAttachments = (appState.isInstructionMode || chatActive) && !appState.attachedContexts.isEmpty
         let cancelled = isCancelled
-        // Recording stopped → same pill, typing-flow content. Only the
-        // RAW dictation path morphs into the typing flow; AI takes don't.
-        // In chat the latched cluster stays up the whole time (see
-        // `latched` below). On the first AI turn - after stop, before the
-        // chat opens - the pill just rests (no typing-flow, no "Generating…"
-        // pill); the chat sliding up is the signal the model is working.
+        // Recording stopped → same pill, typing-flow content. Only the RAW
+        // dictation path morphs into the typing flow; AI takes keep the
+        // latched cluster up the whole time (see `latched`).
         let processing = isProcessingState && !chatActive
             && !appState.isInstructionMode && !appState.isAgentMode
-        // The latched cluster - mic-select ○, ✕ to discard, waveform,
-        // ✓ to submit - is the persistent anchor for the WHOLE AI flow.
-        // It shows for any latched take, and through every AI stage:
-        // the first take, the generation gap, and the open chat all keep
-        // the identical cluster - it never morphs into a status pill or a
-        // plain waveform. The user keeps talking (auto-listen / Fn),
-        // accepts with ✓, or clears everything with ✕.
+        // The latched cluster - mic-select ○, ✕ to discard, waveform, ✓ to
+        // submit - is the persistent anchor for the WHOLE AI flow: first
+        // take, generation gap and open chat all keep the identical cluster
+        // rather than morphing into a status pill or plain waveform.
         let latched = (appState.isLatchedRecording || chatActive
             || appState.isInstructionMode || appState.isAgentMode)
             && !cancelled && !processing
-        // Every pill is a full capsule, 30pt tall in ALL modes (radius
-        // 15 = half height): waveform row 16pt + 7 padding; latched
-        // swaps in 22pt ✕/✓ buttons with 4pt padding — same 30pt.
+        // Every pill is a full capsule, 30pt tall in all modes (radius 15 =
+        // half height): waveform row 16pt + 7 padding; latched swaps in 22pt
+        // ✕/✓ buttons with 4pt padding — same 30pt.
         let pillRadius: CGFloat = 15
         return ZStack {
-            // === Wispr-style cluster: mic satellite + pill in one
-            // bottom-aligned HStack. The mic circle is exactly the
-            // pill's height (30pt), so bottom alignment IS center
-            // alignment - no offset math to drift. Only shown in
-            // latched mode; hold-to-talk takes are too quick for
-            // device switching to matter.
+            // Wispr-style cluster: mic satellite + pill in one bottom-aligned
+            // HStack. The mic circle is exactly the pill's height (30pt), so
+            // bottom alignment IS center alignment. Only shown in latched
+            // mode; hold-to-talk takes are too quick for device switching.
             HStack(alignment: .bottom, spacing: 4) {
             if latched {
                 micSelectorButton
                     .transition(.scale.combined(with: .opacity))
             }
 
-            // === The bottom pill. In chat mode it's a small standalone
-            // capsule (mic + trigger-key indicator, or the live waveform);
-            // the conversation floats in a detached card above it,
-            // mirroring the input-device picker. Outside chat it's the
-            // usual dictation pill, optionally widened for instruction-mode
-            // attachment chips.
+            // The bottom pill: the live waveform (or typing flow). In chat
+            // mode the conversation floats in a detached card above it;
+            // outside chat it's the usual dictation pill, optionally widened
+            // for instruction-mode attachment chips.
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     if hasAttachments && !chatActive && !cancelled { Spacer(minLength: 0) }
 
                     if processing {
-                        // Same pill, new content: the typing flow takes
-                        // the waveform's place and the pill's width
-                        // springs out to fit it. Multi-chunk progress is
-                        // tracked in the background (chunksDone/chunksTotal)
-                        // but never shown - the user only sees the normal
-                        // typing animation regardless of recording length.
+                        // Same pill, new content: the typing flow takes the
+                        // waveform's place and the pill springs wider to fit.
                         TypingFlowView()
                             .frame(height: 16)
                             .transition(.opacity)
@@ -316,11 +294,9 @@ struct OverlayView: View {
                 .contentShape(Rectangle())
                 .onHover { isHoveringWaveform = $0 }
                 .onTapGesture {
-                    // Latched mode (including chat) carries explicit ✕ / ✓
-                    // controls, so a tap on the pill body must do nothing -
-                    // only the buttons act, and Fn toggles recording.
-                    // Otherwise a stray click on the waveform would end the
-                    // take or close the chat. The plain (hold-to-talk) pill
+                    // Latched mode carries explicit ✕ / ✓ controls, so a tap
+                    // on the pill body is a no-op (a stray click shouldn't end
+                    // the take or close the chat). The plain hold-to-talk pill
                     // still toggles recording on body tap.
                     if !processing && !latched {
                         appState.toggleRecording()
@@ -393,11 +369,9 @@ struct OverlayView: View {
             // transcribing state rather than snapping.
             .animation(.spring(response: 0.3, dampingFraction: 0.72), value: processing)
             }
-            // Input device picker for NON-chat latched takes - anchored to
-            // the mic satellite (left edges aligned, 6pt above its 32pt
-            // circle), popping out of the button like a menu. In chat the
-            // picker instead replaces the conversation card (centered
-            // crossfade, above), so this only fires outside chat.
+            // Input device picker for non-chat latched takes - anchored to
+            // the mic satellite, popping out like a menu. In chat the picker
+            // replaces the conversation card instead (see below).
             .overlay(alignment: .bottomLeading) {
                 if appState.showingInputPicker && latched && !chatActive {
                     inputDevicePickerCard
@@ -409,13 +383,11 @@ struct OverlayView: View {
                 }
             }
         }
-        // Detached floating element above the cluster. Normally the
-        // conversation card; while the mic picker is open it takes the
-        // card's place and the two crossfade (chat fades out, picker fades
-        // in, and back). Anchored to the whole ZStack so it's centered on
-        // the panel - not on the pill, which sits right-of-center once the
-        // mic satellite joins the cluster. Floats 6pt above the pill, grows
-        // upward, never pushes the cluster from its spot.
+        // Detached floating element above the cluster: normally the
+        // conversation card, crossfading with the mic picker when it opens.
+        // Anchored to the whole ZStack so it stays centered on the panel
+        // (not on the pill, which sits right-of-center once the mic
+        // satellite joins). Grows upward, never shifts the cluster.
         .overlay(alignment: .bottom) {
             if chatActive && !cancelled {
                 Group {
@@ -437,10 +409,8 @@ struct OverlayView: View {
         }
         .onHover { hovering in
             isHoveringPill = hovering
-            // Reading / scrolling the chat counts as engagement - keep
-            // the auto-close timer paused while the cursor is anywhere
-            // over the panel. When the cursor leaves, restart the
-            // 20s countdown.
+            // Cursor over the panel counts as engagement - pause the
+            // auto-close timer while hovering, restart the countdown on exit.
             if appState.isChatActive {
                 if hovering {
                     appState.pauseChatIdleTimer()
@@ -653,10 +623,9 @@ struct OverlayView: View {
 
 // MARK: - Overlay Chrome
 
-/// Shared pill chrome. Every status pill (typing flow, generating, agent,
-/// error) goes through here so they all share the exact dimensions,
-/// background, corner radius and border: black, full capsule (28pt tall,
-/// radius 14), 16pt content row, 18/6 padding, white 0.32 hairline.
+/// Shared pill chrome, so every status pill matches: black, full capsule
+/// (30pt tall, radius 15), 16pt content row, 11/7 padding, white 0.32
+/// hairline.
 private extension View {
     func overlayChrome(instruction: Bool = false) -> some View {
         self
@@ -787,7 +756,6 @@ private struct AttachmentRowView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Thumbnail or text icon
             if case .image(let image) = ctx.content {
                 Image(nsImage: ctx.thumbnail ?? image)
                     .resizable()
@@ -819,7 +787,6 @@ private struct AttachmentRowView: View {
 
             Spacer(minLength: 0)
 
-            // Remove button
             Image(systemName: "xmark")
                 .font(.system(size: 7, weight: .medium))
                 .foregroundStyle(.white.opacity(0.3))

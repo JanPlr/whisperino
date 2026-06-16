@@ -52,7 +52,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
             let originX = (rect.width - totalW) / 2
             let maxH = rect.height * 0.68
 
-            // Template images use black; macOS inverts automatically for dark mode
             (asTemplate ? NSColor.black : barColor).setFill()
             for (i, ratio) in heights.enumerated() {
                 let h = max(barWidth, maxH * ratio)
@@ -169,7 +168,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
         // Reflect current state in the two custom-view action items
         switch appState.state {
-        case .recording, .paused:
+        case .recording:
             dictationView?.update(title: "Stop & Submit", shortcut: "release \(triggerLabel) or ↩", enabled: true)
             if appState.isInstructionMode {
                 aiModeView?.update(title: "AI Mode is active", shortcut: "", enabled: false)
@@ -204,17 +203,10 @@ class StatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    func menuDidClose(_ menu: NSMenu) {
-    }
-
-    @objc private func toggleRecording() {
-        appState.toggleRecording()
-    }
-
     /// Dictation button: start dictation when idle, submit when recording.
     @objc private func toggleDictation() {
         switch appState.state {
-        case .recording, .paused:
+        case .recording:
             appState.toggleRecording()  // submits in current mode
         default:
             appState.hotkeyToggle()  // starts in dictation mode
@@ -226,7 +218,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
     /// (the dictation button stops it).
     @objc private func toggleAIMode() {
         switch appState.state {
-        case .recording, .paused:
+        case .recording:
             if !appState.isInstructionMode {
                 appState.upgradeToInstructionMode()
             }
@@ -258,18 +250,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
         case .checking, .downloading:
             break
         }
-    }
-
-    @objc private func saveLastAsSnippet() {
-        guard let text = appState.lastTranscriptionResult else { return }
-        let name = "Snippet \(store.snippets.count + 1)"
-        store.addSnippet(name: name, text: text)
-        SettingsWindowController.shared.show()
-    }
-
-    @objc private func insertSnippet(_ sender: NSMenuItem) {
-        guard let snippet = sender.representedObject as? Snippet else { return }
-        appState.insertSnippet(snippet)
     }
 
     private func observeState() {

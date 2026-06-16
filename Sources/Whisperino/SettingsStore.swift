@@ -50,10 +50,8 @@ class SettingsStore: ObservableObject {
         historyFile = baseDir.appendingPathComponent("history.json")
         statsFile = baseDir.appendingPathComponent("stats.json")
 
-        // Ensure directory exists
         try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
 
-        // Load or use defaults
         settings = Self.load(from: settingsFile) ?? AppSettings()
         dictionary = Self.load(from: dictionaryFile) ?? []
         snippets = Self.load(from: snippetsFile) ?? []

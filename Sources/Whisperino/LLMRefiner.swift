@@ -36,31 +36,6 @@ struct LLMRefiner {
 
     // MARK: - Instruction mode
 
-    func instruct(transcription: String, apiKey: String, attachments: [AttachedContext],
-                   dictionaryTerms: [String] = [], snippets: [(name: String, text: String)] = []) async throws -> String {
-        var request = URLRequest(url: endpoint, timeoutInterval: timeout)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let systemPrompt = buildInstructSystemPrompt(dictionaryTerms: dictionaryTerms, snippets: snippets)
-
-        // Build message content - may include multiple text and image blocks
-        let messageContent: Any = buildMessageContent(transcription: transcription, attachments: attachments)
-
-        let body: [String: Any] = [
-            "model": instructModel,
-            "max_tokens": 4096,
-            "temperature": 0.5,
-            "stream": true,
-            "system": systemPrompt,
-            "messages": [["role": "user", "content": messageContent]]
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        return try await sendStreaming(request: request)
-    }
-
     /// Multi-turn streaming variant. Past turns drive context, the new
     /// user turn (transcription + attachments) is appended, the response
     /// streams back through `onChunk` and the final assembled text is

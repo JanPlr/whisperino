@@ -14,7 +14,6 @@ class AudioRecorder {
     private var audioFile: AVAudioFile?
     private var tempURL: URL?
     private var smoothedLevel: Float = 0
-    private var isPaused = false
     /// Guards `audioFile`/`tempURL` - the tap writes from the realtime
     /// audio thread while `rotateChunk()` swaps files from the main
     /// thread. Contention is rare (one rotation every ~40s) and the
@@ -139,7 +138,6 @@ class AudioRecorder {
         let url = chunkURL(index: 0)
         self.tempURL = url
         smoothedLevel = 0
-        isPaused = false
 
         // Set the system default input device if a specific one is requested
         if let deviceID = deviceID {
@@ -157,12 +155,6 @@ class AudioRecorder {
 
         inputNode.installTap(onBus: 0, bufferSize: 512, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
-
-            // When paused, keep engine running but skip writing and report zero level
-            guard !self.isPaused else {
-                levelCallback(0)
-                return
-            }
 
             // Calculate RMS and convert to a visible 0..1 range
             if let channelData = buffer.floatChannelData {
@@ -217,7 +209,6 @@ class AudioRecorder {
             return
         }
 
-        // Tear down current engine
         audioEngine!.inputNode.removeTap(onBus: 0)
         audioEngine!.stop()
         audioEngine = nil
@@ -230,10 +221,6 @@ class AudioRecorder {
 
         inputNode.installTap(onBus: 0, bufferSize: 512, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
-            guard !self.isPaused else {
-                levelCallback(0)
-                return
-            }
 
             if let channelData = buffer.floatChannelData {
                 let frames = Int(buffer.frameLength)
@@ -266,14 +253,6 @@ class AudioRecorder {
         newEngine.prepare()
         try newEngine.start()
         self.audioEngine = newEngine
-    }
-
-    func pause() {
-        isPaused = true
-    }
-
-    func resume() {
-        isPaused = false
     }
 
     private func chunkURL(index: Int) -> URL {
