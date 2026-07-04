@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import Combine
 import SwiftUI
 
@@ -239,7 +238,7 @@ class OverlayPanel {
     private func computeTargetOrigin() -> NSPoint? {
         let panelSize = panel.frame.size
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let window = pid.flatMap { Self.focusedWindowFrameCocoa(pid: $0) }
+        let window = ScreenCapture.focusedWindowFrame(pid: pid)
 
         let screen: NSScreen? = {
             if let mx = window?.midX,
@@ -279,33 +278,4 @@ class OverlayPanel {
         panel.setFrameOrigin(NSPoint(x: cur.x + dx * f, y: cur.y + dy * f))
     }
 
-    /// Focused window frame of `pid` in Cocoa (bottom-left origin) screen
-    /// coordinates, via the Accessibility API. Returns nil without an AX
-    /// grant or if the app exposes no focused window.
-    private static func focusedWindowFrameCocoa(pid: pid_t) -> CGRect? {
-        guard AXIsProcessTrusted() else { return nil }
-        let app = AXUIElementCreateApplication(pid)
-        var winRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
-              let w = winRef, CFGetTypeID(w) == AXUIElementGetTypeID() else { return nil }
-        let win = w as! AXUIElement
-
-        var posRef: CFTypeRef?
-        var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(win, kAXPositionAttribute as CFString, &posRef) == .success,
-              AXUIElementCopyAttributeValue(win, kAXSizeAttribute as CFString, &sizeRef) == .success
-        else { return nil }
-
-        var pos = CGPoint.zero
-        var size = CGSize.zero
-        AXValueGetValue(posRef as! AXValue, .cgPoint, &pos)
-        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
-
-        // AX is top-left origin measured from the primary (menu-bar) screen;
-        // Cocoa is bottom-left. Flip the window's BOTTOM edge into Cocoa Y.
-        guard let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero })
-            ?? NSScreen.main else { return nil }
-        let cocoaY = primary.frame.maxY - (pos.y + size.height)
-        return CGRect(x: pos.x, y: cocoaY, width: size.width, height: size.height)
-    }
 }

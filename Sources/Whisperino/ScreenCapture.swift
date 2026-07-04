@@ -13,22 +13,17 @@ enum ScreenCapture {
         CGPreflightScreenCaptureAccess()
     }
 
-    /// Fire the macOS Screen Recording prompt. A throwaway ScreenCaptureKit
-    /// query is the reliable trigger for an accessory app (a bare
-    /// CGRequestScreenCaptureAccess didn't prompt at launch). After the user
-    /// grants it, macOS itself offers "Quit & Reopen" - the grant only takes
-    /// effect on the next launch.
+    /// Fire the macOS Screen Recording prompt (the single trigger). After the
+    /// user grants it, macOS offers "Quit & Reopen" - the grant only takes
+    /// effect on the next launch. Callers invoke this at most once per launch.
     static func requestPermission() {
         CGRequestScreenCaptureAccess()
-        Task {
-            _ = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        }
     }
 
     /// Capture the full display that contains `windowFrame` (Cocoa coords), or
     /// the main display when we can't tell. Returns nil on any failure - the
-    /// caller treats a missing screenshot as "no context this take". The first
-    /// `SCShareableContent` access also drives the TCC prompt when ungranted.
+    /// caller treats a missing screenshot as "no context this take". Only
+    /// called once granted, so it never triggers the prompt itself.
     static func captureActiveDisplay(windowFrame: CGRect?) async -> NSImage? {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
