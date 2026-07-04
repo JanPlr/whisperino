@@ -153,7 +153,7 @@ enum FlowPage: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .home:       return "Home"
-        case .ai:         return "AI"
+        case .ai:         return "Langdock"
         case .dictionary: return "Dictionary"
         case .snippets:   return "Snippets"
         case .agents:     return "Agents"
@@ -512,18 +512,18 @@ private struct HeroCard: View {
 
         ConsoleCard {
             VStack(alignment: .leading, spacing: 7) {
-                Text("Talk to Claude anywhere you type.")
+                Text("Talk to Langdock anywhere you type.")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
 
                 Text(aiReady
                      ? "Hold \(trigger) + ⇧, speak, and the answer lands at your cursor."
-                     : "Add your Langdock API key and every text field becomes a Claude prompt.")
+                     : "Add your Langdock API key and every text field becomes a Langdock prompt.")
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.6))
 
                 HStack(spacing: 10) {
-                    Button(aiReady ? "Open AI settings" : "Get started") {
+                    Button(aiReady ? "Open Langdock settings" : "Get started") {
                         page = .ai
                     }
                     .buttonStyle(PrimaryButtonStyle(onDark: true))
@@ -736,8 +736,8 @@ private struct AIPage: View {
         let triggerLabel = store.settings.triggerKey.shortLabel
 
         PageScaffold(
-            title: "AI",
-            subtitle: "Everything Claude does for you: cleaning up dictations and answering spoken instructions."
+            title: "Langdock",
+            subtitle: "Everything Langdock does for you: cleaning up dictations and answering spoken instructions."
         ) {
             SettingsCard(title: "API key") {
                 HStack {
@@ -751,7 +751,7 @@ private struct AIPage: View {
                     Button(showAPIKey ? "Hide" : "Show") { showAPIKey.toggle() }
                         .buttonStyle(.borderless)
                 }
-                CaptionText("Without a key, transcription falls back to raw whisper output - no cleanup, no AI mode.")
+                CaptionText("Without a key, transcription falls back to raw whisper output - no cleanup, no Langdock mode.")
             }
 
             SettingsCard(title: "Dictation cleanup") {
@@ -766,7 +766,7 @@ private struct AIPage: View {
                     }
                     ChoiceCard(
                         title: "Cleaned up",
-                        detail: "Claude Haiku removes filler, fixes punctuation, applies your dictionary.",
+                        detail: "Langdock removes filler, fixes punctuation, applies your dictionary.",
                         selected: store.settings.llmRefinementEnabled,
                         enabled: hasAPIKey
                     ) {
@@ -775,15 +775,15 @@ private struct AIPage: View {
                 }
             }
 
-            SettingsCard(title: "AI mode") {
+            SettingsCard(title: "Langdock mode") {
                 ToggleRow(label: "Answer spoken instructions (\(triggerLabel) + ⇧)",
                           isOn: $store.settings.aiModeEnabled,
                           disabled: !hasAPIKey)
-                CaptionText("Hold **\(triggerLabel) + ⇧** (or add ⇧ while already dictating) → speak → **Cmd+C** any text or image to attach as context → tap **\(triggerLabel)** or press **Return** to submit. Claude generates a response and pastes it inline.")
+                CaptionText("Hold **\(triggerLabel) + ⇧** (or add ⇧ while already dictating) → speak → **Cmd+C** any text or image to attach as context → tap **\(triggerLabel)** or press **Return** to submit. Langdock generates a response and pastes it inline.")
 
                 Divider().padding(.vertical, 4)
 
-                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Start AI mode")
+                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Start Langdock mode")
                 ShortcutRow(keys: "⌘C", label: "Attach copied text or image as context")
                 ShortcutRow(keys: "tap \(triggerLabel)", label: "Submit")
                 ShortcutRow(keys: "↩", label: "Submit")
@@ -859,7 +859,7 @@ private struct SettingsPage: View {
 
                 ShortcutRow(keys: "hold \(triggerLabel)", label: "Dictate (release to send)")
                 ShortcutRow(keys: "\(triggerLabel) \(triggerLabel)", label: "Hands-free dictation (tap to stop)")
-                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "AI mode - hold both, Claude responds")
+                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Langdock mode - hold both, Langdock responds")
                 ShortcutRow(keys: "↩", label: "Submit any recording")
                 ShortcutRow(keys: "esc", label: "Cancel")
             }
@@ -1185,7 +1185,7 @@ private struct AgentsPage: View {
     var body: some View {
         PageScaffold(
             title: "Agents",
-            subtitle: "Langdock agents you can call by voice - say the agent's name during AI mode to route your request there instead of Claude.",
+            subtitle: "Langdock agents you can call by voice - say the agent's name during Langdock mode to route your request there instead of the default Langdock model.",
             actionLabel: "Add new",
             action: { showAddSheet = true }
         ) {
