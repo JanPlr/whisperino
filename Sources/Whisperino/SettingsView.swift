@@ -519,7 +519,7 @@ private struct HeroCard: View {
 
         ConsoleCard {
             VStack(alignment: .leading, spacing: 7) {
-                Text("Talk to Langdock anywhere you type.")
+                Text("Talk to your screen, anywhere you type.")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
 
@@ -744,7 +744,7 @@ private struct AIPage: View {
 
         PageScaffold(
             title: "Langdock",
-            subtitle: "Everything Langdock does for you: cleaning up dictations and answering spoken instructions."
+            subtitle: "Everything Langdock does for you: cleaning up dictations and Talk to your screen."
         ) {
             SettingsCard(title: "API key") {
                 HStack {
@@ -758,7 +758,7 @@ private struct AIPage: View {
                     Button(showAPIKey ? "Hide" : "Show") { showAPIKey.toggle() }
                         .buttonStyle(.borderless)
                 }
-                CaptionText("Without a key, transcription falls back to raw whisper output - no cleanup, no Langdock mode.")
+                CaptionText("Without a key, transcription falls back to raw whisper output - no cleanup, no Talk to your screen.")
             }
 
             SettingsCard(title: "Dictation cleanup") {
@@ -782,15 +782,15 @@ private struct AIPage: View {
                 }
             }
 
-            SettingsCard(title: "Langdock mode") {
-                ToggleRow(label: "Answer spoken instructions (\(triggerLabel) + ⇧)",
+            SettingsCard(title: "Talk to your screen") {
+                ToggleRow(label: "Talk to your screen (\(triggerLabel) + ⇧)",
                           isOn: $store.settings.aiModeEnabled,
                           disabled: !hasAPIKey)
                 CaptionText("Hold **\(triggerLabel) + ⇧** (or add ⇧ while already dictating) → Whisperino silently screenshots your current screen and frames the window → speak about what's on screen → tap **\(triggerLabel)** or press **Return** to submit. Langdock answers using the screenshot and pastes the reply inline. It's one-shot: to iterate, start again and the fresh screenshot picks up the latest state.")
 
                 Divider().padding(.vertical, 4)
 
-                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Start Langdock mode (screenshots the screen)")
+                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Start Talk to your screen (screenshots the screen)")
                 ShortcutRow(keys: "tap \(triggerLabel)", label: "Submit")
                 ShortcutRow(keys: "↩", label: "Submit")
                 ShortcutRow(keys: "esc", label: "Cancel")
@@ -865,7 +865,7 @@ private struct SettingsPage: View {
 
                 ShortcutRow(keys: "hold \(triggerLabel)", label: "Dictate (release to send)")
                 ShortcutRow(keys: "\(triggerLabel) \(triggerLabel)", label: "Hands-free dictation (tap to stop)")
-                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Langdock mode - hold both, Langdock responds")
+                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Talk to your screen - hold both, get an answer")
                 ShortcutRow(keys: "↩", label: "Submit any recording")
                 ShortcutRow(keys: "esc", label: "Cancel")
             }
@@ -1279,7 +1279,7 @@ private struct AgentsPage: View {
     var body: some View {
         PageScaffold(
             title: "Agents",
-            subtitle: "Langdock agents you can call by voice - say the agent's name during Langdock mode to route your request there instead of the default Langdock model.",
+            subtitle: "Langdock agents you can call by voice - say the agent's name while talking to your screen to route your request there instead of the default Langdock model.",
             actionLabel: "Add new",
             action: { showAddSheet = true }
         ) {

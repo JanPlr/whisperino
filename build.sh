@@ -64,8 +64,20 @@ cp Info.plist "$APP_BUNDLE/Contents/"
     "$APP_BUNDLE/Contents/Info.plist"
 cp AppIcon.icns "$APP_BUNDLE/Contents/Resources/"
 
-# Ad-hoc code sign (required for microphone access)
-codesign --force --sign - "$APP_BUNDLE"
+# Code sign. Prefer a stable self-signed identity so TCC grants (Accessibility,
+# Screen Recording) survive rebuilds - ad-hoc signing changes the CDHash every
+# build, so macOS treats each build as a new app and drops the grants. Create
+# the identity once with ./setup-signing.sh; until then we fall back to ad-hoc.
+SIGN_IDENTITY="Whisperino Self-Signed"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+    codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+    STABLE_SIGNED=true
+    echo "==> Signed with stable identity ($SIGN_IDENTITY) - permissions persist across builds"
+else
+    codesign --force --sign - "$APP_BUNDLE"
+    STABLE_SIGNED=false
+    echo "==> Ad-hoc signed - run ./setup-signing.sh once so permissions stop resetting"
+fi
 
 # Prevent Spotlight from indexing the build directory (avoid duplicate results)
 touch "$BUILD_DIR/.metadata_never_index"
@@ -82,11 +94,14 @@ sleep 0.5
 rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_BUNDLE" /Applications/
 
-# Clear stale Accessibility + Screen Recording entries - ad-hoc signing
-# changes the CDHash on every build, leaving orphaned TCC records that
-# confuse macOS. Screen Recording powers AI mode's silent screenshot.
-tccutil reset Accessibility com.whisperino.app 2>/dev/null || true
-tccutil reset ScreenCapture com.whisperino.app 2>/dev/null || true
+# Only reset TCC on ad-hoc builds. Ad-hoc signing changes the CDHash every
+# build, orphaning the grants - resetting at least forces a clean re-grant. With
+# the stable identity the grants persist, so resetting would just make the user
+# re-approve needlessly.
+if [ "$STABLE_SIGNED" = false ]; then
+    tccutil reset Accessibility com.whisperino.app 2>/dev/null || true
+    tccutil reset ScreenCapture com.whisperino.app 2>/dev/null || true
+fi
 
 # Launch from /Applications so Accessibility permission is tied to the right app
 echo "==> Launching $APP_NAME from /Applications..."

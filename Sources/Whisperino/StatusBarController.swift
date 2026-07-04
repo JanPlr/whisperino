@@ -119,9 +119,9 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
         // AI mode action - same custom view pattern
         let aiView = HotkeyMenuItemView(
-            title: "Start AI Mode",
+            title: "Talk to your screen",
             shortcut: "\(triggerLabel) + ⇧",
-            image: NSImage(systemSymbolName: "pencil", accessibilityDescription: "AI mode")
+            image: NSImage(systemSymbolName: "pencil", accessibilityDescription: "Talk to your screen")
         )
         aiView.onClick = { [weak self] in self?.toggleAIMode() }
         let ai = NSMenuItem()
@@ -171,16 +171,16 @@ class StatusBarController: NSObject, NSMenuDelegate {
         case .recording:
             dictationView?.update(title: "Stop & Submit", shortcut: "release \(triggerLabel) or ↩", enabled: true)
             if appState.isInstructionMode {
-                aiModeView?.update(title: "AI Mode is active", shortcut: "", enabled: false)
+                aiModeView?.update(title: "Talk to your screen is active", shortcut: "", enabled: false)
             } else {
-                aiModeView?.update(title: "Switch to AI Mode", shortcut: "add ⇧", enabled: true)
+                aiModeView?.update(title: "Switch to Talk to your screen", shortcut: "add ⇧", enabled: true)
             }
         case .transcribing, .refining:
             dictationView?.update(title: "Working…", shortcut: "", enabled: false)
             aiModeView?.update(title: "Working…", shortcut: "", enabled: false)
         default:
             dictationView?.update(title: "Start Dictation", shortcut: "hold \(triggerLabel)", enabled: true)
-            aiModeView?.update(title: "Start AI Mode", shortcut: "\(triggerLabel) + ⇧", enabled: true)
+            aiModeView?.update(title: "Talk to your screen", shortcut: "\(triggerLabel) + ⇧", enabled: true)
         }
 
         // Show setup warning only when Whisper isn't installed

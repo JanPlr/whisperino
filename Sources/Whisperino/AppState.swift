@@ -126,6 +126,9 @@ class AppState: ObservableObject {
     /// gets the screenshot as context - and it never shows as a chip, keeping
     /// the pill identical to plain dictation.
     private var screenshotTask: Task<NSImage?, Never>?
+    /// We only pop the Screen Recording prompt once per launch. Without this,
+    /// every AI-mode press while ungranted re-opens System Settings.
+    private var didRequestScreenPermission = false
 
     private(set) var lastTranscriptionResult: String?
     private let recorder = AudioRecorder()
@@ -255,7 +258,7 @@ class AppState: ObservableObject {
         // pill on screen next to the permission dialog. Silent (→ .idle) so no
         // cancel flash. Once granted + relaunched, the next press records.
         guard ScreenCapture.hasPermission() else {
-            ScreenCapture.requestPermission()
+            requestScreenPermissionOnce()
             teardownRecording(finalState: .idle)
             return
         }
@@ -387,7 +390,7 @@ class AppState: ObservableObject {
                 return
             }
             guard settings.aiModeEnabled else {
-                state = .error(message: "Enable AI mode in Settings first")
+                state = .error(message: "Enable Talk to your screen in Settings first")
                 autoDismiss(after: 3)
                 return
             }
@@ -397,7 +400,7 @@ class AppState: ObservableObject {
             // capture a useless (screenshot-less) take. Once granted and the
             // app is relaunched, the next press records normally.
             guard ScreenCapture.hasPermission() else {
-                ScreenCapture.requestPermission()
+                requestScreenPermissionOnce()
                 isInstructionMode = false
                 state = .idle
                 return
@@ -462,6 +465,14 @@ class AppState: ObservableObject {
         screenshotTask = Task {
             await ScreenCapture.captureActiveDisplay(windowFrame: windowFrame)
         }
+    }
+
+    /// Fire the Screen Recording prompt at most once per launch, so an
+    /// ungranted user isn't sent to System Settings on every AI-mode press.
+    private func requestScreenPermissionOnce() {
+        guard !didRequestScreenPermission else { return }
+        didRequestScreenPermission = true
+        ScreenCapture.requestPermission()
     }
 
     /// Await the pending screen capture (if any) and wrap it as an attachment.
