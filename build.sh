@@ -119,14 +119,11 @@ echo ""
 echo "  If no prompt appeared, open System Settings manually:"
 echo "  System Settings → Privacy & Security → Accessibility → Whisperino ON"
 echo ""
-echo "  ⚠️  Grant Screen Recording permission (for AI mode's screenshot)"
-echo "  Toggle Whisperino ON, then relaunch the app for it to take effect."
-echo "  System Settings → Privacy & Security → Screen Recording → Whisperino ON"
+echo "  (Screen Recording is requested on-demand the first time you start"
+echo "   Talk to your screen - no need to grant it here.)"
 echo ""
 
-# Open both permission panes so the user can grant them right away. Screen
-# Recording is opened last (with a beat between) so it lands frontmost - it's
-# the one that needs a manual toggle + app relaunch to take effect.
+# Only open the Accessibility pane - it's needed at launch. Screen Recording is
+# requested in-app the first time the user starts Talk to your screen, so we
+# don't push its pane here.
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-sleep 1
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
