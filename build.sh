@@ -82,9 +82,11 @@ sleep 0.5
 rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_BUNDLE" /Applications/
 
-# Clear stale Accessibility entries - ad-hoc signing changes the CDHash
-# on every build, leaving orphaned TCC records that confuse macOS
+# Clear stale Accessibility + Screen Recording entries - ad-hoc signing
+# changes the CDHash on every build, leaving orphaned TCC records that
+# confuse macOS. Screen Recording powers AI mode's silent screenshot.
 tccutil reset Accessibility com.whisperino.app 2>/dev/null || true
+tccutil reset ScreenCapture com.whisperino.app 2>/dev/null || true
 
 # Launch from /Applications so Accessibility permission is tied to the right app
 echo "==> Launching $APP_NAME from /Applications..."
@@ -102,4 +104,14 @@ echo ""
 echo "  If no prompt appeared, open System Settings manually:"
 echo "  System Settings → Privacy & Security → Accessibility → Whisperino ON"
 echo ""
+echo "  ⚠️  Grant Screen Recording permission (for AI mode's screenshot)"
+echo "  Toggle Whisperino ON, then relaunch the app for it to take effect."
+echo "  System Settings → Privacy & Security → Screen Recording → Whisperino ON"
+echo ""
+
+# Open both permission panes so the user can grant them right away. Screen
+# Recording is opened last (with a beat between) so it lands frontmost - it's
+# the one that needs a manual toggle + app relaunch to take effect.
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+sleep 1
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"

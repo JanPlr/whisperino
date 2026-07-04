@@ -9,6 +9,7 @@ class SettingsStore: ObservableObject {
     private let dictionaryFile: URL
     private let snippetsFile: URL
     private let agentsFile: URL
+    private let autoSubmitAppsFile: URL
     private let historyFile: URL
     private let statsFile: URL
 
@@ -33,6 +34,9 @@ class SettingsStore: ObservableObject {
     @Published var agents: [AgentEntry] {
         didSet { save(agents, to: agentsFile) }
     }
+    @Published var autoSubmitApps: [AutoSubmitApp] {
+        didSet { save(autoSubmitApps, to: autoSubmitAppsFile) }
+    }
     @Published var history: [TranscriptEntry] {
         didSet { save(history, to: historyFile) }
     }
@@ -47,6 +51,7 @@ class SettingsStore: ObservableObject {
         dictionaryFile = baseDir.appendingPathComponent("dictionary.json")
         snippetsFile = baseDir.appendingPathComponent("snippets.json")
         agentsFile = baseDir.appendingPathComponent("agents.json")
+        autoSubmitAppsFile = baseDir.appendingPathComponent("auto-submit-apps.json")
         historyFile = baseDir.appendingPathComponent("history.json")
         statsFile = baseDir.appendingPathComponent("stats.json")
 
@@ -56,6 +61,7 @@ class SettingsStore: ObservableObject {
         dictionary = Self.load(from: dictionaryFile) ?? []
         snippets = Self.load(from: snippetsFile) ?? []
         agents = Self.load(from: agentsFile) ?? []
+        autoSubmitApps = Self.load(from: autoSubmitAppsFile) ?? []
         history = Self.load(from: historyFile) ?? []
         stats = Self.load(from: statsFile) ?? UsageStats()
 
@@ -160,5 +166,26 @@ class SettingsStore: ObservableObject {
         guard let index = agents.firstIndex(where: { $0.id == id }) else { return }
         agents[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         agents[index].agentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Auto-submit apps
+
+    func addAutoSubmitApp(name: String, bundleId: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedId = bundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedId.isEmpty else { return }
+        // De-dupe by bundle id so picking the same app twice is a no-op.
+        guard !autoSubmitApps.contains(where: { $0.bundleId == trimmedId }) else { return }
+        autoSubmitApps.append(AutoSubmitApp(name: trimmedName, bundleId: trimmedId))
+    }
+
+    func removeAutoSubmitApps(at offsets: IndexSet) {
+        autoSubmitApps.remove(atOffsets: offsets)
+    }
+
+    /// Whether `bundleId` is configured for auto-submit (press Return after paste).
+    func autoSubmitEnabled(forBundleId bundleId: String?) -> Bool {
+        guard let bundleId else { return false }
+        return autoSubmitApps.contains { $0.bundleId == bundleId }
     }
 }

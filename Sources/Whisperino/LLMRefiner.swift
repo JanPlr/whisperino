@@ -296,6 +296,7 @@ struct LLMRefiner {
         be formal. Mirror their voice.
         - Follow any specific instructions the user gives about tone, style, length, or format exactly as stated.
         - If context items are provided (in <context> tags or as images), use them as the primary context for the instruction
+        - An image is usually a screenshot of the user's current screen, captured when they started speaking. Treat it as what they are looking at and referring to ("this", "here", "the error", "that button"), and ground your answer in it
         - Multiple context items may be provided - consider all of them together
         """
 

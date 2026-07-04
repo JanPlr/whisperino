@@ -29,7 +29,7 @@ class HotkeyManager {
     private var onSubmit: (() -> Void)?
     private var onLatchChange: ((Bool) -> Void)?
     private var isRecordingCheck: (() -> Bool)?
-    private var isChatActiveCheck: (() -> Bool)?
+    private var isOverlayInteractiveCheck: (() -> Bool)?
 
     // Modifier flag monitors
     private var flagsMonitor: Any?
@@ -95,7 +95,7 @@ class HotkeyManager {
         onSubmit: @escaping () -> Void,
         onLatchChange: @escaping (Bool) -> Void,
         isRecording: @escaping () -> Bool,
-        isChatActive: @escaping () -> Bool
+        isOverlayInteractive: @escaping () -> Bool
     ) {
         self.onToggle = onToggle
         self.onInstructionToggle = onInstructionToggle
@@ -104,7 +104,7 @@ class HotkeyManager {
         self.onSubmit = onSubmit
         self.onLatchChange = onLatchChange
         self.isRecordingCheck = isRecording
-        self.isChatActiveCheck = isChatActive
+        self.isOverlayInteractiveCheck = isOverlayInteractive
         installFlagsMonitor()
         installKeyMonitor()
         installEventTap()
@@ -153,12 +153,12 @@ class HotkeyManager {
     @discardableResult
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         // Listen to Esc/Enter while *either* a recording is in flight
-        // or the chat overlay is open (the chat-idle case).
+        // or an interactive overlay is up (the fallback rescue card).
         let recording = isRecordingCheck?() == true
-        let chatActive = isChatActiveCheck?() == true
-        guard recording || chatActive else { return false }
+        let overlayInteractive = isOverlayInteractiveCheck?() == true
+        guard recording || overlayInteractive else { return false }
         switch event.keyCode {
-        case 36, 76: // Return, Enter (numpad) → submit (recording) / finish (chat)
+        case 36, 76: // Return, Enter (numpad) → submit (recording) / dismiss (card)
             DispatchQueue.main.async { [weak self] in self?.onSubmit?() }
             return true
         case 53: // Escape
@@ -211,9 +211,8 @@ class HotkeyManager {
 
         // Shift added while we're already holding the trigger and recording
         // in dictation mode → upgrade to instruction (AI) mode.
-        // The session also becomes latched: release won't auto-submit,
-        // because the typical AI-mode flow is to keep adding context
-        // (Cmd+C selections) and then explicitly submit.
+        // The session also becomes latched: release won't auto-submit, so the
+        // user can finish their spoken question and then explicitly submit.
         if triggerIsDown && shiftDown && !shiftWasDown
             && !hasBlockedModifiers
             && isRecordingCheck?() == true {

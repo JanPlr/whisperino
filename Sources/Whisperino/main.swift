@@ -20,6 +20,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Pre-request microphone permission so the first recording attempt isn't
         // interrupted by the macOS permission dialog mid-press
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
+        // Screen Recording (AI mode's screenshot) is requested lazily: the first
+        // AI-mode capture attempt drives the macOS prompt. Requesting it at
+        // launch proved unreliable for an accessory app.
         // Boot the persistent whisper server now so the model is already
         // in memory by the first dictation.
         appState.warmUpTranscriber()
@@ -46,10 +49,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             },
             // Fallback card counts as "interactive overlay" so Esc/Enter
-            // reach it the same way they reach an open chat.
-            isChatActive: { [weak self] in
-                guard let appState = self?.appState else { return false }
-                return appState.isChatActive || appState.fallbackResult != nil
+            // reach it even when no recording is in flight.
+            isOverlayInteractive: { [weak self] in
+                self?.appState.fallbackResult != nil
             }
         )
     }

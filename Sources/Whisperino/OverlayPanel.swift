@@ -16,10 +16,8 @@ class OverlayPanel {
     /// the intermediate value, not the destination.
     private var targetOrigin: NSPoint?
 
-    /// Base panel height with no attachments or picker
+    /// Base panel height with no picker expanded
     private static let baseHeight: CGFloat = 180
-    /// Extra height per attachment row
-    private static let rowHeight: CGFloat = 32
 
     init(appState: AppState) {
         self.appState = appState
@@ -59,22 +57,14 @@ class OverlayPanel {
         hostingView.layer?.isOpaque = false
         panel.contentView = hostingView
 
-        // Resize panel whenever attachments, picker visibility, device count,
-        // or chat state changes. Uses the exact same formula as
-        // OverlayView.panelContentHeight.
-        cancellable = Publishers.CombineLatest4(
-            appState.$attachedContexts.map(\.count).removeDuplicates(),
+        // Resize panel whenever picker visibility or device count changes.
+        // Uses the exact same formula as OverlayView.panelContentHeight.
+        cancellable = Publishers.CombineLatest(
             appState.$showingInputPicker.removeDuplicates(),
-            appState.$inputDevices.map(\.count).removeDuplicates(),
-            appState.$chatHistory.map { !$0.isEmpty }.removeDuplicates()
+            appState.$inputDevices.map(\.count).removeDuplicates()
         )
-        .sink { [weak self] attachmentCount, pickerShowing, deviceCount, chatActive in
-            self?.updatePanelHeight(
-                attachmentCount: attachmentCount,
-                pickerShowing: pickerShowing,
-                deviceCount: deviceCount,
-                chatActive: chatActive
-            )
+        .sink { [weak self] pickerShowing, deviceCount in
+            self?.updatePanelHeight(pickerShowing: pickerShowing, deviceCount: deviceCount)
         }
 
     }
@@ -127,10 +117,8 @@ class OverlayPanel {
         // state change (e.g. the first mic tap opening the picker) would
         // grow it mid-animation - the visible "jump" on first open.
         let fullHeight = panelHeight(
-            attachmentCount: appState.attachedContexts.count,
             pickerShowing: appState.showingInputPicker,
-            deviceCount: appState.inputDevices.count,
-            chatActive: !appState.chatHistory.isEmpty
+            deviceCount: appState.inputDevices.count
         )
         if abs(panel.frame.height - fullHeight) > 1 {
             var frame = panel.frame
@@ -176,46 +164,24 @@ class OverlayPanel {
         return 28 + CGFloat(count) * 26 + 12 + 1
     }
 
-    /// Vertical space the chat scroll claims above the pill. Must match
-    /// `OverlayView.chatScrollHeight`.
-    private static let chatScrollHeight: CGFloat = 360
-
     private func panelHeight(
-        attachmentCount: Int,
         pickerShowing: Bool,
-        deviceCount: Int,
-        chatActive: Bool
+        deviceCount: Int
     ) -> CGFloat {
-        var height = Self.baseHeight
-        if attachmentCount > 0 {
-            let rows = CGFloat(min(attachmentCount, AppState.maxAttachments)) * Self.rowHeight
-            let addButton: CGFloat = attachmentCount < AppState.maxAttachments ? 36 : 0
-            height += rows + addButton
-        }
         // Always include picker height so the panel never resizes for picker
         // open/close. SwiftUI handles the visual animation within the fixed panel.
         // This eliminates NSPanel ↔ SwiftUI animation desync entirely.
-        height += Self.pickerExtraHeight(deviceCount: deviceCount)
-        // Chat is additive - when active, the scroll grows the panel
-        // upward, the pill stays at the bottom.
-        if chatActive {
-            height += Self.chatScrollHeight
-        }
-        return height
+        Self.baseHeight + Self.pickerExtraHeight(deviceCount: deviceCount)
     }
 
     private func updatePanelHeight(
-        attachmentCount: Int,
         pickerShowing: Bool,
-        deviceCount: Int,
-        chatActive: Bool
+        deviceCount: Int
     ) {
         guard isVisible else { return }
         let newHeight = panelHeight(
-            attachmentCount: attachmentCount,
             pickerShowing: pickerShowing,
-            deviceCount: deviceCount,
-            chatActive: chatActive
+            deviceCount: deviceCount
         )
         guard abs(panel.frame.height - newHeight) > 1 else { return }
 

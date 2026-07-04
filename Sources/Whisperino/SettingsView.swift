@@ -1,6 +1,7 @@
 import AppKit
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Brand
 //
@@ -260,9 +261,15 @@ private struct SidebarItem: View {
             selection = item
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: item.icon)
-                    .font(.system(size: 12, weight: .medium))
-                    .frame(width: 16)
+                if item == .ai {
+                    // The Langdock mark stands in for the generic icon here.
+                    LangdockMark(color: isSelected ? .primary : .secondary)
+                        .frame(width: 16, height: 15)
+                } else {
+                    Image(systemName: item.icon)
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 16)
+                }
                 Text(item.title)
                     .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                 Spacer()
@@ -624,9 +631,9 @@ private struct HistoryRow: View {
                 .frame(width: 40, alignment: .leading)
 
             if entry.isInstruction {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                // Langdock mark flags AI-mode transcripts.
+                LangdockMark(color: .secondary)
+                    .frame(width: 11, height: 11)
             }
 
             Text(entry.text)
@@ -779,12 +786,11 @@ private struct AIPage: View {
                 ToggleRow(label: "Answer spoken instructions (\(triggerLabel) + ⇧)",
                           isOn: $store.settings.aiModeEnabled,
                           disabled: !hasAPIKey)
-                CaptionText("Hold **\(triggerLabel) + ⇧** (or add ⇧ while already dictating) → speak → **Cmd+C** any text or image to attach as context → tap **\(triggerLabel)** or press **Return** to submit. Langdock generates a response and pastes it inline.")
+                CaptionText("Hold **\(triggerLabel) + ⇧** (or add ⇧ while already dictating) → Whisperino silently screenshots your current screen and frames the window → speak about what's on screen → tap **\(triggerLabel)** or press **Return** to submit. Langdock answers using the screenshot and pastes the reply inline. It's one-shot: to iterate, start again and the fresh screenshot picks up the latest state.")
 
                 Divider().padding(.vertical, 4)
 
-                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Start Langdock mode")
-                ShortcutRow(keys: "⌘C", label: "Attach copied text or image as context")
+                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Start Langdock mode (screenshots the screen)")
                 ShortcutRow(keys: "tap \(triggerLabel)", label: "Submit")
                 ShortcutRow(keys: "↩", label: "Submit")
                 ShortcutRow(keys: "esc", label: "Cancel")
@@ -863,7 +869,95 @@ private struct SettingsPage: View {
                 ShortcutRow(keys: "↩", label: "Submit any recording")
                 ShortcutRow(keys: "esc", label: "Cancel")
             }
+
+            // Auto-submit - press Return after pasting so chat apps send the
+            // message on their own.
+            SettingsCard(title: "Auto-submit") {
+                CaptionText("After a dictation is pasted, Whisperino presses **Return** so the message sends itself. Add the apps where a pasted dictation should submit automatically - chat apps like Slack or Messages. Note: for a browser this applies to every tab, not just chat pages.")
+
+                if store.autoSubmitApps.isEmpty {
+                    Text("No apps yet - add one below.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                        .padding(.vertical, 2)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(store.autoSubmitApps) { app in
+                            AutoSubmitRow(app: app) { deleteAutoSubmit(app) }
+                            if app.id != store.autoSubmitApps.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+
+                Button("Add app…", action: pickApp)
+                    .buttonStyle(SecondaryButtonStyle())
+                    .padding(.top, 4)
+            }
         }
+    }
+
+    private func pickApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = "Add"
+        panel.message = "Choose an app that should auto-submit pasted dictations"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let bundleId = Bundle(url: url)?.bundleIdentifier ?? ""
+        let name = FileManager.default.displayName(atPath: url.path)
+            .replacingOccurrences(of: ".app", with: "")
+        store.addAutoSubmitApp(name: name, bundleId: bundleId)
+    }
+
+    private func deleteAutoSubmit(_ app: AutoSubmitApp) {
+        guard let index = store.autoSubmitApps.firstIndex(where: { $0.id == app.id }) else { return }
+        store.removeAutoSubmitApps(at: [index])
+    }
+}
+
+/// App-name row with icon and hover-to-delete, for the auto-submit list.
+private struct AutoSubmitRow: View {
+    let app: AutoSubmitApp
+    let onDelete: () -> Void
+    @State private var hovering = false
+
+    private var icon: NSImage? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleId)
+        else { return nil }
+        return NSWorkspace.shared.icon(forFile: url.path)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 18, height: 18)
+            } else {
+                Image(systemName: "app.dashed")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 18, height: 18)
+            }
+            Text(app.name)
+                .font(.system(size: 13, weight: .medium))
+            Spacer(minLength: 12)
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .opacity(hovering ? 1 : 0)
+            .help("Remove")
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
     }
 }
 

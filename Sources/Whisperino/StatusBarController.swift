@@ -260,14 +260,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
                 self.updateStatusIcon(for: state)
                 switch state {
                 case .idle:
-                    // Chat-active idle = panel stays open showing the
-                    // conversation. Only dismiss when there's nothing to
-                    // show.
-                    if !self.appState.isChatActive {
-                        self.overlayPanel.dismiss()
-                    } else {
-                        self.overlayPanel.present()
-                    }
+                    self.overlayPanel.dismiss()
                 case .dismissing:
                     // Keep the panel up - SwiftUI is playing the
                     // shrink-to-center animation inside it. The switch
@@ -289,22 +282,6 @@ class StatusBarController: NSObject, NSMenuDelegate {
                     }
                 default:
                     self.overlayPanel.present()
-                }
-            }
-            .store(in: &cancellables)
-
-        // chat history opens / closes the panel independently of state
-        appState.$chatHistory
-            .map { !$0.isEmpty }
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] isOpen in
-                guard let self = self else { return }
-                if isOpen {
-                    self.overlayPanel.present()
-                } else if case .idle = self.appState.state {
-                    // Chat just closed *and* we're idle → take the panel down.
-                    self.overlayPanel.dismiss()
                 }
             }
             .store(in: &cancellables)

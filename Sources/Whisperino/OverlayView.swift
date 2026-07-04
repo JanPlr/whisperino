@@ -23,14 +23,6 @@ struct OverlayView: View {
         }
     }
 
-    /// Extra height for attachment rows + add-more button
-    private var attachmentExtraHeight: CGFloat {
-        let count = appState.attachedContexts.count
-        guard count > 0 else { return 0 }
-        let rows = CGFloat(min(count, AppState.maxAttachments)) * 32
-        let addButton: CGFloat = count < AppState.maxAttachments ? 36 : 0
-        return rows + addButton
-    }
 
     /// Extra height reserved for the input device picker.
     /// Always included (even when picker is closed) so the panel and body frame
@@ -43,12 +35,7 @@ struct OverlayView: View {
 
     var body: some View {
         Group {
-            if appState.isChatActive {
-                // Chat open → the unified pill (with chat scroll docked on
-                // top), whatever the recording state. Content reacts to
-                // state internally so the layout doesn't jump.
-                recordingView.padding(.top, 6)
-            } else if appState.fallbackResult != nil {
+            if appState.fallbackResult != nil {
                 // The take had no text field to land in - show it in a
                 // card with a Copy escape hatch instead of losing it.
                 fallbackResultCard.padding(.top, 6)
@@ -60,9 +47,8 @@ struct OverlayView: View {
                 // single stable element the whole way: the waveform morphs
                 // into the typing flow, then the same pill fades out.
                 // Separate cases re-created the view at each state hop,
-                // turning the morph into crossfades. There's no separate
-                // "Generating…" pill for AI takes - the chat sliding up is
-                // the signal the model is working.
+                // turning the morph into crossfades. AI takes keep the same
+                // pill and show the typing flow while the model works.
                 case .recording, .cancelled,
                      .transcribing, .refining, .result, .dismissing:
                     recordingView.padding(.top, 6)
@@ -75,14 +61,9 @@ struct OverlayView: View {
         .padding(.bottom, 10)
         .frame(height: panelContentHeight, alignment: .bottom)
         .animation(appState.suppressStateAnimation ? nil : .spring(response: 0.24, dampingFraction: 0.85), value: appState.state)
-        .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.attachedContexts.count)
         // Picker pop is its own, snappier curve - it's a menu, not a
         // panel morph; it should appear, not unfold.
         .animation(.spring(response: 0.16, dampingFraction: 0.9), value: appState.showingInputPicker)
-        // Same spring the picker uses, so opening the chat reads as
-        // "the pill expanded" - both animations share a feel rather
-        // than chat using a tween while every other expansion springs.
-        .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.isChatActive)
         .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.fallbackResult != nil)
     }
 
@@ -195,20 +176,11 @@ struct OverlayView: View {
         }
     }
 
-    /// Vertical room the SwiftUI body claims inside the panel. Pill alone
-    /// is short; chat reserves a fixed scroll area above. Must match
+    /// Vertical room the SwiftUI body claims inside the panel. Must match
     /// `OverlayPanel.panelHeight`.
     private var panelContentHeight: CGFloat {
-        var h = 180 + attachmentExtraHeight + pickerExtraHeight
-        if appState.isChatActive {
-            h += Self.chatScrollHeight
-        }
-        return h
+        180 + pickerExtraHeight
     }
-
-    /// Height reserved for the chat scroll area when chat is active.
-    /// Internal scroll handles longer conversations past this.
-    static let chatScrollHeight: CGFloat = 360
 
     @State private var isHoveringPill = false
     @State private var isHoveringMic = false
@@ -219,21 +191,15 @@ struct OverlayView: View {
     // MARK: - Recording
 
     private var recordingView: some View {
-        // Chips show whenever something is attached and we're in an AI
-        // context - instruction mode (one-shot) or any chat state.
-        let chatActive = appState.isChatActive
-        let hasAttachments = (appState.isInstructionMode || chatActive) && !appState.attachedContexts.isEmpty
         let cancelled = isCancelled
-        // Recording stopped → same pill, typing-flow content. Only the RAW
-        // dictation path morphs into the typing flow; AI takes keep the
-        // latched cluster up the whole time (see `latched`).
-        let processing = isProcessingState && !chatActive
-            && !appState.isInstructionMode && !appState.isAgentMode
+        // Recording stopped → same pill, typing-flow content. Applies to both
+        // raw dictation and AI takes: once the mic closes, the waveform hands
+        // over to the typing flow while transcription / generation runs.
+        let processing = isProcessingState
         // The latched cluster - mic-select ○, ✕ to discard, waveform, ✓ to
-        // submit - is the persistent anchor for the WHOLE AI flow: first
-        // take, generation gap and open chat all keep the identical cluster
-        // rather than morphing into a status pill or plain waveform.
-        let latched = (appState.isLatchedRecording || chatActive
+        // submit - is the persistent anchor while the mic is open in AI mode
+        // (or any latched take), rather than a plain waveform.
+        let latched = (appState.isLatchedRecording
             || appState.isInstructionMode || appState.isAgentMode)
             && !cancelled && !processing
         // Every pill is a full capsule, 30pt tall in all modes (radius 15 =
@@ -251,14 +217,10 @@ struct OverlayView: View {
                     .transition(.scale.combined(with: .opacity))
             }
 
-            // The bottom pill: the live waveform (or typing flow). In chat
-            // mode the conversation floats in a detached card above it;
-            // outside chat it's the usual dictation pill, optionally widened
-            // for instruction-mode attachment chips.
+            // The bottom pill: the live waveform, or the typing flow while
+            // transcription / AI generation runs.
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
-                    if hasAttachments && !chatActive && !cancelled { Spacer(minLength: 0) }
-
                     if processing {
                         // Same pill, new content: the typing flow takes the
                         // waveform's place and the pill springs wider to fit.
@@ -286,8 +248,6 @@ struct OverlayView: View {
                                 .transition(.scale.combined(with: .opacity))
                         }
                     }
-
-                    if hasAttachments && !chatActive && !cancelled { Spacer(minLength: 0) }
                 }
                 .padding(.horizontal, latched ? 4 : 11)
                 .padding(.vertical, latched ? 4 : 7)
@@ -296,37 +256,13 @@ struct OverlayView: View {
                 .onTapGesture {
                     // Latched mode carries explicit ✕ / ✓ controls, so a tap
                     // on the pill body is a no-op (a stray click shouldn't end
-                    // the take or close the chat). The plain hold-to-talk pill
-                    // still toggles recording on body tap.
+                    // the take). The plain hold-to-talk pill still toggles
+                    // recording on body tap.
                     if !processing && !latched {
                         appState.toggleRecording()
                     }
                 }
-
-                // Instruction-mode (one-shot) attachments stay inside the
-                // pill. In chat mode they live in the floating card instead.
-                if hasAttachments && !chatActive && !cancelled {
-                    Rectangle()
-                        .fill(.white.opacity(0.08))
-                        .frame(height: 1)
-                        .padding(.horizontal, 8)
-
-                    VStack(spacing: 2) {
-                        ForEach(appState.attachedContexts) { ctx in
-                            attachmentRow(ctx)
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-
-                        if appState.attachedContexts.count < AppState.maxAttachments {
-                            addMoreHint
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                }
             }
-            .frame(width: (!cancelled && hasAttachments && !chatActive) ? 340 : nil)
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: pillRadius, style: .continuous))
             .overlay(
@@ -343,9 +279,8 @@ struct OverlayView: View {
                         GlowBorder(cornerRadius: pillRadius, color: Color(red: 0.25, green: 0.78, blue: 0.45))
                     } else {
                         // Calm dictation border vs. animated AI gradient.
-                        // Gradient applies whenever we're in AI context -
-                        // instruction mode for one-shots OR chat-active.
-                        let inAIContext = appState.isInstructionMode || chatActive
+                        // Gradient applies whenever we're in AI mode.
+                        let inAIContext = appState.isInstructionMode || appState.isAgentMode
                         ZStack {
                             RoundedRectangle(cornerRadius: pillRadius, style: .continuous)
                                 .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
@@ -363,17 +298,15 @@ struct OverlayView: View {
             .opacity((cancelled || isDismissing) ? 0 : 1)
             .blur(radius: (cancelled || isDismissing) ? 4 : 0)
             .animation(.easeOut(duration: 0.14), value: cancelled || isDismissing)
-            .animation(.spring(response: 0.24, dampingFraction: 0.85), value: hasAttachments)
             // Width morph when the waveform hands over to the typing
             // flow - springy so the pill visibly *grows* into the
             // transcribing state rather than snapping.
             .animation(.spring(response: 0.3, dampingFraction: 0.72), value: processing)
             }
-            // Input device picker for non-chat latched takes - anchored to
-            // the mic satellite, popping out like a menu. In chat the picker
-            // replaces the conversation card instead (see below).
+            // Input device picker for latched takes - anchored to the mic
+            // satellite, popping out like a menu.
             .overlay(alignment: .bottomLeading) {
-                if appState.showingInputPicker && latched && !chatActive {
+                if appState.showingInputPicker && latched {
                     inputDevicePickerCard
                         .offset(y: -36)
                         .transition(
@@ -383,104 +316,17 @@ struct OverlayView: View {
                 }
             }
         }
-        // Detached floating element above the cluster: normally the
-        // conversation card, crossfading with the mic picker when it opens.
-        // Anchored to the whole ZStack so it stays centered on the panel
-        // (not on the pill, which sits right-of-center once the mic
-        // satellite joins). Grows upward, never shifts the cluster.
-        .overlay(alignment: .bottom) {
-            if chatActive && !cancelled {
-                Group {
-                    if appState.showingInputPicker {
-                        inputDevicePickerCard
-                            .transition(.opacity)
-                    } else {
-                        floatingChatCard(showAttachments: hasAttachments)
-                            .transition(.opacity)
-                    }
-                }
-                // Pill is 30pt tall; -(30 + 6) lands the floating element's
-                // bottom edge 6pt above the pill's top.
-                .offset(y: -36)
-                .transition(
-                    .opacity.combined(with: .scale(scale: 0.97, anchor: .bottom))
-                )
-            }
-        }
         .onHover { hovering in
             isHoveringPill = hovering
-            // Cursor over the panel counts as engagement - pause the
-            // auto-close timer while hovering, restart the countdown on exit.
-            if appState.isChatActive {
-                if hovering {
-                    appState.pauseChatIdleTimer()
-                } else {
-                    appState.bumpChatIdleTimer()
-                }
-            }
         }
         .animation(.easeOut(duration: 0.04), value: appState.audioSamples)
         .animation(.easeInOut(duration: 0.15), value: isHoveringPill)
         .animation(.easeInOut(duration: 0.15), value: isHoveringMic)
-        .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.attachedContexts.count)
         .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.isLatchedRecording)
     }
 
-    /// The detached conversation card that floats above the pill in chat
-    /// mode. Holds the scrollable bubbles plus (in chat) any attachment
-    /// chips. Its own dark rounded panel with a hairline border - the same
-    /// chrome as the input-device picker - so it reads as a separate
-    /// floating element, not part of the pill.
-    private func floatingChatCard(showAttachments: Bool) -> some View {
-        VStack(spacing: 0) {
-            ChatScroll(appState: appState)
-                .frame(height: Self.chatScrollHeight)
-
-            if showAttachments {
-                Rectangle()
-                    .fill(.white.opacity(0.08))
-                    .frame(height: 1)
-                    .padding(.horizontal, 8)
-
-                VStack(spacing: 2) {
-                    ForEach(appState.attachedContexts) { ctx in
-                        attachmentRow(ctx)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-
-                    if appState.attachedContexts.count < AppState.maxAttachments {
-                        addMoreHint
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-            }
-        }
-        .frame(width: 360)
-        .background(Color.black)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
-        )
-        // Hovering the card counts as reading the conversation - hold the
-        // auto-close timer the same way the pill's onHover does. The card
-        // floats outside the pill's frame, so the pill's own onHover never
-        // fires here.
-        .onHover { hovering in
-            if hovering {
-                appState.pauseChatIdleTimer()
-            } else {
-                appState.bumpChatIdleTimer()
-            }
-        }
-    }
-
-    /// The input-device picker in its floating panel chrome. Used in two
-    /// spots: anchored to the mic satellite for non-chat latched takes,
-    /// and (in chat) centered above the pill where it crossfades with the
-    /// conversation card. Same dark panel + hairline border as the card.
+    /// The input-device picker in its floating panel chrome, anchored to the
+    /// mic satellite. Same dark panel + hairline border as the pill.
     private var inputDevicePickerCard: some View {
         InputDevicePicker(appState: appState, isPresented: $appState.showingInputPicker)
             .frame(width: 240)
@@ -558,24 +404,6 @@ struct OverlayView: View {
             .onTapGesture { appState.submitOrFinish() }
             .pointerOnHover()
             .animation(.easeInOut(duration: 0.1), value: isHoveringLatchedSubmit)
-    }
-
-    private func attachmentRow(_ ctx: AttachedContext) -> some View {
-        AttachmentRowView(ctx: ctx, onRemove: { appState.removeAttachment(id: ctx.id) })
-    }
-
-    private var addMoreHint: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "command")
-                .font(.system(size: 8, weight: .medium))
-            Text("Cmd+C anything to add as context")
-                .font(.system(size: 9, weight: .medium))
-        }
-        .foregroundStyle(.white.opacity(0.3))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
-        .padding(.vertical, 4)
-        .allowsHitTesting(false)
     }
 
     /// Gentle shape mask - barely attenuates the edges so the wave is
@@ -747,73 +575,6 @@ private struct TypingFlowView: View {
     }
 }
 
-// MARK: - Attachment row with image preview
-
-private struct AttachmentRowView: View {
-    let ctx: AttachedContext
-    let onRemove: () -> Void
-    @State private var showingPreview = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if case .image(let image) = ctx.content {
-                Image(nsImage: ctx.thumbnail ?? image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 24, height: 24)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .strokeBorder(.white.opacity(showingPreview ? 0.4 : 0.15), lineWidth: 0.5)
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture { showingPreview.toggle() }
-                    .popover(isPresented: $showingPreview, arrowEdge: .top) {
-                        imagePreview(image)
-                    }
-            } else {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.white.opacity(0.35))
-                    .frame(width: 24, height: 24)
-            }
-
-            Text(ctx.preview)
-                .font(.system(size: 9))
-                .foregroundStyle(.white.opacity(0.5))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .allowsHitTesting(false)
-
-            Spacer(minLength: 0)
-
-            Image(systemName: "xmark")
-                .font(.system(size: 7, weight: .medium))
-                .foregroundStyle(.white.opacity(0.3))
-                .frame(width: 16, height: 16)
-                .contentShape(Rectangle())
-                .onTapGesture { onRemove() }
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
-    }
-
-    private func imagePreview(_ image: NSImage) -> some View {
-        let maxWidth: CGFloat = 520
-        let maxHeight: CGFloat = 400
-        let aspect = image.size.width / max(image.size.height, 1)
-        let width = min(maxWidth, maxHeight * aspect)
-        let height = min(maxHeight, maxWidth / aspect)
-
-        return Image(nsImage: image)
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .frame(width: width, height: height)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .padding(8)
-    }
-}
-
 // MARK: - Input Device Picker (inline overlay)
 
 private struct InputDevicePicker: View {
@@ -939,271 +700,6 @@ private struct GlowBorder: View {
             }
         }
         .allowsHitTesting(false)
-    }
-}
-
-// MARK: - Chat scroll (sits above the pill when chat-active)
-
-/// The scrollable list of message bubbles. Hosted by `floatingChatCard`,
-/// the detached panel that floats above the pill - the conversation grows
-/// upward while the pill stays fixed at the bottom.
-private struct ChatScroll: View {
-    @ObservedObject var appState: AppState
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    // Top spacer so the close X corner doesn't overlap
-                    // the first user bubble's right edge.
-                    Color.clear.frame(height: 12)
-
-                    ForEach(appState.chatHistory) { turn in
-                        ChatBubble(turn: turn, appState: appState)
-                            .id(turn.id)
-                    }
-
-                    Color.clear.frame(height: 4).id("bottom")
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 8)
-            }
-            // Disable rubber-band overscroll when content already fits.
-            // When it overflows, AppKit's elastic edge still helps the
-            // user feel the boundary, but the slow snap-back the user
-            // saw with short conversations is gone.
-            .scrollBounceBehavior(.basedOnSize)
-            // Auto-scroll on new bubbles AND while text is streaming
-            // into the latest assistant turn. Snapping (no animation)
-            // each chunk reads as smooth follow-along because chunks
-            // arrive faster than any animation could complete; an
-            // animated scroll on every chunk would queue up and stall.
-            .onChange(of: appState.chatHistory.count) {
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-            .onChange(of: appState.chatHistory.last?.text) {
-                guard appState.isStreamingResponse else { return }
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-        }
-    }
-}
-
-// MARK: - Chat bubble
-
-private struct ChatBubble: View {
-    let turn: ChatTurn
-    @ObservedObject var appState: AppState
-    @State private var hovering = false
-    @State private var copied = false
-
-    var body: some View {
-        if turn.role == .user {
-            userBubble
-        } else if turn.text.isEmpty && turn.isStreaming && turn.agentSteps.isEmpty {
-            // Empty + streaming + no agent timeline → render nothing.
-            // The bubble materialises once tokens arrive.
-            EmptyView()
-        } else {
-            assistantBubble
-        }
-    }
-
-    // MARK: User
-
-    private var userBubble: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 32)
-            VStack(alignment: .trailing, spacing: 6) {
-                if !turn.attachments.isEmpty {
-                    attachmentStrip
-                }
-                Text(turn.text)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    // Non-hit-testable so macOS doesn't show the text
-                    // I-beam over the bubble - it's a read-only panel,
-                    // the arrow cursor is correct.
-                    .allowsHitTesting(false)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .fill(Color.white.opacity(0.07))
-                    )
-            }
-            .frame(maxWidth: 250, alignment: .trailing)
-        }
-    }
-
-    private var attachmentStrip: some View {
-        HStack(spacing: 4) {
-            ForEach(turn.attachments) { ctx in
-                attachmentChip(ctx)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func attachmentChip(_ ctx: AttachedContext) -> some View {
-        switch ctx.content {
-        case .image(let image):
-            Image(nsImage: ctx.thumbnail ?? image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 26, height: 26)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5)
-                        .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
-                )
-        case .text:
-            HStack(spacing: 4) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 8))
-                Text(ctx.preview)
-                    .font(.system(size: 9))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .foregroundStyle(.white.opacity(0.5))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(.white.opacity(0.05))
-            )
-        }
-    }
-
-    // MARK: Assistant
-
-    private var assistantBubble: some View {
-        // Actions always rendered (so layout never shifts) and fade
-        // in/out via opacity. 8pt of breathing room between text and
-        // the action row - 4pt felt cramped, the buttons read as part
-        // of the text.
-        VStack(alignment: .leading, spacing: 8) {
-            // Agent step timeline (only present on agent turns) - small
-            // dim rows above the answer, like a build log. Fades to
-            // ~0.5 opacity once the answer arrives so it doesn't
-            // compete visually with the response.
-            if !turn.agentSteps.isEmpty {
-                AgentStepTimeline(steps: turn.agentSteps, dim: !turn.text.isEmpty)
-                    .padding(.bottom, turn.text.isEmpty ? 0 : 4)
-            }
-
-            if !turn.text.isEmpty {
-                Text(turn.text)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.88))
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    // See userBubble - keep the arrow cursor over text.
-                    .allowsHitTesting(false)
-            }
-
-            HStack(spacing: 12) {
-                bubbleAction(
-                    icon: copied ? "checkmark" : "doc.on.doc",
-                    label: copied ? "copied" : "copy"
-                ) {
-                    appState.copyToClipboard(turn.text)
-                    withAnimation(.easeOut(duration: 0.15)) { copied = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                        copied = false
-                    }
-                }
-                bubbleAction(icon: "arrow.up.right.square", label: "paste") {
-                    appState.pasteIntoTargetApp(turn.text)
-                }
-            }
-            .opacity((turn.isStreaming || turn.text.isEmpty) ? 0 : (hovering ? 0.85 : 0.4))
-            .animation(.easeOut(duration: 0.15), value: hovering)
-            .animation(.easeOut(duration: 0.15), value: turn.isStreaming)
-            .allowsHitTesting(!turn.isStreaming && !turn.text.isEmpty)
-        }
-        .frame(maxWidth: 280, alignment: .leading)
-        .contentShape(Rectangle())
-        .onHover { h in hovering = h }
-    }
-
-    private func bubbleAction(icon: String, label: String, action: @escaping () -> Void) -> some View {
-        // Inner Image/Text are non-hit-testable so the system can't
-        // reach for an I-beam from the Text - only the outer HStack
-        // (with its rect contentShape) receives cursor and tap events.
-        HStack(spacing: 3) {
-            Image(systemName: icon)
-                .font(.system(size: 9, weight: .medium))
-                .allowsHitTesting(false)
-            Text(label)
-                .font(.system(size: 9, weight: .medium))
-                .allowsHitTesting(false)
-        }
-        .foregroundStyle(.white.opacity(0.45))
-        // Fixed slot width so a label change ("copy" → "copied") on
-        // one button doesn't shove the next button sideways. Leading
-        // alignment keeps the icon anchored to the left of the slot.
-        .frame(width: 56, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture { action() }
-        .pointerOnHover()
-    }
-}
-
-// MARK: - Agent step timeline (rendered above the final answer in the
-// assistant bubble for agent runs)
-
-private struct AgentStepTimeline: View {
-    let steps: [AgentStepEvent]
-    /// Once the final answer is in, the timeline dims so it doesn't
-    /// compete with the response text.
-    let dim: Bool
-
-    private static let iconColumnWidth: CGFloat = 16
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(steps.enumerated()), id: \.element.id) { idx, step in
-                HStack(spacing: 8) {
-                    Image(systemName: step.icon)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(iconOpacity(for: step)))
-                        .frame(width: Self.iconColumnWidth, alignment: .center)
-
-                    Text(step.title)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(textOpacity(for: step)))
-
-                    Spacer(minLength: 0)
-                }
-
-                // Thin connector to the next row's icon. Only between
-                // rows - no trailing line below the last step.
-                if idx < steps.count - 1 {
-                    Rectangle()
-                        .fill(.white.opacity(dim ? 0.08 : 0.14))
-                        .frame(width: 1, height: 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        // Centered under the icon column.
-                        .padding(.leading, (Self.iconColumnWidth - 1) / 2)
-                }
-            }
-        }
-        // Read-only - keep the arrow cursor (no text I-beam).
-        .allowsHitTesting(false)
-    }
-
-    private func iconOpacity(for step: AgentStepEvent) -> Double {
-        if dim { return 0.4 }
-        return step.completed ? 0.5 : 0.85
-    }
-
-    private func textOpacity(for step: AgentStepEvent) -> Double {
-        if dim { return 0.4 }
-        return step.completed ? 0.5 : 0.78
     }
 }
 
