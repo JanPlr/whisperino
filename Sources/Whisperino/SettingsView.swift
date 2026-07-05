@@ -762,6 +762,9 @@ private struct AIPage: View {
             }
 
             SettingsCard(title: "Dictation cleanup") {
+                // fixedSize pins the row to its tallest card's ideal height so
+                // both cards' maxHeight:.infinity frames match instead of the
+                // ScrollView stretching them.
                 HStack(alignment: .top, spacing: 10) {
                     ChoiceCard(
                         title: "Raw",
@@ -780,6 +783,7 @@ private struct AIPage: View {
                         store.settings.llmRefinementEnabled = true
                     }
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             SettingsCard(title: "Talk to your screen") {
@@ -1003,6 +1007,11 @@ private struct ChoiceCard: View {
 
     @State private var hovering = false
 
+    private var fill: Color {
+        if selected { return Brand.selected }
+        return hovering ? Brand.hover : Brand.card
+    }
+
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 5) {
@@ -1018,23 +1027,31 @@ private struct ChoiceCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 62, alignment: .topLeading)
+            // maxHeight:.infinity lets the shorter card grow to the row height
+            // the HStack's fixedSize settles on, so both frames are equal.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(selected ? Brand.selected : (hovering ? Brand.hover : Brand.card))
+                    .fill(fill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .stroke(selected ? Brand.ink : Brand.border, lineWidth: 1)
             )
-            .opacity(enabled ? 1 : 0.45)
-            .contentShape(RoundedRectangle(cornerRadius: 7))
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .onHover { hovering = $0 && enabled }
+        .opacity(enabled ? 1 : 0.45)
+        // Scope the hover fade to its own transaction. A broad
+        // .animation(value: hovering) fought the plain button's built-in
+        // hover handling and made the highlight flicker on entry.
+        .onHover { isHovering in
+            let next = isHovering && enabled
+            guard next != hovering else { return }
+            withAnimation(.easeOut(duration: 0.12)) { hovering = next }
+        }
         .animation(.easeOut(duration: 0.12), value: selected)
-        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 
     private var radio: some View {
