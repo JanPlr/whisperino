@@ -58,13 +58,11 @@ Nothing gets lost:
 - If a chunk fails to transcribe, its audio is kept in the same folder and the rest of the take continues.
 - If a later step fails (e.g. the AI call), the raw transcript is copied to your clipboard.
 
-Optional **live streaming** (Settings → General → "Stream dictation while you speak"): each chunk's text is pasted into the focused field the moment it's transcribed, so long dictations build up in your document in near-real-time. Streamed sessions skip Haiku enhancement, since the raw text has already landed.
-
 ## Settings
 
 Click the menu bar icon → **Settings**.
 
-- **General**: launch at login · sound effects · live dictation streaming · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
+- **General**: launch at login · sound effects · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
 - **Dictionary**: terms the LLM should always spell correctly (`Langdock` or `langdonk = Langdock` mappings)
 - **Snippets**: reusable text blocks
 - **History**: last 50 transcriptions

@@ -839,9 +839,6 @@ private struct SettingsPage: View {
                 ))
                 Divider()
                 ToggleRow(label: "Sound effects on start / stop", isOn: $store.settings.soundEffectsEnabled)
-                Divider()
-                ToggleRow(label: "Stream dictation while you speak", isOn: $store.settings.liveStreamingEnabled)
-                CaptionText("Long dictations are transcribed in the background in ~40s chunks. With this on, each chunk's text is pasted into the focused field as soon as it's ready - you see progress immediately and a failure can only lose the last chunk. Streamed sessions skip cleanup (the raw text is already in the field). Either way, the raw transcript of the last take is kept at ~/.whisperino/recovery/.")
             }
 
             // Trigger key - let users pick an alternative if Fn is mapped to
@@ -996,7 +993,7 @@ private struct ToggleRow: View {
     }
 }
 
-/// Selectable option card.
+/// Selectable option card - title with a radio indicator, detail below.
 private struct ChoiceCard: View {
     let title: String
     let detail: String
@@ -1004,28 +1001,55 @@ private struct ChoiceCard: View {
     var enabled = true
     let action: () -> Void
 
+    @State private var hovering = false
+
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 0)
+                    radio
+                }
                 Text(detail)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(11)
-            .frame(maxWidth: .infinity, minHeight: 58, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Brand.card))
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: 62, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(selected ? Brand.selected : (hovering ? Brand.hover : Brand.card))
+            )
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(selected ? Brand.ink : Brand.border, lineWidth: selected ? 1.5 : 1)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(selected ? Brand.ink : Brand.border, lineWidth: 1)
             )
             .opacity(enabled ? 1 : 0.45)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .onHover { hovering = $0 && enabled }
+        .animation(.easeOut(duration: 0.12), value: selected)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+
+    private var radio: some View {
+        ZStack {
+            Circle()
+                .fill(selected ? Brand.ink : Color.clear)
+            Circle()
+                .strokeBorder(selected ? Color.clear : Brand.border, lineWidth: 1.5)
+            if selected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(Brand.card)
+            }
+        }
+        .frame(width: 16, height: 16)
     }
 }
 

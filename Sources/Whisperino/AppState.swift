@@ -167,13 +167,6 @@ class AppState: ObservableObject {
     /// noise gate already forces ambient noise to 0).
     private static let chunkSilenceLevel: Float = 0.02
 
-    /// Live streaming (raw dictation only): paste each chunk's text into
-    /// the focused field as it finishes transcribing. Latched at record
-    /// start so flipping the setting mid-take can't produce half-modes.
-    private var liveInsertActive = false
-    /// How many segments have already been pasted, to space-join them.
-    private var liveInsertedSegments = 0
-
     /// Drives the waveform's rolling history. The leftmost bar tracks
     /// audio level in real-time via the recorder callback; this timer just
     /// shifts the value into history at a fixed cadence so the wave
@@ -499,8 +492,6 @@ class AppState: ObservableObject {
         liveTranscript = ""
         chunksDone = 0
         chunksTotal = 0
-        liveInsertedSegments = 0
-        liveInsertActive = !instruction && store.settings.liveStreamingEnabled
 
         let session = TranscriptionSession(transcriber: transcriber)
         session.onProgress = { [weak self] progress in
@@ -508,15 +499,6 @@ class AppState: ObservableObject {
             self.liveTranscript = progress.text
             self.chunksDone = progress.chunksDone
             self.chunksTotal = max(self.chunksTotal, progress.chunksTotal)
-            // Live streaming: commit this chunk's text to the focused
-            // field right away. Fires both while recording and while the
-            // tail chunks finish after stop - the final path then skips
-            // its own paste because everything already landed.
-            if self.liveInsertActive, !progress.newSegment.isEmpty {
-                let prefix = self.liveInsertedSegments == 0 ? "" : " "
-                self.liveInsertedSegments += 1
-                self.pasteIntoTargetApp(prefix + progress.newSegment)
-            }
         }
         transcriptionSession = session
 
@@ -554,7 +536,6 @@ class AppState: ObservableObject {
         transcriptionSession?.cancel()
         transcriptionSession = nil
         liveTranscript = ""
-        liveInsertActive = false
         chunksDone = 0
         chunksTotal = 0
     }
@@ -607,14 +588,10 @@ class AppState: ObservableObject {
         transcriptionSession = nil
         session.submit(chunkURL: audioURL)
         chunksTotal = session.chunksSubmitted
-        // Stays true through the tail chunks so onProgress keeps pasting
-        // them; cleared once finish() resolves.
-        let liveInsertWasActive = liveInsertActive
 
         Task {
             do {
                 let rawText = try await session.finish()
-                await MainActor.run { self.liveInsertActive = false }
 
                 guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     await MainActor.run {
@@ -678,22 +655,6 @@ class AppState: ObservableObject {
                         await MainActor.run {
                             self.deliverAIResult(finalText)
                         }
-                    }
-                } else if liveInsertWasActive {
-                    // Live streaming already pasted every chunk into the
-                    // focused field as it finished - including the tail,
-                    // whose onProgress fired before finish() resolved.
-                    // Nothing left to insert; just record and dismiss.
-                    await MainActor.run {
-                        self.lastTranscriptionResult = rawText
-                        self.store.addTranscript(rawText, isInstruction: false)
-                        self.state = .result(text: rawText)
-                        // Chunks were pasted individually as they finished;
-                        // fire a single Return now if the target auto-submits.
-                        if self.shouldAutoSubmit(pid: self.recordingTargetPID) {
-                            self.autoSubmitReturn(reactivating: self.recordingTargetPID)
-                        }
-                        self.startDismissSequence()
                     }
                 } else {
                     // Raw transcription (non-AI) path - Haiku cleanup if
@@ -1067,20 +1028,6 @@ class AppState: ObservableObject {
         keyUp?.flags = .maskCommand
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
-    }
-
-    /// Re-activate the target app and press Return, for the live-streaming
-    /// path where chunks were pasted separately and no final `deliverPaste`
-    /// carried the submit keystroke.
-    private func autoSubmitReturn(reactivating pid: pid_t?) {
-        if let pid, let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-                self?.pressReturn()
-            }
-        } else {
-            pressReturn()
-        }
     }
 
     /// Synthesize a Return keystroke - used to auto-submit (or, for a busy

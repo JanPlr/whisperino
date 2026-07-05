@@ -86,13 +86,6 @@ struct AppSettings: Codable, Equatable {
     var apiKey: String = ""
     var triggerKey: TriggerKey = .fn
     var soundEffectsEnabled: Bool = false
-    /// Live streaming for plain dictation: as each ~40s chunk finishes
-    /// transcribing (while you're still talking), its text is pasted
-    /// straight into the focused input. Long recordings make visible
-    /// progress and a crash can only ever lose the last chunk. Sessions
-    /// that streamed live skip Haiku refinement - the raw text has
-    /// already been committed to the target field.
-    var liveStreamingEnabled: Bool = false
     init() {}
 
     init(from decoder: Decoder) throws {
@@ -110,7 +103,6 @@ struct AppSettings: Codable, Equatable {
             triggerKey = .fn
         }
         soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
-        liveStreamingEnabled = try container.decodeIfPresent(Bool.self, forKey: .liveStreamingEnabled) ?? false
     }
 }
 

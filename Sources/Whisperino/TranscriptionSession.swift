@@ -32,9 +32,6 @@ final class TranscriptionSession {
         let chunksTotal: Int
         /// Joined raw text of every chunk transcribed so far.
         let text: String
-        /// Text of just the chunk that finished - lets live streaming
-        /// insert increments without diffing the joined string.
-        let newSegment: String
     }
 
     /// Fired on the main thread after each chunk completes.
@@ -100,8 +97,7 @@ final class TranscriptionSession {
                 let progress = Progress(
                     chunksDone: doneCount,
                     chunksTotal: max(submittedCount, doneCount),
-                    text: joined,
-                    newSegment: text
+                    text: joined
                 )
                 await MainActor.run { self.onProgress?(progress) }
             } catch {
