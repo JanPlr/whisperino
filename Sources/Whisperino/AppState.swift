@@ -984,13 +984,15 @@ class AppState: ObservableObject {
             NSPasteboard.general.setString(text, forType: .string)
             self.pasteClipboard()
 
-            // Auto-submit: press Return after the paste lands so the message
-            // is sent (or queued, for a busy coding agent). Sits between paste
-            // and clipboard restore - Return touches no pasteboard, so
-            // ordering is safe.
+            // Auto-submit: press the submit key after the paste lands so the
+            // message is sent (or queued, for a busy coding agent). The key is
+            // Return for most apps, but Tab for Codex (see submitKeyCode).
+            // Sits between paste and clipboard restore - the keystroke touches
+            // no pasteboard, so ordering is safe.
             if submitAfter {
+                let keyCode = self.submitKeyCode(reactivating: pid)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    self.pressReturn()
+                    self.pressSubmitKey(keyCode)
                 }
             }
 
@@ -1068,26 +1070,45 @@ class AppState: ObservableObject {
         keyUp?.post(tap: .cghidEventTap)
     }
 
-    /// Re-activate the target app and press Return, for the live-streaming
-    /// path where chunks were pasted separately and no final `deliverPaste`
-    /// carried the submit keystroke.
+    /// Re-activate the target app and press the submit key, for the
+    /// live-streaming path where chunks were pasted separately and no final
+    /// `deliverPaste` carried the submit keystroke.
     private func autoSubmitReturn(reactivating pid: pid_t?) {
+        let keyCode = submitKeyCode(reactivating: pid)
         if let pid, let app = NSRunningApplication(processIdentifier: pid) {
             app.activate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-                self?.pressReturn()
+                self?.pressSubmitKey(keyCode)
             }
         } else {
-            pressReturn()
+            pressSubmitKey(keyCode)
         }
     }
 
-    /// Synthesize a Return keystroke - used to auto-submit (or, for a busy
+    /// Bundle IDs whose input queues a follow-up on Tab rather than Return.
+    /// Codex steers into the *running* turn on Return and only queues for the
+    /// next turn on Tab, so auto-submit into it must send Tab. Everything else
+    /// (chat apps, Claude Code, Cursor) submits/queues on Return.
+    private static let tabToSubmitBundleIDs: Set<String> = ["com.openai.codex"]
+
+    /// The virtual key code to synthesize when auto-submitting into the app
+    /// we're reactivating - Tab for the special-cased coding agents above,
+    /// Return for everything else.
+    private func submitKeyCode(reactivating pid: pid_t?) -> UInt16 {
+        if let pid, let app = NSRunningApplication(processIdentifier: pid),
+           let bundleId = app.bundleIdentifier,
+           Self.tabToSubmitBundleIDs.contains(bundleId) {
+            return UInt16(kVK_Tab)
+        }
+        return UInt16(kVK_Return)
+    }
+
+    /// Synthesize the submit keystroke - used to auto-submit (or, for a busy
     /// coding agent, queue) a pasted dictation in apps the user set up.
-    private func pressReturn() {
+    private func pressSubmitKey(_ keyCode: UInt16) {
         let source = CGEventSource(stateID: .combinedSessionState)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_Return), keyDown: true)
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_Return), keyDown: false)
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
     }
