@@ -873,8 +873,6 @@ private struct SettingsPage: View {
             // Auto-submit - press Return after pasting so chat apps send the
             // message on their own.
             SettingsCard(title: "Auto-submit") {
-                CaptionText("After a dictation is pasted, Whisperino presses **Return** so the message sends itself. Add the apps where a pasted dictation should submit automatically - chat apps like Slack or Messages. Note: for a browser this applies to every tab, not just chat pages.")
-
                 if store.autoSubmitApps.isEmpty {
                     Text("No apps yet - add one below.")
                         .font(.system(size: 12))
@@ -919,7 +917,7 @@ private struct SettingsPage: View {
     }
 }
 
-/// App-name row with icon and hover-to-delete, for the auto-submit list.
+/// App row for the auto-submit list: icon + name, hover-to-delete.
 private struct AutoSubmitRow: View {
     let app: AutoSubmitApp
     let onDelete: () -> Void
@@ -946,6 +944,7 @@ private struct AutoSubmitRow: View {
             Text(app.name)
                 .font(.system(size: 13, weight: .medium))
             Spacer(minLength: 12)
+
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .font(.system(size: 12))

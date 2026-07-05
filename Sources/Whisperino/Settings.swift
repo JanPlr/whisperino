@@ -143,9 +143,9 @@ struct AgentEntry: Codable, Identifiable, Equatable {
     }
 }
 
-/// An app for which Whisperino presses Return after pasting a dictation,
-/// so a chat message is submitted automatically. Matched by bundle
-/// identifier; `name` is only for the settings list.
+/// An app for which Whisperino presses Return after pasting a dictation, so
+/// the message is submitted (or queued, in coding agents) automatically.
+/// Matched by bundle identifier; `name` is only for the settings list.
 struct AutoSubmitApp: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String

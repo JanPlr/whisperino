@@ -870,8 +870,8 @@ class AppState: ObservableObject {
     }
 
     /// Whether the app that was frontmost at record start is on the
-    /// auto-submit list, so we should press Return once the paste lands
-    /// (submitting the chat message for the user).
+    /// auto-submit list, so we press Return once the paste lands (submitting
+    /// the chat message, or queuing it in a busy coding agent).
     private func shouldAutoSubmit(pid: pid_t?) -> Bool {
         guard let pid, let app = NSRunningApplication(processIdentifier: pid) else { return false }
         return store.autoSubmitEnabled(forBundleId: app.bundleIdentifier)
@@ -984,9 +984,10 @@ class AppState: ObservableObject {
             NSPasteboard.general.setString(text, forType: .string)
             self.pasteClipboard()
 
-            // Auto-submit: press Return after the paste lands so the chat
-            // message is sent. Sits between paste and clipboard restore -
-            // Return touches no pasteboard, so ordering is safe.
+            // Auto-submit: press Return after the paste lands so the message
+            // is sent (or queued, for a busy coding agent). Sits between paste
+            // and clipboard restore - Return touches no pasteboard, so
+            // ordering is safe.
             if submitAfter {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                     self.pressReturn()
@@ -1081,8 +1082,8 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Synthesize a Return keystroke - used to auto-submit a pasted
-    /// dictation in apps the user configured for it (chat inputs).
+    /// Synthesize a Return keystroke - used to auto-submit (or, for a busy
+    /// coding agent, queue) a pasted dictation in apps the user set up.
     private func pressReturn() {
         let source = CGEventSource(stateID: .combinedSessionState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_Return), keyDown: true)
