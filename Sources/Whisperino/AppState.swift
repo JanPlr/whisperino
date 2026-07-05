@@ -1105,10 +1105,18 @@ class AppState: ObservableObject {
 
     /// Synthesize the submit keystroke - used to auto-submit (or, for a busy
     /// coding agent, queue) a pasted dictation in apps the user set up.
+    ///
+    /// Flags are forced empty: the preceding Cmd+V paste leaves Command down
+    /// in the combined session state (we never post a Command key-up), and a
+    /// new event created from that source inherits it. Without this, Tab
+    /// arrives as ⌘Tab and pops the macOS app switcher. (Return hid the bug -
+    /// ⌘Return isn't a system shortcut.)
     private func pressSubmitKey(_ keyCode: UInt16) {
         let source = CGEventSource(stateID: .combinedSessionState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+        keyDown?.flags = []
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+        keyUp?.flags = []
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
     }
