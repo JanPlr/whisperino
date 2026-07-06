@@ -70,6 +70,11 @@ struct ChatTurn: Identifiable {
 class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
     @Published var audioLevel: Float = 0
+    /// True while recording but the mic has produced no real signal since the
+    /// take began - almost always the wrong/dead input device. Drives the
+    /// "check your mic" nudge above the pill. Cleared the instant real audio
+    /// arrives, and reset at the start/end of every take.
+    @Published var noAudioDetected: Bool = false
     /// Rolling buffer of recent audio levels for the waveform display.
     /// Index 0 = newest (leftmost bar), last index = oldest. Updated at a
     /// fixed rate so the visual rolls smoothly even when the recorder
@@ -167,6 +172,30 @@ class AppState: ObservableObject {
     /// noise gate already forces ambient noise to 0).
     private static let chunkSilenceLevel: Float = 0.02
 
+    // MARK: No-audio nudge
+
+    /// Set true once the current take produces genuine captured audio. A mic
+    /// that's actually working trips this within a beat, so the nudge never
+    /// nags a live session.
+    private var heardRealAudio = false
+    /// Fires at most once per take. The nudge is a one-shot: after its
+    /// auto-dismiss clears `noAudioDetected`, this stops the timer tick from
+    /// re-raising it every second.
+    private var didNudgeNoAudio = false
+    /// Auto-dismisses the nudge a few seconds after it appears.
+    private var noAudioNudgeTimer: Timer?
+    /// How long the nudge lingers before fading out on its own.
+    private static let noAudioNudgeDuration: TimeInterval = 3
+    /// A gated level at/above this counts as genuine captured audio. Kept at
+    /// the meter's own silence floor (`chunkSilenceLevel`) so anything the app
+    /// doesn't already treat as silence marks the mic alive - the nudge then
+    /// only fires for a truly dead/wrong input, not for quiet-but-real speech.
+    private static let noAudioLevelThreshold: Float = 0.02
+    /// How long the mic may stay completely silent from take start before we
+    /// surface the nudge. Deliberately generous - this should fire for a
+    /// wrong/dead device, not for a thoughtful pause before speaking.
+    private static let noAudioGraceSeconds: TimeInterval = 3
+
     /// Drives the waveform's rolling history. The leftmost bar tracks
     /// audio level in real-time via the recorder callback; this timer just
     /// shifts the value into history at a fixed cadence so the wave
@@ -214,7 +243,7 @@ class AppState: ObservableObject {
         do {
             try recorder.switchDevice(deviceID: device.id) { [weak self] level in
                 DispatchQueue.main.async {
-                    self?.audioLevel = level
+                    self?.handleAudioLevel(level)
                 }
             }
         } catch {
@@ -299,6 +328,9 @@ class AppState: ObservableObject {
     private func teardownRecording(finalState: TranscriptionState) {
         showingInputPicker = false
         isLatchedRecording = false
+        noAudioDetected = false
+        noAudioNudgeTimer?.invalidate()
+        noAudioNudgeTimer = nil
         windowHighlighter.dismiss()
         screenshotTask?.cancel()
         screenshotTask = nil
@@ -361,9 +393,33 @@ class AppState: ObservableObject {
 
     // MARK: - Recording
 
+    /// Single sink for the recorder's level callback (both fresh start and
+    /// mid-take device switch). Feeds the live waveform and clears the
+    /// no-audio nudge the moment genuine signal arrives.
+    private func handleAudioLevel(_ level: Float) {
+        audioLevel = level
+        // Real-time tracking: leftmost bar reflects live voice immediately, no
+        // timer-tick wait. The sample timer only rolls history left to right.
+        if !audioSamples.isEmpty {
+            audioSamples[0] = level
+        }
+        // Any real signal means the mic is alive: latch that for the take and
+        // retract the nudge if it had appeared.
+        if level >= Self.noAudioLevelThreshold {
+            heardRealAudio = true
+            if noAudioDetected { noAudioDetected = false }
+        }
+    }
+
     private func startRecording(instruction: Bool) {
         // A fresh take supersedes a lingering fallback card.
         fallbackResult = nil
+        // Reset per-take mic-liveness tracking.
+        heardRealAudio = false
+        didNudgeNoAudio = false
+        noAudioDetected = false
+        noAudioNudgeTimer?.invalidate()
+        noAudioNudgeTimer = nil
         guard isSetUp else {
             state = .error(message: "Run setup.sh first")
             autoDismiss(after: 4)
@@ -419,14 +475,7 @@ class AppState: ObservableObject {
         do {
             try recorder.start(deviceID: selectedInputDevice?.id) { [weak self] level in
                 DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    self.audioLevel = level
-                    // Real-time tracking: leftmost bar reflects live voice
-                    // immediately, no timer-tick wait. The timer below only
-                    // handles rolling history from left to right.
-                    if !self.audioSamples.isEmpty {
-                        self.audioSamples[0] = level
-                    }
+                    self?.handleAudioLevel(level)
                 }
             }
             startWaveformSampling()
@@ -514,6 +563,34 @@ class AppState: ObservableObject {
               let chunkStart = currentChunkStart,
               let session = transcriptionSession else { return }
 
+        // Nudge check: if the mic hasn't produced any real signal within the
+        // grace window, it's almost certainly the wrong/dead device. Surface
+        // the "check your mic" hint; handleAudioLevel clears it if audio
+        // starts flowing (e.g. the user switches to the right input).
+        if !heardRealAudio, !didNudgeNoAudio,
+           let start = recordingStartTime,
+           Date().timeIntervalSince(start) >= Self.noAudioGraceSeconds {
+            didNudgeNoAudio = true
+            noAudioDetected = true
+            // Promote a plain hold-to-talk take to a latched one so the
+            // input-device selector appears alongside the nudge and the take
+            // survives trigger release - the user can switch to a working mic
+            // right there. Already-latched takes (double-tap / AI mode) keep
+            // their selector, so they just get the nudge.
+            if !isLatchedRecording {
+                isLatchedRecording = true
+                HotkeyManager.shared.promoteToLatched()
+            }
+            // Fade it out on its own after a few seconds - the mic selector
+            // it summoned stays, so the hint has done its job.
+            noAudioNudgeTimer?.invalidate()
+            noAudioNudgeTimer = Timer.scheduledTimer(
+                withTimeInterval: Self.noAudioNudgeDuration, repeats: false
+            ) { [weak self] _ in
+                self?.noAudioDetected = false
+            }
+        }
+
         let elapsed = Date().timeIntervalSince(chunkStart)
         // Prefer cutting at silence so words aren't clipped; the hard cap
         // guarantees rotation even if the user never pauses for breath.
@@ -542,6 +619,9 @@ class AppState: ObservableObject {
 
     private func stopRecording() {
         showingInputPicker = false
+        noAudioDetected = false
+        noAudioNudgeTimer?.invalidate()
+        noAudioNudgeTimer = nil
         // The latch ends with the take (Enter-submit bypasses the
         // HotkeyManager release path, so clear it here too).
         isLatchedRecording = false

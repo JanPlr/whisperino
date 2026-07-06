@@ -129,6 +129,18 @@ class HotkeyManager {
         installEventTap()
     }
 
+    /// Promote an in-flight push-to-talk take to a latched one. Called when
+    /// the mic produces no signal: the take must survive key release so the
+    /// user can open the input-device selector and switch to a working mic
+    /// instead of the recording ending the moment they let go of the trigger.
+    /// Idempotent - safe to call when already latched.
+    func promoteToLatched() {
+        // A tap of the trigger from here on means "stop", matching how any
+        // other latched take behaves.
+        stopPending = false
+        setLatched(true)
+    }
+
     /// Single funnel for latch state - the overlay shows explicit
     /// cancel/submit controls during a latched recording, so the UI has
     /// to track every transition.

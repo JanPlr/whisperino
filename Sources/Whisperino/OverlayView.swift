@@ -187,6 +187,9 @@ struct OverlayView: View {
     @State private var isHoveringWaveform = false
     @State private var isHoveringLatchedCancel = false
     @State private var isHoveringLatchedSubmit = false
+    /// Drives the pulsing orange ping around the mic button while the
+    /// no-audio nudge is showing.
+    @State private var micPulse = false
 
     // MARK: - Recording
 
@@ -316,6 +319,22 @@ struct OverlayView: View {
                 }
             }
         }
+        // "We're recording but hearing nothing" nudge, floated just above the
+        // pill without displacing it - the pill stays the stable anchor. Only
+        // while the mic is actually open (not during the typing-flow handover
+        // or a cancel).
+        .overlay(alignment: .top) {
+            // Hidden while the input picker is open - the picker sprouts from
+            // the same mic button and would otherwise overlap the nudge.
+            if appState.noAudioDetected && !processing && !cancelled
+                && !appState.showingInputPicker {
+                noAudioNudge
+                    .offset(y: -42)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.8), value: appState.noAudioDetected)
+        .animation(.easeOut(duration: 0.15), value: appState.showingInputPicker)
         .onHover { hovering in
             isHoveringPill = hovering
         }
@@ -356,9 +375,30 @@ struct OverlayView: View {
                     lineWidth: 1
                 )
             )
+            // Pulsing orange ping while the nudge is up - draws the eye to the
+            // mic button as the place to fix a dead input.
+            .overlay {
+                if appState.noAudioDetected {
+                    Circle()
+                        .stroke(Color(red: 0.95, green: 0.55, blue: 0.15), lineWidth: 1.5)
+                        .scaleEffect(micPulse ? 1.18 : 1.0)
+                        .opacity(micPulse ? 0 : 0.55)
+                        .animation(
+                            .easeOut(duration: 1.3).repeatForever(autoreverses: false),
+                            value: micPulse
+                        )
+                        .onAppear { micPulse = true }
+                        .onDisappear { micPulse = false }
+                        .allowsHitTesting(false)
+                }
+            }
             .contentShape(Circle())
             .onHover { isHoveringMic = $0 }
             .onTapGesture {
+                // The picker springs from here, so the nudge (which points at
+                // this button) has served its purpose - clear it immediately
+                // so the two never overlap.
+                appState.noAudioDetected = false
                 appState.refreshInputDevices()
                 appState.showingInputPicker.toggle()
             }
@@ -429,6 +469,27 @@ struct OverlayView: View {
         // linear mapping left normal talking almost flat.
         let boosted = pow(smoothed, 0.6)
         return max(3, min(16, 3 + boosted * shape * 13))
+    }
+
+    // MARK: - No-audio nudge
+
+    /// Floated above the pill when the mic is open but no sound is coming
+    /// through - almost always the wrong input device. Same black-capsule
+    /// chrome as every status pill; the orange mic.slash borrows the error
+    /// pill's warning idiom so it reads as "attention", not alarm.
+    private var noAudioNudge: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "mic.slash.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+
+            Text("No audio detected - check your mic source")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .overlayChrome()
     }
 
     // MARK: - Error
