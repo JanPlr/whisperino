@@ -160,7 +160,9 @@ class OverlayPanel {
     /// Must match OverlayView.pickerExtraHeight exactly
     private static func pickerExtraHeight(deviceCount: Int) -> CGFloat {
         let count = max(deviceCount, 1)
-        return 28 + CGFloat(count) * 26 + 12 + 1
+        // 28 header + one row per device + 26 for the "Follow system default"
+        // row + 12 padding + 1 hairline. Must match OverlayView.
+        return 28 + CGFloat(count) * 26 + 26 + 12 + 1
     }
 
     private func panelHeight(

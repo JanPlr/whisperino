@@ -217,10 +217,32 @@ class AppState: ObservableObject {
 
     // MARK: - Input Device Management
 
-    /// Refresh the list of available input devices and mark the current default
+    /// Whether the user has pinned a preferred mic (vs. following the system
+    /// default). Drives the "Follow system default" row's checkmark.
+    var hasPreferredInputDevice: Bool {
+        store.settings.preferredInputDeviceUID != nil
+    }
+
+    /// Refresh the list of available input devices and resolve the current
+    /// selection. A pinned preferred mic (stored by UID) always wins when it's
+    /// connected - this is what survives a display/dock unplug-replug that
+    /// resets the macOS default back to the built-in mic. When no preference is
+    /// set, or the preferred mic is currently absent, we follow the system
+    /// default instead.
     func refreshInputDevices() {
         inputDevices = AudioRecorder.availableInputDevices()
-        // If no explicit selection, highlight the system default
+
+        // A connected preferred mic always wins - re-resolving by UID also
+        // refreshes its (transient) AudioDeviceID after a reconnect.
+        if let uid = store.settings.preferredInputDeviceUID,
+           let preferred = inputDevices.first(where: { $0.uid == uid }) {
+            selectedInputDevice = preferred
+            return
+        }
+
+        // No preference (or the preferred mic is unplugged): follow the system
+        // default. The preference stays stored so it re-applies the moment the
+        // mic comes back.
         if selectedInputDevice == nil, let defaultID = AudioRecorder.defaultInputDeviceID() {
             selectedInputDevice = inputDevices.first { $0.id == defaultID }
         }
@@ -234,12 +256,34 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Select a specific input device for recording.
+    /// Pin a specific input device as the user's preferred mic. The choice is
+    /// persisted by UID so it sticks across relaunches and reconnects, and is
+    /// force-applied as the input at every record start.
     /// If currently recording, restarts the engine on the new device seamlessly.
     func selectInputDevice(_ device: AudioInputDevice) {
         selectedInputDevice = device
+        store.settings.preferredInputDeviceUID = device.uid
 
         guard case .recording = state else { return }
+        do {
+            try recorder.switchDevice(deviceID: device.id) { [weak self] level in
+                DispatchQueue.main.async {
+                    self?.handleAudioLevel(level)
+                }
+            }
+        } catch {
+            print("[whisperino] failed to switch device mid-recording: \(error)")
+        }
+    }
+
+    /// Clear the preferred-mic pin and fall back to following the system
+    /// default. If recording, switch live to whatever the system default is.
+    func clearPreferredInputDevice() {
+        store.settings.preferredInputDeviceUID = nil
+        selectedInputDevice = nil
+        refreshInputDevices()
+
+        guard case .recording = state, let device = selectedInputDevice else { return }
         do {
             try recorder.switchDevice(deviceID: device.id) { [weak self] level in
                 DispatchQueue.main.async {
@@ -471,6 +515,13 @@ class AppState: ObservableObject {
         if instruction {
             captureScreenContext(pid: recordingTargetPID)
         }
+
+        // Re-resolve devices first: after a display/dock reconnect the
+        // preferred mic keeps its UID but gets a fresh AudioDeviceID, and
+        // macOS may have reverted the default to the built-in mic. This picks
+        // up the current ID for the pinned UID; recorder.start then forces it
+        // as the system input so the take always uses the preferred mic.
+        refreshInputDevices()
 
         do {
             try recorder.start(deviceID: selectedInputDevice?.id) { [weak self] level in

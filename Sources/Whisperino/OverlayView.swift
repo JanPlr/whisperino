@@ -30,7 +30,9 @@ struct OverlayView: View {
     /// Must match OverlayPanel.pickerExtraHeight exactly.
     private var pickerExtraHeight: CGFloat {
         let deviceCount = max(appState.inputDevices.count, 1)
-        return 28 + CGFloat(deviceCount) * 26 + 12 + 1
+        // 28 header + one row per device + 26 for the "Follow system default"
+        // row + 12 padding + 1 hairline. Must match OverlayPanel.
+        return 28 + CGFloat(deviceCount) * 26 + 26 + 12 + 1
     }
 
     var body: some View {
@@ -643,6 +645,38 @@ private struct InputDevicePicker: View {
     @Binding var isPresented: Bool
     @State private var hoveredDeviceUID: String?
 
+    /// Sentinel hover key for the "Follow system default" row - no real device
+    /// carries this UID.
+    private static let followDefaultUID = "__follow_system_default__"
+
+    /// One picker row: radio-style checkmark, label, hover highlight. Shared by
+    /// the "Follow system default" entry and each device.
+    @ViewBuilder
+    private func row(title: String, isSelected: Bool, uid: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 10))
+                .foregroundStyle(isSelected ? .green : .white.opacity(0.3))
+                .frame(width: 14)
+
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(isSelected ? 0.9 : 0.6))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(hoveredDeviceUID == uid ? Color.white.opacity(0.08) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in hoveredDeviceUID = hovering ? uid : nil }
+        .onTapGesture(perform: action)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Input Source")
@@ -659,30 +693,24 @@ private struct InputDevicePicker: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
             } else {
-                ForEach(Array(appState.inputDevices.enumerated()), id: \.element.uid) { _, device in
-                    let isSelected = appState.selectedInputDevice?.uid == device.uid
-                    HStack(spacing: 6) {
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 10))
-                            .foregroundStyle(isSelected ? .green : .white.opacity(0.3))
-                            .frame(width: 14)
+                // "Follow system default" - the un-pinned mode. Selected when
+                // no preferred mic is set.
+                let followingDefault = !appState.hasPreferredInputDevice
+                row(
+                    title: "Follow system default",
+                    isSelected: followingDefault,
+                    uid: Self.followDefaultUID
+                ) {
+                    appState.clearPreferredInputDevice()
+                    isPresented = false
+                }
 
-                        Text(device.name)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(isSelected ? 0.9 : 0.6))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(hoveredDeviceUID == device.uid ? Color.white.opacity(0.08) : Color.clear)
-                    )
-                    .contentShape(Rectangle())
-                    .onHover { hovering in hoveredDeviceUID = hovering ? device.uid : nil }
-                    .onTapGesture {
+                ForEach(Array(appState.inputDevices.enumerated()), id: \.element.uid) { _, device in
+                    // Only the pinned device gets the checkmark. While following
+                    // the system default, no single device is singled out.
+                    let isPinned = appState.hasPreferredInputDevice
+                        && appState.selectedInputDevice?.uid == device.uid
+                    row(title: device.name, isSelected: isPinned, uid: device.uid) {
                         appState.selectInputDevice(device)
                         isPresented = false
                     }

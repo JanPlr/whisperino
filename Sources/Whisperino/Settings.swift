@@ -86,6 +86,14 @@ struct AppSettings: Codable, Equatable {
     var apiKey: String = ""
     var triggerKey: TriggerKey = .fn
     var soundEffectsEnabled: Bool = false
+    /// CoreAudio UID of the user's preferred input device. Stored by UID
+    /// (stable) rather than AudioDeviceID (a transient integer that changes
+    /// across reconnects), so the choice survives unplugging a display or
+    /// dock and coming back - the case where macOS silently reverts the
+    /// system default to the built-in mic. `nil` means "follow the system
+    /// default". Whenever the preferred device is connected, Whisperino pins
+    /// to it and forces it as the input at record start.
+    var preferredInputDeviceUID: String? = nil
     init() {}
 
     init(from decoder: Decoder) throws {
@@ -103,6 +111,7 @@ struct AppSettings: Codable, Equatable {
             triggerKey = .fn
         }
         soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
+        preferredInputDeviceUID = try container.decodeIfPresent(String.self, forKey: .preferredInputDeviceUID)
     }
 }
 
