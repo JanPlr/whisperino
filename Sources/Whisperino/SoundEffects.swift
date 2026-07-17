@@ -6,26 +6,20 @@ import AVFoundation
 /// and we can keep them tonally consistent. Respects the user's `soundEffectsEnabled` setting.
 ///
 /// Rafterino mode brings its own soundtrack - a water splash on start and a
-/// soft ship's bell on stop (both synthesized too). The mode implies the fun,
-/// so these play whenever the flag is hoisted; the chime toggle keeps
-/// governing only the plain chimes.
+/// soft ship's bell on stop (both synthesized too). The mode only changes
+/// WHICH sounds play; the sound-effects toggle stays the master switch for
+/// whether anything plays at all.
 enum SoundEffects {
     private static let player = ChimePlayer()
 
     static func playStart() {
-        if SettingsStore.shared.settings.rafterinoModeEnabled {
-            player.play(.splash)
-        } else if SettingsStore.shared.settings.soundEffectsEnabled {
-            player.play(.start)
-        }
+        guard SettingsStore.shared.settings.soundEffectsEnabled else { return }
+        player.play(SettingsStore.shared.settings.rafterinoModeEnabled ? .splash : .start)
     }
 
     static func playStop() {
-        if SettingsStore.shared.settings.rafterinoModeEnabled {
-            player.play(.bell)
-        } else if SettingsStore.shared.settings.soundEffectsEnabled {
-            player.play(.stop)
-        }
+        guard SettingsStore.shared.settings.soundEffectsEnabled else { return }
+        player.play(SettingsStore.shared.settings.rafterinoModeEnabled ? .bell : .stop)
     }
 }
 

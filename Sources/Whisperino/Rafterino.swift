@@ -102,6 +102,42 @@ struct RafterinoSkull: View {
     }
 }
 
+// MARK: - Raft mark (the friendly logo)
+
+/// The raft as an icon: deck of lashed logs, mast, pennant. This is the
+/// mark that replaces the waveform logo while the flag is hoisted - the
+/// skull stayed on the flag artwork, but as an everyday icon it scared
+/// the crew. One color, and the log gaps are real gaps, so it works as
+/// a menu bar template with no punch-out tricks.
+struct RafterinoRaftMark: View {
+    var color: Color = .white
+
+    var body: some View {
+        Canvas { ctx, size in
+            let s = min(size.width, size.height) / 100
+            ctx.translateBy(
+                x: (size.width - 100 * s) / 2,
+                y: (size.height - 100 * s) / 2
+            )
+            ctx.scaleBy(x: s, y: s)
+
+            // Deck: one wide slab - at icon sizes separate logs collapse
+            // into dots, so the raft-ness comes from the deck's width and
+            // the two punched lashing seams instead.
+            ctx.fill(Path(roundedRect: CGRect(x: 4, y: 64, width: 92, height: 16), cornerRadius: 8), with: .color(color))
+            var seams = ctx
+            seams.blendMode = .destinationOut
+            for seamX in [33.0, 62.0] {
+                seams.fill(Path(roundedRect: CGRect(x: seamX, y: 63, width: 5, height: 18), cornerRadius: 2.5), with: .color(.black))
+            }
+            // Mast.
+            ctx.fill(Path(roundedRect: CGRect(x: 46, y: 18, width: 8, height: 50), cornerRadius: 4), with: .color(color))
+            // Pennant, flying to the right.
+            ctx.fill(Path(roundedRect: CGRect(x: 53, y: 20, width: 33, height: 21), cornerRadius: 5), with: .color(color))
+        }
+    }
+}
+
 // MARK: - The full flag
 
 /// The Rafterino banner as hung between the raft's builders: white flag,

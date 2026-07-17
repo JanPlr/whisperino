@@ -67,16 +67,14 @@ class StatusBarController: NSObject, NSMenuDelegate {
         return image
     }
 
-    /// The Rafterino counterpart: the skull & crossbones as the menu bar
-    /// icon, rasterized from the shared SwiftUI artwork with the eyes
-    /// punched out so the menu bar shows through. Same color contract as
+    /// The Rafterino counterpart: the raft mark as the menu bar icon,
+    /// rasterized from the shared SwiftUI artwork. Same color contract as
     /// `makeIcon` - template for idle, explicit color for recording states.
     private static func makeRafterinoIcon(barColor: NSColor, asTemplate: Bool) -> NSImage {
         let icon = MainActor.assumeIsolated {
             let renderer = ImageRenderer(
-                content: RafterinoSkull(
-                    bone: asTemplate ? .black : Color(nsColor: barColor),
-                    field: nil
+                content: RafterinoRaftMark(
+                    color: asTemplate ? .black : Color(nsColor: barColor)
                 )
                 .frame(width: 18, height: 18)
             )

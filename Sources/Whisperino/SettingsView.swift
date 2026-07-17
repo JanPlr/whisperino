@@ -219,7 +219,7 @@ private struct FlowSidebar: View {
             // Rafterino flag hoisted, the whole identity goes to sea.
             HStack(spacing: 8) {
                 if store.settings.rafterinoModeEnabled {
-                    RafterinoSkull()
+                    RafterinoRaftMark()
                         .frame(width: 15, height: 15)
                         .padding(3)
                         .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Rafterino.field))

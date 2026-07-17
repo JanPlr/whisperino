@@ -89,9 +89,7 @@ struct OverlayView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 if rafterino {
-                    // The card is black, so punched-out eyes read the same
-                    // as painted ones - and the mark stays monochrome.
-                    RafterinoSkull(bone: .white, field: nil)
+                    RafterinoRaftMark()
                         .frame(width: 17, height: 17)
                 } else {
                     Image(systemName: "waveform")
