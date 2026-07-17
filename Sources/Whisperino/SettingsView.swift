@@ -211,17 +211,26 @@ struct SettingsView: View {
 
 private struct FlowSidebar: View {
     @Binding var page: FlowPage
+    @ObservedObject private var store = SettingsStore.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            // Wordmark - small black chip, a nod to the pill.
+            // Wordmark - small black chip, a nod to the pill. With the
+            // Rafterino flag hoisted, the whole identity goes to sea.
             HStack(spacing: 8) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 21, height: 21)
-                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.black))
-                Text("whisperino")
+                if store.settings.rafterinoModeEnabled {
+                    RafterinoSkull()
+                        .frame(width: 15, height: 15)
+                        .padding(3)
+                        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Rafterino.field))
+                } else {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 21, height: 21)
+                        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.black))
+                }
+                Text(store.settings.rafterinoModeEnabled ? "rafterino" : "whisperino")
                     .font(.system(size: 14, weight: .bold))
             }
             .padding(.leading, 10)

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftUI
 
 class StatusBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
@@ -66,9 +67,40 @@ class StatusBarController: NSObject, NSMenuDelegate {
         return image
     }
 
+    /// The Rafterino counterpart: the skull & crossbones as the menu bar
+    /// icon, rasterized from the shared SwiftUI artwork with the eyes
+    /// punched out so the menu bar shows through. Same color contract as
+    /// `makeIcon` - template for idle, explicit color for recording states.
+    private static func makeRafterinoIcon(barColor: NSColor, asTemplate: Bool) -> NSImage {
+        let icon = MainActor.assumeIsolated {
+            let renderer = ImageRenderer(
+                content: RafterinoSkull(
+                    bone: asTemplate ? .black : Color(nsColor: barColor),
+                    field: nil
+                )
+                .frame(width: 18, height: 18)
+            )
+            renderer.scale = 4  // crisp on any retina menu bar
+            return renderer.nsImage
+        }
+        guard let icon else {
+            return makeIcon(barColor: barColor, asTemplate: asTemplate)
+        }
+        icon.size = NSSize(width: 18, height: 18)
+        icon.isTemplate = asTemplate
+        return icon
+    }
+
+    /// Pick the icon for the current state, honoring the hoisted flag.
+    private static func icon(barColor: NSColor, asTemplate: Bool) -> NSImage {
+        SettingsStore.shared.settings.rafterinoModeEnabled
+            ? makeRafterinoIcon(barColor: barColor, asTemplate: asTemplate)
+            : makeIcon(barColor: barColor, asTemplate: asTemplate)
+    }
+
     private func setupButton() {
         guard let button = statusItem.button else { return }
-        button.image = Self.makeIcon(barColor: .black, asTemplate: true)
+        button.image = Self.icon(barColor: .black, asTemplate: true)
         statusItem.menu = menu
 
         // 6pt blue dot in the top-right corner of the button.
@@ -286,6 +318,19 @@ class StatusBarController: NSObject, NSMenuDelegate {
             }
             .store(in: &cancellables)
 
+        // Re-draw the menu bar icon the moment the Rafterino flag is
+        // hoisted or struck - the toggle lives in Settings, so without
+        // this the icon would only catch up on the next take.
+        store.$settings
+            .map(\.rafterinoModeEnabled)
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.updateStatusIcon(for: self.appState.state)
+            }
+            .store(in: &cancellables)
+
         // Show / hide the menu-bar badge as the updater's status changes
         // (background check finds a release, user starts the download, etc.).
         NotificationCenter.default.publisher(for: UpdateChecker.statusDidChange)
@@ -300,12 +345,12 @@ class StatusBarController: NSObject, NSMenuDelegate {
         switch state {
         case .recording:
             // Red is explicitly colored - not a template
-            button.image = Self.makeIcon(barColor: .systemRed, asTemplate: false)
+            button.image = Self.icon(barColor: .systemRed, asTemplate: false)
         case .transcribing:
-            button.image = Self.makeIcon(barColor: .systemGray, asTemplate: false)
+            button.image = Self.icon(barColor: .systemGray, asTemplate: false)
         default:
             // Template: macOS auto-adapts to light/dark menu bar
-            button.image = Self.makeIcon(barColor: .black, asTemplate: true)
+            button.image = Self.icon(barColor: .black, asTemplate: true)
         }
     }
 }

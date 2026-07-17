@@ -88,9 +88,16 @@ struct OverlayView: View {
     private var fallbackResultCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                if rafterino {
+                    // The card is black, so punched-out eyes read the same
+                    // as painted ones - and the mark stays monochrome.
+                    RafterinoSkull(bone: .white, field: nil)
+                        .frame(width: 17, height: 17)
+                } else {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
 
                 Spacer(minLength: 8)
 

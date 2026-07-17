@@ -53,11 +53,12 @@ enum Rafterino {
 
 /// The Rafterino skull & crossbones, redrawn from the flag in a 100×100
 /// design space. Stencil-style square eyes/nose to match the painted
-/// original. `field` is the color behind the skull (eyes and nose are
-/// painted in it, not cut out - cheap and identical at pill sizes).
+/// original. `field` is the color painted into the eyes and nose; pass
+/// `nil` to punch them out instead (for template icons - the menu bar -
+/// where whatever is behind must show through).
 struct RafterinoSkull: View {
     var bone: Color = .white
-    var field: Color = Rafterino.field
+    var field: Color? = Rafterino.field
 
     var body: some View {
         Canvas { ctx, size in
@@ -89,10 +90,14 @@ struct RafterinoSkull: View {
             ctx.fill(Ellipse().path(in: CGRect(x: 24, y: 12, width: 52, height: 50)), with: .color(bone))
             ctx.fill(Path(roundedRect: CGRect(x: 39, y: 65, width: 22, height: 14), cornerRadius: 4), with: .color(bone))
 
-            // Stencil eyes + nose, painted in the field color.
-            ctx.fill(Path(roundedRect: CGRect(x: 33, y: 28, width: 11, height: 13), cornerRadius: 3), with: .color(field))
-            ctx.fill(Path(roundedRect: CGRect(x: 56, y: 28, width: 11, height: 13), cornerRadius: 3), with: .color(field))
-            ctx.fill(Path(roundedRect: CGRect(x: 46, y: 47, width: 8, height: 9), cornerRadius: 2.5), with: .color(field))
+            // Stencil eyes + nose - painted in the field color, or erased
+            // right through the artwork when there is no field.
+            var features = ctx
+            if field == nil { features.blendMode = .destinationOut }
+            let paint = field ?? .black
+            features.fill(Path(roundedRect: CGRect(x: 33, y: 28, width: 11, height: 13), cornerRadius: 3), with: .color(paint))
+            features.fill(Path(roundedRect: CGRect(x: 56, y: 28, width: 11, height: 13), cornerRadius: 3), with: .color(paint))
+            features.fill(Path(roundedRect: CGRect(x: 46, y: 47, width: 8, height: 9), cornerRadius: 2.5), with: .color(paint))
         }
     }
 }
