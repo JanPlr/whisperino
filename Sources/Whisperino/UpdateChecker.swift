@@ -42,8 +42,10 @@ final class UpdateChecker {
 
     // MARK: - Checking
 
-    /// Silent background check on launch + every 24h. Results only show up
-    /// as the "Update to vX.Y.Z…" menu item, never as dialogs.
+    /// Silent background check on launch + every 24h + on wake from sleep.
+    /// Results only show up as the "Update to vX.Y.Z…" menu item, never as
+    /// dialogs. The wake check matters: sleep pauses the daily timer, so a
+    /// lid-closed Mac could otherwise carry a days-old result.
     func startAutomaticChecks() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             self?.check(completion: nil)
@@ -51,7 +53,13 @@ final class UpdateChecker {
         Timer.scheduledTimer(withTimeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
             self?.check(completion: nil)
         }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.check(completion: nil)
+        }
     }
+
 
     /// Menu-initiated check: reports the result via alert when there's
     /// nothing to install (up to date / failed).

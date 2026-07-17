@@ -273,9 +273,13 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func updateAction() {
         switch UpdateChecker.shared.status {
-        case .available(let release):
-            UpdateChecker.shared.offerInstall(release)
-        case .idle:
+        case .available, .idle:
+            // Even when the menu says "Update to vX…", re-resolve before
+            // installing: the stored release is a snapshot from the last
+            // check, and installing it verbatim sent people to an already
+            // superseded version (then a second update to reach the real
+            // latest). checkManually() fetches fresh and offers whatever
+            // is newest right now.
             UpdateChecker.shared.checkManually()
         case .checking, .downloading:
             break
