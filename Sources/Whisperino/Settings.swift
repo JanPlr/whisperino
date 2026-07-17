@@ -94,6 +94,10 @@ struct AppSettings: Codable, Equatable {
     /// default". Whenever the preferred device is connected, Whisperino pins
     /// to it and forces it as the input at record start.
     var preferredInputDeviceUID: String? = nil
+    /// Team Rafterino easter egg: the pill goes to sea - ocean waveform,
+    /// water border, and a raft sailing while transcription runs. Pure
+    /// paint; no behavior changes.
+    var rafterinoModeEnabled: Bool = false
     init() {}
 
     init(from decoder: Decoder) throws {
@@ -112,6 +116,7 @@ struct AppSettings: Codable, Equatable {
         }
         soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
         preferredInputDeviceUID = try container.decodeIfPresent(String.self, forKey: .preferredInputDeviceUID)
+        rafterinoModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .rafterinoModeEnabled) ?? false
     }
 }
 

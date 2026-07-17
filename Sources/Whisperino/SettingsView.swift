@@ -845,6 +845,20 @@ private struct SettingsPage: View {
                 ToggleRow(label: "Sound effects on start / stop", isOn: $store.settings.soundEffectsEnabled)
             }
 
+            // Team Rafterino easter egg - the flag flies here whether the
+            // mode is on or not; the toggle decides if the pill sails.
+            SettingsCard(title: "Rafterino mode") {
+                HStack(alignment: .center, spacing: 16) {
+                    RafterinoFlag()
+                        .frame(width: 64)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ToggleRow(label: "Hoist the flag", isOn: $store.settings.rafterinoModeEnabled)
+                        CaptionText("The official Team Rafterino edition. The pill goes to sea: your voice makes ocean waves while you speak, and a little raft sails across while your words come ashore. In memory of the raft that held.")
+                    }
+                }
+            }
+
             // Trigger key - let users pick an alternative if Fn is mapped to
             // something else (emoji picker, system function, etc.)
             SettingsCard(title: "Trigger key") {

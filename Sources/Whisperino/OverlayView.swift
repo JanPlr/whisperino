@@ -2,6 +2,10 @@ import SwiftUI
 
 struct OverlayView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var store = SettingsStore.shared
+
+    /// Team Rafterino easter egg - retints the pill (never reshapes it).
+    private var rafterino: Bool { store.settings.rafterinoModeEnabled }
 
     private var isDismissing: Bool {
         if case .dismissing = appState.state { return true }
@@ -229,20 +233,37 @@ struct OverlayView: View {
                     if processing {
                         // Same pill, new content: the typing flow takes the
                         // waveform's place and the pill springs wider to fit.
-                        TypingFlowView()
-                            .frame(height: 16)
-                            .transition(.opacity)
+                        // In Rafterino mode your words drift by as a message
+                        // in a bottle instead.
+                        Group {
+                            if rafterino {
+                                RafterinoBottleFlowView()
+                            } else {
+                                TypingFlowView()
+                            }
+                        }
+                        .frame(height: 16)
+                        .transition(.opacity)
                     } else {
                         if latched {
                             latchedCancelButton
                                 .transition(.scale.combined(with: .opacity))
                         }
 
-                        HStack(spacing: 2) {
-                            ForEach(0..<AppState.waveformBarCount, id: \.self) { i in
-                                Capsule()
-                                    .fill(.white.opacity(0.78))
-                                    .frame(width: 2, height: barHeight(for: i))
+                        // Live level display: the classic bar waveform, or -
+                        // in Rafterino mode - the sea itself, with the raft
+                        // riding the wave your voice makes.
+                        Group {
+                            if rafterino {
+                                RafterinoLiveWaveView(samples: appState.audioSamples)
+                            } else {
+                                HStack(spacing: 2) {
+                                    ForEach(0..<AppState.waveformBarCount, id: \.self) { i in
+                                        Capsule()
+                                            .fill(.white.opacity(0.78))
+                                            .frame(width: 2, height: barHeight(for: i))
+                                    }
+                                }
                             }
                         }
                         .frame(height: 16)
@@ -285,11 +306,18 @@ struct OverlayView: View {
                     } else {
                         // Calm dictation border vs. animated AI gradient.
                         // Gradient applies whenever we're in AI mode.
+                        // Rafterino mode trades the calm hairline for slow
+                        // water; the AI rainbow still wins - mode identity
+                        // beats theming.
                         let inAIContext = appState.isInstructionMode || appState.isAgentMode
                         ZStack {
                             RoundedRectangle(cornerRadius: pillRadius, style: .continuous)
                                 .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
-                                .opacity(inAIContext ? 0 : 1)
+                                .opacity(inAIContext || rafterino ? 0 : 1)
+                            if rafterino {
+                                RafterinoWaterBorder(cornerRadius: pillRadius)
+                                    .opacity(inAIContext ? 0 : 1)
+                            }
                             AnimatedGradientBorder(cornerRadius: pillRadius)
                                 .opacity(inAIContext ? 1 : 0)
                         }
