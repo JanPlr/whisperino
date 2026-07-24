@@ -33,11 +33,13 @@ if [ -z "$SWIFT_VER" ] || [ "$SWIFT_MAJOR" -lt 5 ] || { [ "$SWIFT_MAJOR" -eq 5 ]
 fi
 echo "[1/3] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
 
-# Setup whisper.cpp + model
-if [ -f "$HOME/.whisperino/bin/whisper-cli" ] && [ -f "$HOME/.whisperino/models/ggml-medium.bin" ]; then
+# Setup whisper.cpp + model. Either model counts as installed - existing
+# setups on medium keep working without re-downloading; fresh installs
+# get large-v3-turbo from setup.sh.
+if [ -f "$HOME/.whisperino/bin/whisper-cli" ] && { [ -f "$HOME/.whisperino/models/ggml-large-v3-turbo.bin" ] || [ -f "$HOME/.whisperino/models/ggml-medium.bin" ]; }; then
     echo "[2/3] whisper.cpp + model: already installed"
 else
-    echo "[2/3] Installing whisper.cpp + downloading model (~1.5 GB)..."
+    echo "[2/3] Installing whisper.cpp + downloading model (~1.6 GB)..."
     ./setup.sh
 fi
 

@@ -32,7 +32,7 @@ enum TranscriberError: LocalizedError {
 
 /// Transcription backend. Prefers a persistent `whisper-server` child
 /// process - the model loads into memory once at warm-up instead of
-/// being re-read from disk (1.5GB for medium) on every single take,
+/// being re-read from disk (~1.6GB) on every single take,
 /// which is where almost all of the old per-transcription latency came
 /// from. Every request falls back to a one-shot `whisper-cli` run if
 /// the server is missing or misbehaving, so transcription keeps working
@@ -59,7 +59,19 @@ class Transcriber {
         baseDir = home.appendingPathComponent(".whisperino")
         whisperBinary = baseDir.appendingPathComponent("bin/whisper-cli")
         serverBinary = baseDir.appendingPathComponent("bin/whisper-server")
-        modelPath = baseDir.appendingPathComponent("models/ggml-medium.bin")
+        // Prefer large-v3-turbo (better accuracy at roughly medium's size);
+        // fall back to an already-downloaded medium so existing installs
+        // keep working without a re-download. When neither exists yet,
+        // point at turbo - that's what setup.sh downloads now.
+        let models = baseDir.appendingPathComponent("models")
+        let turbo = models.appendingPathComponent("ggml-large-v3-turbo.bin")
+        let medium = models.appendingPathComponent("ggml-medium.bin")
+        if !FileManager.default.fileExists(atPath: turbo.path),
+           FileManager.default.fileExists(atPath: medium.path) {
+            modelPath = medium
+        } else {
+            modelPath = turbo
+        }
     }
 
     var isAvailable: Bool {

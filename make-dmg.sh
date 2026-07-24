@@ -9,8 +9,8 @@ STAGING="$DMG_DIR/staging"
 echo "==> Building $APP_NAME DMG installer"
 echo ""
 
-# Step 1: Run setup if needed
-if [ ! -f "$HOME/.whisperino/bin/whisper-cli" ] || [ ! -f "$HOME/.whisperino/models/ggml-small.bin" ]; then
+# Step 1: Run setup if needed (either model counts - see install.sh)
+if [ ! -f "$HOME/.whisperino/bin/whisper-cli" ] || { [ ! -f "$HOME/.whisperino/models/ggml-large-v3-turbo.bin" ] && [ ! -f "$HOME/.whisperino/models/ggml-medium.bin" ]; }; then
     echo "==> Step 1/3: Setting up whisper.cpp + model..."
     ./setup.sh
 else

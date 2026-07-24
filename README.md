@@ -17,7 +17,7 @@ cd whisperino && ./install.sh
 
 Requirements: macOS 14+, Apple Silicon, Xcode CLT (`xcode-select --install`), Homebrew.
 
-The script builds whisper.cpp + downloads the medium model (~1.5 GB), builds the app, and installs to `/Applications`.
+The script builds whisper.cpp + downloads the large-v3-turbo model (~1.6 GB), builds the app, and installs to `/Applications`.
 
 ### Permissions
 
