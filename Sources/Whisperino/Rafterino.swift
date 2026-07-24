@@ -262,15 +262,19 @@ struct RafterinoLiveWaveView: View {
                     return 3 + CGFloat(pow(smoothed, 0.6)) * 7
                 }
                 // Continuous surface: cosine-interpolate between sample
-                // columns, plus a small travelling ripple so calm water
-                // still rolls between words.
+                // columns. The travelling ripple is gated by the live level:
+                // a silent mic must read as a dead-flat waterline (that's
+                // the "is audio coming through?" signal), so the water only
+                // rolls while something is actually being heard.
+                let activity = smoother.display.max() ?? 0
+                let rippleGain = CGFloat(min(1, activity * 10))
                 func surfaceY(_ x: CGFloat) -> CGFloat {
                     let pos = max(0, min(1, x / size.width)) * CGFloat(smoother.display.count - 1)
                     let i = min(Int(pos), smoother.display.count - 2)
                     let f = pos - CGFloat(i)
                     let w = (1 - cos(f * .pi)) / 2
                     let h = level(i) * (1 - w) + level(i + 1) * w
-                    let ripple = 0.7 * sin(x / 6.5 - t * 2.8) + 0.35 * sin(x / 3.4 + t * 1.9)
+                    let ripple = rippleGain * (0.7 * sin(x / 6.5 - t * 2.8) + 0.35 * sin(x / 3.4 + t * 1.9))
                     return bottom - 2 - h + ripple
                 }
 
