@@ -41,7 +41,19 @@ class Transcriber {
     private let baseDir: URL
     private let whisperBinary: URL
     private let serverBinary: URL
-    private let modelPath: URL
+
+    /// Resolved per use, not cached: large-v3-turbo (the default since v2)
+    /// may finish its background download mid-session, and the next
+    /// resolution should pick it up. Falls back to an already-downloaded
+    /// medium so pre-v2 installs keep transcribing during that download.
+    private var modelPath: URL {
+        let models = baseDir.appendingPathComponent("models")
+        let turbo = models.appendingPathComponent(ModelInstaller.defaultModel)
+        if FileManager.default.fileExists(atPath: turbo.path) { return turbo }
+        let medium = models.appendingPathComponent("ggml-medium.bin")
+        if FileManager.default.fileExists(atPath: medium.path) { return medium }
+        return turbo
+    }
 
     /// Fixed local port for the persistent server. If it's taken the
     /// server fails to bind, warm-up reports failure, and we fall back
@@ -59,19 +71,6 @@ class Transcriber {
         baseDir = home.appendingPathComponent(".whisperino")
         whisperBinary = baseDir.appendingPathComponent("bin/whisper-cli")
         serverBinary = baseDir.appendingPathComponent("bin/whisper-server")
-        // Prefer large-v3-turbo (better accuracy at roughly medium's size);
-        // fall back to an already-downloaded medium so existing installs
-        // keep working without a re-download. When neither exists yet,
-        // point at turbo - that's what setup.sh downloads now.
-        let models = baseDir.appendingPathComponent("models")
-        let turbo = models.appendingPathComponent("ggml-large-v3-turbo.bin")
-        let medium = models.appendingPathComponent("ggml-medium.bin")
-        if !FileManager.default.fileExists(atPath: turbo.path),
-           FileManager.default.fileExists(atPath: medium.path) {
-            modelPath = medium
-        } else {
-            modelPath = turbo
-        }
     }
 
     var isAvailable: Bool {
@@ -87,9 +86,26 @@ class Transcriber {
 
     /// Kick off the server in the background so the model is resident
     /// before the first dictation. Call once at app launch.
+    ///
+    /// Also fetches the current default model if this install predates it
+    /// (the in-app updater only swaps the app bundle, never the model dir).
+    /// Once the download lands, the warm server is still holding the old
+    /// model, so drop it and warm up again - the next resolution of
+    /// `modelPath` picks up the new file.
     func warmUp() {
         Task.detached(priority: .utility) { [weak self] in
             _ = await self?.ensureServer()
+        }
+        ModelInstaller.ensureDefaultModel { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.warmUpTask = nil
+            self.lock.unlock()
+            self.serverProcess?.terminate()
+            self.serverProcess = nil
+            Task.detached(priority: .utility) { [weak self] in
+                _ = await self?.ensureServer()
+            }
         }
     }
 
