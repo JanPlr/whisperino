@@ -44,6 +44,12 @@ if [ -z "$SWIFT_VER" ] || [ "$SWIFT_MAJOR" -lt 5 ] || { [ "$SWIFT_MAJOR" -eq 5 ]
     exit 1
 fi
 
+# Prevent Spotlight from indexing the build directory (avoid duplicate
+# results). Must exist BEFORE the .app bundle is created - Spotlight indexes
+# new bundles within seconds, and a stale entry keeps showing up in search.
+mkdir -p "$BUILD_DIR"
+touch "$BUILD_DIR/.metadata_never_index"
+
 # Build with Swift Package Manager
 swift build -c release 2>&1 | tail -5
 
@@ -79,9 +85,6 @@ else
     echo "==> Ad-hoc signed - run ./setup-signing.sh once so permissions stop resetting"
 fi
 
-# Prevent Spotlight from indexing the build directory (avoid duplicate results)
-touch "$BUILD_DIR/.metadata_never_index"
-
 if [ "$BUNDLE_ONLY" = true ]; then
     echo "==> Bundle ready: $APP_BUNDLE (v$VERSION)"
     exit 0
@@ -93,6 +96,11 @@ pkill Whisperino 2>/dev/null || true
 sleep 0.5
 rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_BUNDLE" /Applications/
+
+# Remove the local bundle copy - it's fully installed now, and leaving a
+# second Whisperino.app on disk creates duplicate Spotlight/Launchpad entries
+# that launch a conflicting second instance.
+rm -rf "$APP_BUNDLE"
 
 # Only reset TCC on ad-hoc builds. Ad-hoc signing changes the CDHash every
 # build, orphaning the grants - resetting at least forces a clean re-grant. With
