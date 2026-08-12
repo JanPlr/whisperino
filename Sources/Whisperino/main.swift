@@ -51,7 +51,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Fallback card counts as "interactive overlay" so Esc/Enter
             // reach it even when no recording is in flight.
             isOverlayInteractive: { [weak self] in
-                self?.appState.fallbackResult != nil
+                self?.appState.fallbackResult != nil || self?.appState.assistantCard != nil
             }
         )
     }

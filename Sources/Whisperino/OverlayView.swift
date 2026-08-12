@@ -41,7 +41,9 @@ struct OverlayView: View {
 
     var body: some View {
         Group {
-            if appState.fallbackResult != nil {
+            if let assistantCard = appState.assistantCard {
+                assistantCardView(assistantCard).padding(.top, 6)
+            } else if appState.fallbackResult != nil {
                 // The take had no text field to land in - show it in a
                 // card with a Copy escape hatch instead of losing it.
                 fallbackResultCard.padding(.top, 6)
@@ -64,13 +66,187 @@ struct OverlayView: View {
             }
         }
         .frame(width: 380)
-        .padding(.bottom, 10)
-        .frame(height: panelContentHeight, alignment: .bottom)
+        .padding(.top, 4)
+        .frame(height: panelContentHeight, alignment: .top)
         .animation(appState.suppressStateAnimation ? nil : .spring(response: 0.24, dampingFraction: 0.85), value: appState.state)
         // Picker pop is its own, snappier curve - it's a menu, not a
         // panel morph; it should appear, not unfold.
         .animation(.spring(response: 0.16, dampingFraction: 0.9), value: appState.showingInputPicker)
         .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.fallbackResult != nil)
+        .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.assistantCard)
+    }
+
+    // MARK: - Assistant glance + confirmation cards
+
+    @ViewBuilder
+    private func assistantCardView(_ card: AssistantCard) -> some View {
+        switch card {
+        case .fileResults(let query, let results):
+            VStack(alignment: .leading, spacing: 12) {
+                assistantCardHeader(
+                    symbol: "folder.badge.magnifyingglass",
+                    title: "Finder",
+                    subtitle: "Spotlight · On-device"
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Results for “\(query)”")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.94))
+                        .lineLimit(1)
+
+                    if results.isEmpty {
+                        Text("No matching files found on this Mac.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .padding(.vertical, 18)
+                    } else {
+                        ForEach(Array(results.prefix(5))) { result in
+                            assistantFileRow(result)
+                        }
+                    }
+                }
+
+                HStack {
+                    Label("Filenames stay local", systemImage: "lock.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Spacer()
+                    Text("Choose a file to open")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+            .assistantCardChrome()
+
+        case .confirmOpen(let result):
+            VStack(alignment: .leading, spacing: 14) {
+                assistantCardHeader(
+                    symbol: "hand.raised.fill",
+                    title: "Open this file?",
+                    subtitle: "Confirmation required"
+                )
+
+                HStack(spacing: 11) {
+                    Image(systemName: result.symbolName)
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(.blue.opacity(0.9))
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(.white.opacity(0.08)))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(result.name)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .lineLimit(1)
+                        Text(result.detail)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.48))
+                            .lineLimit(1)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    assistantCardButton("Cancel", prominent: false) {
+                        appState.dismissAssistantCard()
+                    }
+                    assistantCardButton("Open", prominent: true) {
+                        appState.approveAssistantAction()
+                    }
+                }
+            }
+            .assistantCardChrome()
+
+        case .message(let symbol, let title, let detail):
+            VStack(alignment: .leading, spacing: 10) {
+                assistantCardHeader(symbol: symbol, title: title, subtitle: "Finder")
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(2)
+            }
+            .assistantCardChrome()
+        }
+    }
+
+    private func assistantCardHeader(symbol: String, title: String, subtitle: String) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(.white.opacity(0.1)))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+                Text(subtitle)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+
+            Spacer()
+
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(.white.opacity(0.07)))
+                .contentShape(Circle())
+                .onTapGesture { appState.dismissAssistantCard() }
+                .pointerOnHover()
+        }
+    }
+
+    private func assistantFileRow(_ result: LocalFileResult) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: result.symbolName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.blue.opacity(0.88))
+                .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.07)))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(result.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Text(result.detail)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.25))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(0.045)))
+        .contentShape(Rectangle())
+        .onTapGesture { appState.requestOpen(result) }
+        .pointerOnHover()
+    }
+
+    private func assistantCardButton(
+        _ label: String,
+        prominent: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Text(label)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(prominent ? Color.black.opacity(0.85) : Color.white.opacity(0.82))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(prominent ? Color.white.opacity(0.92) : Color.white.opacity(0.09))
+            )
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+            .pointerOnHover()
     }
 
     // MARK: - Fallback result card (nothing focused to paste into)
@@ -190,7 +366,7 @@ struct OverlayView: View {
     /// Vertical room the SwiftUI body claims inside the panel. Must match
     /// `OverlayPanel.panelHeight`.
     private var panelContentHeight: CGFloat {
-        180 + pickerExtraHeight
+        380 + pickerExtraHeight
     }
 
     @State private var isHoveringPill = false
@@ -343,12 +519,12 @@ struct OverlayView: View {
             }
             // Input device picker for latched takes - anchored to the mic
             // satellite, popping out like a menu.
-            .overlay(alignment: .bottomLeading) {
+            .overlay(alignment: .topLeading) {
                 if appState.showingInputPicker && latched {
                     inputDevicePickerCard
-                        .offset(y: -36)
+                        .offset(y: 36)
                         .transition(
-                            .scale(scale: 0.96, anchor: .bottomLeading)
+                            .scale(scale: 0.96, anchor: .topLeading)
                                 .combined(with: .opacity)
                         )
                 }
@@ -358,14 +534,14 @@ struct OverlayView: View {
         // pill without displacing it - the pill stays the stable anchor. Only
         // while the mic is actually open (not during the typing-flow handover
         // or a cancel).
-        .overlay(alignment: .top) {
+        .overlay(alignment: .bottom) {
             // Hidden while the input picker is open - the picker sprouts from
             // the same mic button and would otherwise overlap the nudge.
             if appState.noAudioDetected && !processing && !cancelled
                 && !appState.showingInputPicker {
                 noAudioNudge
-                    .offset(y: -42)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .offset(y: 42)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.8), value: appState.noAudioDetected)
@@ -551,6 +727,29 @@ struct OverlayView: View {
 /// (30pt tall, radius 15), 16pt content row, 11/7 padding, white 0.32
 /// hairline.
 private extension View {
+    func assistantCardChrome() -> some View {
+        self
+            .padding(14)
+            .frame(width: 360, alignment: .leading)
+            .background(
+                ZStack {
+                    Color.black.opacity(0.94)
+                    LinearGradient(
+                        colors: [.white.opacity(0.07), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+            .transition(.scale(scale: 0.96, anchor: .top).combined(with: .opacity))
+    }
+
     func overlayChrome(instruction: Bool = false) -> some View {
         self
             .frame(height: 16)

@@ -19,6 +19,11 @@ Requirements: macOS 14+, Apple Silicon, Xcode CLT (`xcode-select --install`), Ho
 
 The script builds whisper.cpp + downloads the large-v3-turbo model (~1.6 GB), builds the app, and installs to `/Applications`.
 
+> Run `install.sh` for a new laptop. `setup.sh` only installs whisper.cpp and
+> the speech model; it does not install or launch the macOS app. Accessibility
+> must be granted to the exact `/Applications/Whisperino.app` installed by
+> `install.sh`, followed by one quit/reopen.
+
 ### Permissions
 
 After install, grant two permissions:
@@ -99,7 +104,7 @@ The committed `Info.plist` version is the source of truth, kept in lockstep with
 ## Troubleshooting
 
 - **Fn key doesn't trigger anything** - System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D.
-- **Paste doesn't work** - re-toggle Accessibility for Whisperino (off → on) after each rebuild.
+- **Paste doesn't work** - confirm you ran `./install.sh`, not only `./setup.sh`. Quit every running Whisperino copy, remove and re-add Whisperino in Accessibility, select `/Applications/Whisperino.app`, toggle it on, then quit/reopen the app once.
 - **App doesn't appear in Accessibility list** - launch it first (`open /Applications/Whisperino.app`), then check.
 
 ## Changelog
