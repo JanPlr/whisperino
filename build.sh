@@ -85,6 +85,35 @@ else
     echo "==> Ad-hoc signed - run ./setup-signing.sh once so permissions stop resetting"
 fi
 
+# TCC keys privacy grants to the app's designated requirement (DR), not just
+# its bundle identifier or the row displayed in System Settings. In particular,
+# the first build after setup-signing.sh switches from an ad-hoc, CDHash-based
+# DR to the certificate-backed DR. The old flow saw STABLE_SIGNED=true and
+# skipped the reset, leaving an apparently enabled Accessibility row that did
+# not authorize the newly signed process.
+designated_requirement() {
+    codesign -dr - "$1" 2>&1 \
+        | sed -n 's/^.*designated => //p' \
+        | tail -1
+}
+
+NEW_DESIGNATED_REQUIREMENT=$(designated_requirement "$APP_BUNDLE")
+if [ -z "$NEW_DESIGNATED_REQUIREMENT" ]; then
+    echo "Error: Could not read the new app's designated requirement" >&2
+    exit 1
+fi
+
+INSTALLED_APP="/Applications/$APP_NAME.app"
+OLD_DESIGNATED_REQUIREMENT=""
+if [ -d "$INSTALLED_APP" ]; then
+    OLD_DESIGNATED_REQUIREMENT=$(designated_requirement "$INSTALLED_APP")
+fi
+
+TCC_RESET_REQUIRED=false
+if [ "$OLD_DESIGNATED_REQUIREMENT" != "$NEW_DESIGNATED_REQUIREMENT" ]; then
+    TCC_RESET_REQUIRED=true
+fi
+
 if [ "$BUNDLE_ONLY" = true ]; then
     echo "==> Bundle ready: $APP_BUNDLE (v$VERSION)"
     exit 0
@@ -97,18 +126,30 @@ sleep 0.5
 rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_BUNDLE" /Applications/
 
+# Fail before launch if copying changed or invalidated the signature. This also
+# makes it impossible to grant TCC access to a bundle different from the one we
+# just inspected above.
+codesign --verify --strict --verbose=2 "$INSTALLED_APP"
+INSTALLED_DESIGNATED_REQUIREMENT=$(designated_requirement "$INSTALLED_APP")
+if [ "$INSTALLED_DESIGNATED_REQUIREMENT" != "$NEW_DESIGNATED_REQUIREMENT" ]; then
+    echo "Error: Installed app's code identity differs from the built app" >&2
+    exit 1
+fi
+
 # Remove the local bundle copy - it's fully installed now, and leaving a
 # second Whisperino.app on disk creates duplicate Spotlight/Launchpad entries
 # that launch a conflicting second instance.
 rm -rf "$APP_BUNDLE"
 
-# Only reset TCC on ad-hoc builds. Ad-hoc signing changes the CDHash every
-# build, orphaning the grants - resetting at least forces a clean re-grant. With
-# the stable identity the grants persist, so resetting would just make the user
-# re-approve needlessly.
-if [ "$STABLE_SIGNED" = false ]; then
+# Reset only when the actual designated requirement changed. This catches
+# ad-hoc rebuilds, ad-hoc → self-signed migration, a replaced certificate, and
+# the reverse transition, while preserving grants across true stable rebuilds.
+if [ "$TCC_RESET_REQUIRED" = true ]; then
+    echo "==> Code identity changed - resetting stale privacy grants"
     tccutil reset Accessibility com.whisperino.app 2>/dev/null || true
     tccutil reset ScreenCapture com.whisperino.app 2>/dev/null || true
+else
+    echo "==> Code identity unchanged - preserving privacy grants"
 fi
 
 # Launch from /Applications so Accessibility permission is tied to the right app
@@ -120,18 +161,24 @@ sleep 2
 echo ""
 echo "==> Build complete!"
 echo ""
-echo "  ⚠️  Grant Accessibility permission"
-echo "  A system prompt should appear - click 'Open System Settings'"
-echo "  then toggle Whisperino ON."
-echo ""
-echo "  If no prompt appeared, open System Settings manually:"
-echo "  System Settings → Privacy & Security → Accessibility → Whisperino ON"
+if [ "$TCC_RESET_REQUIRED" = true ]; then
+    echo "  ⚠️  The app's code identity changed."
+    echo "  Grant Accessibility to /Applications/Whisperino.app,"
+    echo "  then quit and reopen Whisperino once."
+    echo ""
+    echo "  If no prompt appeared, open System Settings manually:"
+    echo "  System Settings → Privacy & Security → Accessibility → Whisperino ON"
+else
+    echo "  ✓ Code identity is stable; existing privacy grants were preserved."
+fi
 echo ""
 echo "  (Screen Recording is requested on-demand the first time you start"
 echo "   Talk to your screen - no need to grant it here.)"
 echo ""
 
-# Only open the Accessibility pane - it's needed at launch. Screen Recording is
-# requested in-app the first time the user starts Talk to your screen, so we
-# don't push its pane here.
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+# Open Accessibility only after an identity transition. On stable rebuilds the
+# permission remains valid, so forcing this pane open is both noisy and invites
+# the user to toggle a grant that did not need changing.
+if [ "$TCC_RESET_REQUIRED" = true ]; then
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+fi

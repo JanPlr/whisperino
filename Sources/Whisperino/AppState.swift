@@ -957,6 +957,18 @@ class AppState: ObservableObject {
 
         guard editable else { return false }
 
+        // TCC grants are tied to the exact signed app bundle. A rebuild or a
+        // signing-identity transition can leave the row in System Settings
+        // looking enabled while this running process is not actually trusted.
+        // Preserve the text in the rescue card instead of silently firing an
+        // event macOS will discard.
+        guard AXIsProcessTrusted() else {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+            AXIsProcessTrustedWithOptions(options)
+            NSLog("[whisperino] paste withheld: Accessibility is not trusted for \(Bundle.main.bundleURL.path)")
+            return false
+        }
+
         deliverPaste(text, reactivating: targetPID, submitAfter: shouldAutoSubmit(pid: targetPID))
         return true
     }
@@ -1063,17 +1075,18 @@ class AppState: ObservableObject {
         // overlay is a non-activating panel), but re-assert it and give the OS
         // a beat to make the app key before the keystroke lands, otherwise
         // Cmd+V is delivered to the wrong place.
-        let reactivated: Bool
+        let reactivatedPID: pid_t?
         if let pid, let app = NSRunningApplication(processIdentifier: pid) {
             app.activate()
-            reactivated = true
+            reactivatedPID = pid
         } else {
-            reactivated = false
+            reactivatedPID = nil
         }
 
         let fire: () -> Void = {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
+            let injectedChangeCount = NSPasteboard.general.changeCount
             self.pasteClipboard()
 
             // Auto-submit: press Return after the paste lands so the message
@@ -1087,8 +1100,12 @@ class AppState: ObservableObject {
                 }
             }
 
-            // Restore the previous clipboard once the paste has landed.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            // Electron/web editors can consume the synthetic paste later than
+            // native fields on a newly booted Mac. Leave the value available
+            // for a full beat, and restore only if the user has not copied
+            // something new in the meantime.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                guard NSPasteboard.general.changeCount == injectedChangeCount else { return }
                 NSPasteboard.general.clearContents()
                 for itemDict in savedItems {
                     let item = NSPasteboardItem()
@@ -1100,10 +1117,33 @@ class AppState: ObservableObject {
             }
         }
 
-        if reactivated {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: fire)
+        if let reactivatedPID {
+            waitUntilFrontmost(pid: reactivatedPID, attemptsRemaining: 8, completion: fire)
         } else {
             fire()
+        }
+    }
+
+    /// App activation is asynchronous and can take substantially longer than
+    /// a fixed delay on a fresh login or while switching Spaces. Wait up to
+    /// 400ms for the intended target before sending the paste event.
+    private func waitUntilFrontmost(
+        pid: pid_t,
+        attemptsRemaining: Int,
+        completion: @escaping () -> Void
+    ) {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+            || attemptsRemaining <= 0 {
+            completion()
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.waitUntilFrontmost(
+                pid: pid,
+                attemptsRemaining: attemptsRemaining - 1,
+                completion: completion
+            )
         }
     }
 
@@ -1153,23 +1193,44 @@ class AppState: ObservableObject {
 
     private func pasteClipboard() {
         let source = CGEventSource(stateID: .combinedSessionState)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: true)
-        keyDown?.flags = .maskCommand
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_ANSI_V), keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+        let commandDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: UInt16(kVK_Command),
+            keyDown: true
+        )
+        commandDown?.flags = .maskCommand
+        let vDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: UInt16(kVK_ANSI_V),
+            keyDown: true
+        )
+        vDown?.flags = .maskCommand
+        let vUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: UInt16(kVK_ANSI_V),
+            keyDown: false
+        )
+        vUp?.flags = .maskCommand
+        let commandUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: UInt16(kVK_Command),
+            keyDown: false
+        )
+        commandUp?.flags = []
+
+        commandDown?.post(tap: .cghidEventTap)
+        vDown?.post(tap: .cghidEventTap)
+        vUp?.post(tap: .cghidEventTap)
+        commandUp?.post(tap: .cghidEventTap)
     }
 
     /// Synthesize a Return keystroke - used to auto-submit (or, for a busy
     /// coding agent, queue) a pasted dictation in apps the user set up.
     ///
-    /// Flags are forced empty: the preceding Cmd+V paste leaves Command down
-    /// in the combined session state (we never post a Command key-up), and a
-    /// new event created from that source inherits it. Without this the
-    /// keystroke arrives as ⌘Return, which some agents (Codex) treat as
-    /// "send now" instead of "queue" - and it's what made an earlier Tab
-    /// attempt pop the macOS app switcher (⌘Tab).
+    /// Flags are forced empty so Return remains unmodified even if the user is
+    /// physically holding another modifier. `pasteClipboard()` also posts a
+    /// complete Command-down / Command-up sequence so the synthetic paste
+    /// cannot leave the combined keyboard state stuck on Command.
     private func pressReturn() {
         let source = CGEventSource(stateID: .combinedSessionState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: UInt16(kVK_Return), keyDown: true)
