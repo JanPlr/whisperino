@@ -93,6 +93,9 @@ class AppState: ObservableObject {
     /// paste time. Non-nil shows the fallback result card so the take
     /// isn't lost; Copy or ✕ (or Esc) clears it.
     @Published var fallbackResult: String? = nil
+    /// Native tool result / confirmation UI. Tool reads can populate this
+    /// directly; side effects must first move through a confirmation card.
+    @Published var assistantCard: AssistantCard? = nil
     /// Seconds the fallback card lingers before auto-dismissing. The
     /// overlay's countdown ring animates over this same duration.
     static let fallbackTimeout: TimeInterval = 8
@@ -144,6 +147,12 @@ class AppState: ObservableObject {
 
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
+
+    /// Identifies both microphone setup and the live take it produces. Audio
+    /// startup is asynchronous because CoreAudio can block after device churn;
+    /// this token prevents a cancelled or timed-out attempt from updating a
+    /// newer take.
+    private var recordingToken: UUID?
 
     /// Whether, at the moment recording started, the target app had a
     /// focused editable text element. Captured then - not at paste time -
@@ -243,16 +252,10 @@ class AppState: ObservableObject {
         // No preference (or the preferred mic is unplugged): follow the system
         // default. The preference stays stored so it re-applies the moment the
         // mic comes back.
-        if selectedInputDevice == nil, let defaultID = AudioRecorder.defaultInputDeviceID() {
+        if let defaultID = AudioRecorder.defaultInputDeviceID() {
             selectedInputDevice = inputDevices.first { $0.id == defaultID }
-        }
-        // If selected device disappeared, reset to default
-        if let selected = selectedInputDevice, !inputDevices.contains(where: { $0.id == selected.id }) {
-            if let defaultID = AudioRecorder.defaultInputDeviceID() {
-                selectedInputDevice = inputDevices.first { $0.id == defaultID }
-            } else {
-                selectedInputDevice = inputDevices.first
-            }
+        } else {
+            selectedInputDevice = inputDevices.first
         }
     }
 
@@ -357,6 +360,10 @@ class AppState: ObservableObject {
     // MARK: - Cancel
 
     func cancelRecording() {
+        if assistantCard != nil {
+            dismissAssistantCard()
+            return
+        }
         // Esc while the fallback result card is up = close the card.
         // Nothing else can be in flight in that state.
         if fallbackResult != nil {
@@ -379,6 +386,7 @@ class AppState: ObservableObject {
         screenshotTask?.cancel()
         screenshotTask = nil
         abandonTranscriptionSession()
+        recordingToken = nil
         if let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
@@ -397,7 +405,11 @@ class AppState: ObservableObject {
         case .recording:
             stopRecording()
         default:
-            if fallbackResult != nil {
+            if case .confirmOpen = assistantCard {
+                approveAssistantAction()
+            } else if assistantCard != nil {
+                dismissAssistantCard()
+            } else if fallbackResult != nil {
                 dismissFallback()
             }
         }
@@ -458,6 +470,7 @@ class AppState: ObservableObject {
     private func startRecording(instruction: Bool) {
         // A fresh take supersedes a lingering fallback card.
         fallbackResult = nil
+        assistantCard = nil
         // Reset per-take mic-liveness tracking.
         heardRealAudio = false
         didNudgeNoAudio = false
@@ -516,28 +529,49 @@ class AppState: ObservableObject {
             captureScreenContext(pid: recordingTargetPID)
         }
 
-        // Re-resolve devices first: after a display/dock reconnect the
-        // preferred mic keeps its UID but gets a fresh AudioDeviceID, and
-        // macOS may have reverted the default to the built-in mic. This picks
-        // up the current ID for the pinned UID; recorder.start then forces it
-        // as the system input so the take always uses the preferred mic.
-        refreshInputDevices()
-
-        do {
-            try recorder.start(deviceID: selectedInputDevice?.id) { [weak self] level in
+        // AVAudioEngine.inputNode may block indefinitely inside CoreAudio after
+        // sleep or device churn. Treat setup as part of the recording state so
+        // releasing Fn/Esc can cancel it, but do the HAL work off-main. The
+        // recorder resolves the persistent UID at the last possible moment,
+        // rather than trusting a cached AudioDeviceID.
+        let token = UUID()
+        recordingToken = token
+        recordingStartTime = nil
+        state = .recording
+        recorder.start(
+            preferredDeviceUID: store.settings.preferredInputDeviceUID,
+            levelCallback: { [weak self] level in
                 DispatchQueue.main.async {
-                    self?.handleAudioLevel(level)
+                    guard let self,
+                          self.recordingToken == token,
+                          case .recording = self.state else { return }
+                    self.handleAudioLevel(level)
+                }
+            },
+            completion: { [weak self] result in
+                guard let self,
+                      self.recordingToken == token,
+                      case .recording = self.state else { return }
+                switch result {
+                case .success:
+                    self.startWaveformSampling()
+                    self.startTranscriptionSession(instruction: instruction)
+                    SoundEffects.playStart()
+                    self.recordingStartTime = Date()
+                case .failure(let error):
+                    self.recordingToken = nil
+                    self.isLatchedRecording = false
+                    HotkeyManager.shared.resetTriggerState()
+                    self.windowHighlighter.dismiss()
+                    self.screenshotTask?.cancel()
+                    self.screenshotTask = nil
+                    self.recordingTargetPID = nil
+                    self.resetInstructionMode()
+                    self.state = .error(message: "Mic error: \(error.localizedDescription)")
+                    self.autoDismiss(after: 4)
                 }
             }
-            startWaveformSampling()
-            startTranscriptionSession(instruction: instruction)
-            SoundEffects.playStart()
-            recordingStartTime = Date()
-            state = .recording
-        } catch {
-            state = .error(message: "Mic error: \(error.localizedDescription)")
-            autoDismiss(after: 4)
-        }
+        )
     }
 
     // MARK: - AI screen context
@@ -683,6 +717,10 @@ class AppState: ObservableObject {
         chunkTimer = nil
         currentChunkStart = nil
 
+        // Cancels an in-flight CoreAudio setup as well as identifying late
+        // level/completion callbacks from this take as stale.
+        recordingToken = nil
+
         guard let audioURL = recorder.stop() else {
             abandonTranscriptionSession()
             stopWaveformSampling()
@@ -746,6 +784,21 @@ class AppState: ObservableObject {
                 // screenshot captures whatever's now on screen (including the
                 // last answer).
                 if instructionMode {
+                    // Local tools route before any remote model call. Finder
+                    // searches stay on-device and return a native glance card;
+                    // opening a result is a separate, confirmed action.
+                    if let query = LocalFinderTool.query(from: rawText) {
+                        let results = try await LocalFinderTool.search(query: query)
+                        await MainActor.run {
+                            self.recordingTargetPID = nil
+                            self.resetInstructionMode()
+                            self.store.addTranscript(rawText, isInstruction: true)
+                            self.assistantCard = .fileResults(query: query, results: results)
+                            self.state = .result(text: "Found \(results.count) files")
+                        }
+                        return
+                    }
+
                     // The screen capture is the only context for the take.
                     var contextAttachments: [AttachedContext] = []
                     if let shot = await Self.resolveScreenshotAttachment(pendingShot) {
@@ -853,6 +906,37 @@ class AppState: ObservableObject {
         } else {
             showFallback(finalText)
         }
+    }
+
+    // MARK: - Native assistant cards
+
+    /// Selecting a file is still only intent: surface the exact target and ask
+    /// before crossing the side-effect boundary.
+    func requestOpen(_ result: LocalFileResult) {
+        assistantCard = .confirmOpen(result)
+    }
+
+    func approveAssistantAction() {
+        guard case .confirmOpen(let result) = assistantCard else { return }
+        let opened = NSWorkspace.shared.open(result.url)
+        assistantCard = .message(
+            symbol: opened ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+            title: opened ? "Opened \(result.name)" : "Couldn’t open \(result.name)",
+            detail: opened ? result.detail : "The file may have moved or its app may be unavailable."
+        )
+        state = .result(text: opened ? "Opened \(result.name)" : "Could not open \(result.name)")
+
+        if opened {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                guard case .message = self?.assistantCard else { return }
+                self?.dismissAssistantCard()
+            }
+        }
+    }
+
+    func dismissAssistantCard() {
+        assistantCard = nil
+        if case .result = state { state = .idle }
     }
 
     private func resetInstructionMode() {

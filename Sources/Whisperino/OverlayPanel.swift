@@ -15,8 +15,10 @@ class OverlayPanel {
     /// the intermediate value, not the destination.
     private var targetOrigin: NSPoint?
 
-    /// Base panel height with no picker expanded
-    private static let baseHeight: CGFloat = 180
+    /// Base panel height with no picker expanded. The transparent window is
+    /// taller than the listening pill so native assistant cards can grow down
+    /// from the notch without resizing the NSPanel mid-transition.
+    private static let baseHeight: CGFloat = 380
 
     init(appState: AppState) {
         self.appState = appState
@@ -84,7 +86,7 @@ class OverlayPanel {
     private func startTracking() {
         trackTimer?.invalidate()
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.positionAtBottomCenter()
+            self?.positionAtNotch()
         }
         // .common so it keeps firing during menu/scroll tracking too.
         RunLoop.main.add(timer, forMode: .common)
@@ -124,7 +126,7 @@ class OverlayPanel {
             frame.size.height = fullHeight
             panel.setFrame(frame, display: false)
         }
-        positionAtBottomCenter(instant: true)
+        positionAtNotch(instant: true)
         startTracking()
         // Instant - the pill should be there the moment recording
         // starts. Any fade-in here reads as input lag.
@@ -147,9 +149,10 @@ class OverlayPanel {
             guard let self, self.dismissGeneration == gen else { return }
             self.panel.orderOut(nil)
 
+            let topY = self.panel.frame.maxY
             let baseFrame = NSRect(
                 x: self.panel.frame.origin.x,
-                y: self.panel.frame.minY,
+                y: topY - Self.baseHeight,
                 width: self.panel.frame.width,
                 height: Self.baseHeight
             )
@@ -188,11 +191,11 @@ class OverlayPanel {
 
         let isCollapsing = newHeight < panel.frame.height
 
-        // Keep the bottom edge pinned at the same Y position
-        let bottomY = panel.frame.minY
+        // Keep the notch/top edge pinned while transparent capacity changes.
+        let topY = panel.frame.maxY
         let newFrame = NSRect(
             x: panel.frame.origin.x,
-            y: bottomY,
+            y: topY - newHeight,
             width: panel.frame.width,
             height: newHeight
         )
@@ -219,7 +222,7 @@ class OverlayPanel {
         }
     }
 
-    private func positionAtBottomCenter(instant: Bool = false) {
+    private func positionAtNotch(instant: Bool = false) {
         guard let target = computeTargetOrigin() else { return }
         targetOrigin = target
         if instant {
@@ -230,35 +233,41 @@ class OverlayPanel {
         }
     }
 
-    /// The bottom-centre origin the pill should occupy right now: anchored to
-    /// the bottom edge of the frontmost window (the "bottom-most element" the
-    /// user is working in). A normal window's bottom sits just above the Dock;
-    /// a window that fills the screen (fullscreen / Dock-hidden) reaches the
-    /// physical screen edge, so the pill drops all the way down. One rule,
-    /// both cases. Falls back to the visible-frame bottom centre with no AX
-    /// grant or no focused window. Returns nil only when there's no screen.
+    /// Prefer the physical MacBook notch even when the focused window is on an
+    /// external monitor. If the built-in display is unavailable (for example,
+    /// clamshell mode), emulate the same focus area just below the active
+    /// monitor's menu bar.
     private func computeTargetOrigin() -> NSPoint? {
         let panelSize = panel.frame.size
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let window = ScreenCapture.focusedWindowFrame(pid: pid)
 
-        let screen: NSScreen? = {
+        let activeScreen: NSScreen? = {
             if let mx = window?.midX,
                let hit = NSScreen.screens.first(where: { $0.frame.minX <= mx && mx <= $0.frame.maxX }) {
                 return hit
             }
             return NSScreen.main ?? NSScreen.screens.first
         }()
+        let notchScreen = NSScreen.screens.first(where: Self.hasPhysicalNotch)
+        let screen = notchScreen ?? activeScreen
         guard let screen else { return nil }
-        let visible = screen.visibleFrame
+        let topEdge = notchScreen == nil ? screen.visibleFrame.maxY - 8 : screen.frame.maxY
+        let x = screen.frame.midX - panelSize.width / 2
+        let clampedX = min(
+            max(x, screen.frame.minX + 8),
+            screen.frame.maxX - panelSize.width - 8
+        )
+        return NSPoint(x: clampedX, y: topEdge - panelSize.height)
+    }
 
-        guard let window else {
-            return NSPoint(x: visible.midX - panelSize.width / 2, y: visible.minY)
-        }
-        let x = window.midX - panelSize.width / 2
-        let y = max(window.minY, screen.frame.minY)
-        let clampedX = min(max(x, visible.minX + 8), visible.maxX - panelSize.width - 8)
-        return NSPoint(x: clampedX, y: y)
+    private static func hasPhysicalNotch(_ screen: NSScreen) -> Bool {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        guard let displayID = (screen.deviceDescription[key] as? NSNumber)?.uint32Value,
+              CGDisplayIsBuiltin(displayID) != 0 else { return false }
+        return screen.safeAreaInsets.top > 0
+            || screen.auxiliaryTopLeftArea != nil
+            || screen.auxiliaryTopRightArea != nil
     }
 
     /// Move the panel one frame's worth toward `targetOrigin`. Driven by the
