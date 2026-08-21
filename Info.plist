@@ -15,18 +15,18 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0.1</string>
+	<string>3.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>2.0.1</string>
+	<string>3.0.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Whisperino needs calendar access only when you approve saving a spoken event.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Whisperino needs microphone access to transcribe your voice.</string>
-	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Whisperino needs calendar access only when you approve saving a spoken event.</string>
 </dict>
 </plist>
