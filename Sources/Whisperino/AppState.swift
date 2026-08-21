@@ -320,15 +320,7 @@ class AppState: ObservableObject {
 
     private func applyInputDeviceNow(_ device: AudioInputDevice) {
         guard case .recording = state else { return }
-        do {
-            try recorder.switchDevice(deviceID: device.id) { [weak self] level in
-                DispatchQueue.main.async {
-                    self?.handleAudioLevel(level)
-                }
-            }
-        } catch {
-            print("[whisperino] failed to switch device mid-recording: \(error)")
-        }
+        recorder.switchDevice(device)
     }
 
     // MARK: - Hotkey handlers
@@ -594,6 +586,12 @@ class AppState: ObservableObject {
                     self.handleAudioLevel(level)
                 }
             },
+            recoveredChunkCallback: { [weak self] url in
+                self?.handleRecoveredRecorderChunk(url, token: token)
+            },
+            streamFailureCallback: { [weak self] error in
+                self?.handleRecorderStreamFailure(error, token: token)
+            },
             completion: { [weak self] result in
                 guard let self,
                       self.recordingToken == token,
@@ -626,6 +624,40 @@ class AppState: ObservableObject {
                 }
             }
         )
+    }
+
+    /// A Bluetooth route rebuild may change sample rate. AudioRecorder closes
+    /// the old WAV before rebuilding and hands any useful prefix back here so
+    /// it enters the same ordered transcription pipeline as a timed chunk.
+    private func handleRecoveredRecorderChunk(_ url: URL, token: UUID) {
+        guard recordingToken == token,
+              case .recording = state,
+              let session = transcriptionSession else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        currentChunkStart = Date()
+        session.submit(chunkURL: url)
+        chunksTotal = session.chunksSubmitted
+    }
+
+    private func handleRecorderStreamFailure(_ error: Error, token: UUID) {
+        guard recordingToken == token, case .recording = state else { return }
+        recordingToken = nil
+        if let url = recorder.stop() {
+            try? FileManager.default.removeItem(at: url)
+        }
+        resumeMediaAfterRecordingIfNeeded()
+        stopWaveformSampling()
+        abandonTranscriptionSession()
+        audioLevel = 0
+        recordingStartTime = nil
+        recordingTargetPID = nil
+        isLatchedRecording = false
+        showingInputPicker = false
+        resetInstructionMode()
+        state = .error(message: "Mic error: \(error.localizedDescription)")
+        autoDismiss(after: 4)
     }
 
     // MARK: - AI screen context

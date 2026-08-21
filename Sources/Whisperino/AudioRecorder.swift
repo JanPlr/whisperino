@@ -13,6 +13,7 @@ enum AudioRecorderError: LocalizedError {
     case invalidInputFormat
     case startupTimedOut
     case startupStillInProgress
+    case streamRecoveryFailed
 
     var errorDescription: String? {
         switch self {
@@ -22,11 +23,27 @@ enum AudioRecorderError: LocalizedError {
             return "The microphone did not respond. Reconnect it or choose another input"
         case .startupStillInProgress:
             return "CoreAudio is still trying to open the microphone. Restart Whisperino if it does not recover"
+        case .streamRecoveryFailed:
+            return "The microphone stream went silent and could not be restarted"
         }
     }
 }
 
 class AudioRecorder {
+    private enum RecoveryReason: CustomStringConvertible {
+        case configurationChanged
+        case unhealthy(AudioStreamHealth.Failure)
+        case inputChanged
+
+        var description: String {
+            switch self {
+            case .configurationChanged: return "hardware configuration changed"
+            case .unhealthy(let failure): return "stream health check failed: \(failure)"
+            case .inputChanged: return "input changed"
+            }
+        }
+    }
+
     private var audioEngine: AVAudioEngine?
     private var audioInputNode: AVAudioInputNode?
     private var audioFile: AVAudioFile?
@@ -52,8 +69,26 @@ class AudioRecorder {
     private var activeStartID: UUID?
     private var unresolvedStartCount = 0
     private static let startupTimeout: TimeInterval = 4
+    /// Bluetooth headsets can report a valid format and a running engine while
+    /// supplying only zero-filled PCM. Give the new route enough time to settle
+    /// and the user enough time to begin speaking, then verify the actual data.
+    private static let initialHealthDelay: TimeInterval = 2.4
+    /// Once healthy, the tap must continue advancing. This also covers the
+    /// related Bluetooth failure where callbacks stop after the first seconds.
+    private static let livenessInterval: TimeInterval = 1.5
+    private static let maximumAutomaticRecoveries = 2
     private var sessionID = ""
     private var chunkIndex = 0
+    private var streamHealth = AudioStreamHealth()
+    private var currentChunkHasNonZeroPCM = false
+    private var isRecovering = false
+    private var automaticRecoveryCount = 0
+    private var watchdogGeneration = 0
+    private var configurationObserver: NSObjectProtocol?
+    private var preferredDeviceUID: String?
+    private var levelCallback: ((Float) -> Void)?
+    private var recoveredChunkCallback: ((URL) -> Void)?
+    private var streamFailureCallback: ((Error) -> Void)?
 
     /// List all available audio input devices via CoreAudio
     static func availableInputDevices() -> [AudioInputDevice] {
@@ -216,6 +251,123 @@ class AudioRecorder {
         return status == noErr
     }
 
+    private struct InputDeviceSignature: Equatable {
+        let sampleRate: Double
+        let channels: Int
+    }
+
+    /// Bluetooth input selection can trigger an A2DP -> hands-free profile
+    /// transition. During that transition the device ID is already the system
+    /// default while its sample rate/channel layout is still changing. Starting
+    /// AVAudioEngine in that window is a common route to a stopped or zero-only
+    /// tap, so wait for several identical hardware observations first.
+    private static func waitForStableInputDevice(
+        _ deviceID: AudioDeviceID,
+        timeout: TimeInterval = 1.2
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        var previous: InputDeviceSignature?
+        var stableObservations = 0
+
+        while Date() < deadline {
+            guard defaultInputDeviceID() == deviceID,
+                  let current = inputDeviceSignature(deviceID) else {
+                previous = nil
+                stableObservations = 0
+                Thread.sleep(forTimeInterval: 0.06)
+                continue
+            }
+
+            if current == previous {
+                stableObservations += 1
+                if stableObservations >= 3 { return }
+            } else {
+                previous = current
+                stableObservations = 1
+            }
+            Thread.sleep(forTimeInterval: 0.06)
+        }
+    }
+
+    private static func inputDeviceSignature(
+        _ deviceID: AudioDeviceID
+    ) -> InputDeviceSignature? {
+        var rateAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var sampleRate: Double = 0
+        var rateSize = UInt32(MemoryLayout<Double>.size)
+        guard AudioObjectGetPropertyData(
+            deviceID,
+            &rateAddress,
+            0,
+            nil,
+            &rateSize,
+            &sampleRate
+        ) == noErr else { return nil }
+
+        var inputAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var inputSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            deviceID,
+            &inputAddress,
+            0,
+            nil,
+            &inputSize
+        ) == noErr, inputSize > 0 else { return nil }
+
+        let storage = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(inputSize),
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { storage.deallocate() }
+        let buffers = storage.bindMemory(to: AudioBufferList.self, capacity: 1)
+        guard AudioObjectGetPropertyData(
+            deviceID,
+            &inputAddress,
+            0,
+            nil,
+            &inputSize,
+            buffers
+        ) == noErr else { return nil }
+        let channels = UnsafeMutableAudioBufferListPointer(buffers)
+            .reduce(0) { $0 + Int($1.mNumberChannels) }
+        guard sampleRate > 0, channels > 0 else { return nil }
+        return InputDeviceSignature(sampleRate: sampleRate, channels: channels)
+    }
+
+    private func selectPreferredInputIfNeeded(_ uid: String?) {
+        guard let uid else {
+            // "Automatic" can still resolve to a Bluetooth headset. Stabilize
+            // the current default too; otherwise only explicitly pinned Bose /
+            // AirPods users would benefit from the profile-transition fix.
+            if let deviceID = Self.defaultInputDeviceID(),
+               Self.isUsableInputDevice(deviceID) {
+                Self.waitForStableInputDevice(deviceID)
+            }
+            return
+        }
+        guard let resolvedID = Self.inputDeviceID(forUID: uid),
+              Self.isUsableInputDevice(resolvedID) else {
+            print("[whisperino] preferred input \(uid) is unavailable; using system default")
+            return
+        }
+
+        if Self.defaultInputDeviceID() != resolvedID {
+            guard Self.setDefaultInputDevice(resolvedID) else {
+                print("[whisperino] preferred input \(uid) could not be selected; using system default")
+                return
+            }
+        }
+        Self.waitForStableInputDevice(resolvedID)
+    }
+
     /// Map raw RMS dB → 0..1 level for the meter, with a noise gate so
     /// ambient room noise doesn't make the bars dance.
     /// - dB scaling begins at -54 dB so quiet, close speech is still visible
@@ -239,6 +391,8 @@ class AudioRecorder {
     func start(
         preferredDeviceUID: String? = nil,
         levelCallback: @escaping (Float) -> Void,
+        recoveredChunkCallback: @escaping (URL) -> Void,
+        streamFailureCallback: @escaping (Error) -> Void,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         let requestID = UUID()
@@ -251,6 +405,10 @@ class AudioRecorder {
         }
         pendingStartID = requestID
         unresolvedStartCount += 1
+        self.preferredDeviceUID = preferredDeviceUID
+        self.levelCallback = levelCallback
+        self.recoveredChunkCallback = recoveredChunkCallback
+        self.streamFailureCallback = streamFailureCallback
         lifecycleLock.unlock()
 
         let newSessionID = requestID.uuidString
@@ -262,22 +420,7 @@ class AudioRecorder {
             var inputNode: AVAudioInputNode?
             do {
                 guard self.isStartPending(requestID) else { throw CancellationError() }
-                // Resolve the UID immediately before use. If it disappeared or
-                // became invalid, leave the current system default untouched.
-                if let preferredDeviceUID {
-                    if let resolvedID = Self.inputDeviceID(forUID: preferredDeviceUID),
-                       Self.isUsableInputDevice(resolvedID) {
-                        // Avoid writing the default-device property when it is
-                        // already correct; needless HAL reconfiguration can
-                        // surface stale state after device churn.
-                        if Self.defaultInputDeviceID() != resolvedID,
-                           !Self.setDefaultInputDevice(resolvedID) {
-                            print("[whisperino] preferred input \(preferredDeviceUID) could not be selected; using system default")
-                        }
-                    } else {
-                        print("[whisperino] preferred input \(preferredDeviceUID) is unavailable; using system default")
-                    }
-                }
+                self.selectPreferredInputIfNeeded(preferredDeviceUID)
 
                 // Cancellation or the timeout may have won while CoreAudio was
                 // resolving/validating the device. Do not enter inputNode in
@@ -309,6 +452,7 @@ class AudioRecorder {
                     sessionID: newSessionID,
                     requestID: requestID
                 ) {
+                    self.beginMonitoring(engine: newEngine, requestID: requestID)
                     DispatchQueue.main.async { completion(.success(())) }
                 } else {
                     newInputNode.removeTap(onBus: 0)
@@ -361,6 +505,11 @@ class AudioRecorder {
         self.sessionID = sessionID
         chunkIndex = 0
         smoothedLevel = 0
+        streamHealth.reset()
+        currentChunkHasNonZeroPCM = false
+        isRecovering = false
+        automaticRecoveryCount = 0
+        watchdogGeneration &+= 1
         audioEngine = engine
         audioInputNode = inputNode
         activeStartID = requestID
@@ -390,13 +539,283 @@ class AudioRecorder {
         return true
     }
 
+    // MARK: - Bluetooth stream health and recovery
+
+    /// Apple documents that an AVAudioEngine configuration change stops and
+    /// uninitializes the engine. Bluetooth headsets trigger this while moving
+    /// between their music and hands-free profiles, so a recording app must
+    /// rebuild the graph with the new hardware format.
+    private func beginMonitoring(engine: AVAudioEngine, requestID: UUID) {
+        let observer = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self, weak engine] _ in
+            guard let self, engine != nil else { return }
+            // Apple explicitly warns against tearing an engine down from this
+            // callback's internal queue. requestRecovery only records intent;
+            // all AVAudioEngine teardown happens asynchronously on setupQueue.
+            self.requestRecovery(
+                requestID: requestID,
+                reason: .configurationChanged
+            )
+        }
+
+        lifecycleLock.lock()
+        guard activeStartID == requestID, audioEngine === engine else {
+            lifecycleLock.unlock()
+            NotificationCenter.default.removeObserver(observer)
+            return
+        }
+        let previousObserver = configurationObserver
+        configurationObserver = observer
+        let generation = watchdogGeneration
+        lifecycleLock.unlock()
+        if let previousObserver {
+            NotificationCenter.default.removeObserver(previousObserver)
+        }
+
+        setupQueue.asyncAfter(deadline: .now() + Self.initialHealthDelay) { [weak self] in
+            guard let self else { return }
+            self.lifecycleLock.lock()
+            guard self.activeStartID == requestID,
+                  self.watchdogGeneration == generation,
+                  !self.isRecovering,
+                  let currentEngine = self.audioEngine else {
+                self.lifecycleLock.unlock()
+                return
+            }
+            let failure = self.streamHealth.startupFailure(
+                engineIsRunning: currentEngine.isRunning
+            )
+            let checkpoint = self.streamHealth.bufferCount
+            self.lifecycleLock.unlock()
+
+            if let failure {
+                self.requestRecovery(
+                    requestID: requestID,
+                    reason: .unhealthy(failure)
+                )
+            } else {
+                self.armLivenessCheck(
+                    requestID: requestID,
+                    generation: generation,
+                    previousBufferCount: checkpoint
+                )
+            }
+        }
+    }
+
+    private func armLivenessCheck(
+        requestID: UUID,
+        generation: Int,
+        previousBufferCount: UInt64
+    ) {
+        setupQueue.asyncAfter(deadline: .now() + Self.livenessInterval) { [weak self] in
+            guard let self else { return }
+            self.lifecycleLock.lock()
+            guard self.activeStartID == requestID,
+                  self.watchdogGeneration == generation,
+                  !self.isRecovering,
+                  let engine = self.audioEngine else {
+                self.lifecycleLock.unlock()
+                return
+            }
+            let failure = self.streamHealth.livenessFailure(
+                engineIsRunning: engine.isRunning,
+                previousBufferCount: previousBufferCount
+            )
+            let nextCheckpoint = self.streamHealth.bufferCount
+            self.lifecycleLock.unlock()
+
+            if let failure {
+                self.requestRecovery(
+                    requestID: requestID,
+                    reason: .unhealthy(failure)
+                )
+            } else {
+                self.armLivenessCheck(
+                    requestID: requestID,
+                    generation: generation,
+                    previousBufferCount: nextCheckpoint
+                )
+            }
+        }
+    }
+
+    private func requestRecovery(
+        requestID: UUID,
+        reason: RecoveryReason,
+        preferredUIDOverride: String? = nil,
+        isAutomatic: Bool = true
+    ) {
+        lifecycleLock.lock()
+        guard activeStartID == requestID, !isRecovering else {
+            lifecycleLock.unlock()
+            return
+        }
+
+        if isAutomatic,
+           automaticRecoveryCount >= Self.maximumAutomaticRecoveries {
+            let failureCallback = streamFailureCallback
+            lifecycleLock.unlock()
+            DispatchQueue.main.async {
+                failureCallback?(AudioRecorderError.streamRecoveryFailed)
+            }
+            return
+        }
+
+        if let preferredUIDOverride {
+            preferredDeviceUID = preferredUIDOverride
+            automaticRecoveryCount = 0
+        } else if isAutomatic {
+            automaticRecoveryCount += 1
+        }
+        isRecovering = true
+        watchdogGeneration &+= 1
+
+        let oldEngine = audioEngine
+        let oldInputNode = audioInputNode
+        audioEngine = nil
+        audioInputNode = nil
+        let oldObserver = configurationObserver
+        configurationObserver = nil
+        let selectedUID = preferredDeviceUID
+        let callback = levelCallback
+        let segmentCallback = recoveredChunkCallback
+        let failureCallback = streamFailureCallback
+        lifecycleLock.unlock()
+
+        if let oldObserver {
+            NotificationCenter.default.removeObserver(oldObserver)
+        }
+
+        print("[whisperino] rebuilding microphone graph (\(reason))")
+        setupQueue.async { [weak self] in
+            guard let self else { return }
+
+            oldInputNode?.removeTap(onBus: 0)
+            oldEngine?.stop()
+
+            self.lifecycleLock.lock()
+            guard self.activeStartID == requestID, self.isRecovering else {
+                self.lifecycleLock.unlock()
+                return
+            }
+
+            // Finalize the old WAV before creating a graph with the possibly
+            // different Bluetooth sample rate. Preserve useful audio as a
+            // normal rolling chunk; discard a known all-zero startup file.
+            self.fileLock.lock()
+            self.audioFile = nil
+            let finishedURL = self.tempURL
+            self.tempURL = nil
+            self.fileLock.unlock()
+
+            let preserveFinishedChunk = self.currentChunkHasNonZeroPCM
+            let nextURL: URL
+            if preserveFinishedChunk {
+                self.chunkIndex += 1
+                nextURL = self.chunkURL(index: self.chunkIndex)
+            } else {
+                nextURL = finishedURL ?? self.chunkURL(index: self.chunkIndex)
+            }
+            self.lifecycleLock.unlock()
+
+            if !preserveFinishedChunk, let finishedURL {
+                try? FileManager.default.removeItem(at: finishedURL)
+            }
+
+            var newEngine: AVAudioEngine?
+            var newInputNode: AVAudioInputNode?
+            do {
+                self.selectPreferredInputIfNeeded(selectedUID)
+
+                let engine = AVAudioEngine()
+                newEngine = engine
+                let inputNode = engine.inputNode
+                newInputNode = inputNode
+                let inputFormat = inputNode.outputFormat(forBus: 0)
+                guard inputFormat.channelCount > 0,
+                      inputFormat.sampleRate > 0 else {
+                    throw AudioRecorderError.invalidInputFormat
+                }
+
+                print("[whisperino] recovered input at \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) channel(s)")
+                let file = try AVAudioFile(
+                    forWriting: nextURL,
+                    settings: inputFormat.settings
+                )
+                inputNode.installTap(
+                    onBus: 0,
+                    bufferSize: 512,
+                    format: inputFormat
+                ) { [weak self] buffer, _ in
+                    guard let callback else { return }
+                    self?.handleBuffer(
+                        buffer,
+                        requestID: requestID,
+                        levelCallback: callback
+                    )
+                }
+                engine.prepare()
+                try engine.start()
+
+                self.lifecycleLock.lock()
+                guard self.activeStartID == requestID, self.isRecovering else {
+                    self.lifecycleLock.unlock()
+                    inputNode.removeTap(onBus: 0)
+                    engine.stop()
+                    try? FileManager.default.removeItem(at: nextURL)
+                    return
+                }
+                self.fileLock.lock()
+                self.audioFile = file
+                self.tempURL = nextURL
+                self.fileLock.unlock()
+                self.audioEngine = engine
+                self.audioInputNode = inputNode
+                self.smoothedLevel = 0
+                self.streamHealth.reset()
+                self.currentChunkHasNonZeroPCM = false
+                self.isRecovering = false
+                self.watchdogGeneration &+= 1
+                self.lifecycleLock.unlock()
+
+                self.beginMonitoring(engine: engine, requestID: requestID)
+                if preserveFinishedChunk, let finishedURL {
+                    DispatchQueue.main.async { segmentCallback?(finishedURL) }
+                }
+            } catch {
+                newInputNode?.removeTap(onBus: 0)
+                newEngine?.stop()
+                try? FileManager.default.removeItem(at: nextURL)
+
+                self.lifecycleLock.lock()
+                let stillActive = self.activeStartID == requestID
+                if stillActive { self.isRecovering = false }
+                self.lifecycleLock.unlock()
+
+                if preserveFinishedChunk, let finishedURL {
+                    DispatchQueue.main.async { segmentCallback?(finishedURL) }
+                }
+                if stillActive {
+                    print("[whisperino] microphone graph recovery failed: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        failureCallback?(AudioRecorderError.streamRecoveryFailed)
+                    }
+                }
+            }
+        }
+    }
+
     private func handleBuffer(
         _ buffer: AVAudioPCMBuffer,
         requestID: UUID,
         levelCallback: (Float) -> Void
     ) {
         lifecycleLock.lock()
-        guard activeStartID == requestID else {
+        guard activeStartID == requestID, !isRecovering else {
             lifecycleLock.unlock()
             return
         }
@@ -405,14 +824,34 @@ class AudioRecorder {
         // Calculate RMS and convert to a visible 0..1 range.
         if let channelData = buffer.floatChannelData {
             let frames = Int(buffer.frameLength)
+            let channels = Int(buffer.format.channelCount)
             var sum: Float = 0
-            for i in 0..<frames {
-                let sample = channelData[0][i]
-                sum += sample * sample
+            var maxAbsoluteSample: Float = 0
+            for channel in 0..<channels {
+                for frame in 0..<frames {
+                    let sample = channelData[channel][frame]
+                    sum += sample * sample
+                    maxAbsoluteSample = max(maxAbsoluteSample, abs(sample))
+                }
             }
-            let rms = sqrt(sum / max(Float(frames), 1))
+            let sampleCount = max(Float(frames * max(channels, 1)), 1)
+            let rms = sqrt(sum / sampleCount)
             let db = 20 * log10(max(rms, 1e-6))
             let level = Self.gatedLevel(db: db)
+
+            lifecycleLock.lock()
+            guard activeStartID == requestID, !isRecovering else {
+                lifecycleLock.unlock()
+                return
+            }
+            streamHealth.observeBuffer(maxAbsoluteSample: maxAbsoluteSample)
+            if maxAbsoluteSample > 0 {
+                currentChunkHasNonZeroPCM = true
+                // A genuinely live stream earns a fresh retry budget. This
+                // lets a later Bluetooth profile change recover independently.
+                automaticRecoveryCount = 0
+            }
+            lifecycleLock.unlock()
 
             // Preserve just enough filtering to avoid single-buffer jitter.
             // Speech attacks immediately and silence clears within a few
@@ -425,7 +864,7 @@ class AudioRecorder {
         // Re-check the generation while holding the same lock order used by
         // adoption. This prevents a late tap from writing into a newer take.
         lifecycleLock.lock()
-        guard activeStartID == requestID else {
+        guard activeStartID == requestID, !isRecovering else {
             lifecycleLock.unlock()
             return
         }
@@ -439,57 +878,22 @@ class AudioRecorder {
         fileLock.unlock()
     }
 
-    /// Switch the input device while recording by changing the system default
-    /// input device, then restarting the engine so it picks up the new default.
-    func switchDevice(deviceID: AudioDeviceID, levelCallback: @escaping (Float) -> Void) throws {
-        guard audioEngine != nil else { return }
-
-        // Set the system default input device - AVAudioEngine always follows this
-        guard Self.setDefaultInputDevice(deviceID) else {
-            print("[whisperino] switchDevice: failed to set system default to \(deviceID)")
+    /// Device selection uses the same graph rebuild as automatic Bluetooth
+    /// recovery. One path means the picker cannot reintroduce the timing race
+    /// that the watchdog just repaired.
+    func switchDevice(_ device: AudioInputDevice) {
+        lifecycleLock.lock()
+        guard let requestID = activeStartID else {
+            lifecycleLock.unlock()
             return
         }
-
-        audioInputNode?.removeTap(onBus: 0)
-        audioEngine!.stop()
-        smoothedLevel = 0
-
-        // Start a fresh engine - it will use the new system default
-        let newEngine = AVAudioEngine()
-        let inputNode = newEngine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-
-        inputNode.installTap(onBus: 0, bufferSize: 512, format: inputFormat) { [weak self] buffer, _ in
-            guard let self = self else { return }
-
-            if let channelData = buffer.floatChannelData {
-                let frames = Int(buffer.frameLength)
-                var sum: Float = 0
-                for i in 0..<frames {
-                    let sample = channelData[0][i]
-                    sum += sample * sample
-                }
-                let rms = sqrt(sum / max(Float(frames), 1))
-                let db = 20 * log10(max(rms, 1e-6))
-                let level = Self.gatedLevel(db: db)
-                let factor: Float = level > self.smoothedLevel ? 0.42 : 0.55
-                self.smoothedLevel += factor * (level - self.smoothedLevel)
-                levelCallback(self.smoothedLevel)
-            }
-
-            self.fileLock.lock()
-            do {
-                try self.audioFile?.write(from: buffer)
-            } catch {
-                print("[whisperino] audio write error: \(error.localizedDescription)")
-            }
-            self.fileLock.unlock()
-        }
-
-        newEngine.prepare()
-        try newEngine.start()
-        self.audioEngine = newEngine
-        self.audioInputNode = inputNode
+        lifecycleLock.unlock()
+        requestRecovery(
+            requestID: requestID,
+            reason: .inputChanged,
+            preferredUIDOverride: device.uid,
+            isAutomatic: false
+        )
     }
 
     private func chunkURL(sessionID: String? = nil, index: Int) -> URL {
@@ -505,11 +909,16 @@ class AudioRecorder {
     /// nothing is lost, the chunk only gets longer).
     func rotateChunk() -> URL? {
         lifecycleLock.lock()
-        let isRecording = activeStartID != nil
-        lifecycleLock.unlock()
+        guard activeStartID != nil, !isRecovering else {
+            lifecycleLock.unlock()
+            return nil
+        }
         fileLock.lock()
-        defer { fileLock.unlock() }
-        guard isRecording, let current = audioFile, let finishedURL = tempURL else { return nil }
+        defer {
+            fileLock.unlock()
+            lifecycleLock.unlock()
+        }
+        guard let current = audioFile, let finishedURL = tempURL else { return nil }
 
         chunkIndex += 1
         let newURL = chunkURL(index: chunkIndex)
@@ -518,6 +927,7 @@ class AudioRecorder {
             let newFile = try AVAudioFile(forWriting: newURL, settings: current.fileFormat.settings)
             audioFile = newFile
             tempURL = newURL
+            currentChunkHasNonZeroPCM = false
             return finishedURL
         } catch {
             print("[whisperino] chunk rotation failed: \(error.localizedDescription)")
@@ -533,11 +943,25 @@ class AudioRecorder {
         pendingStartID = nil
         let engine = audioEngine
         let inputNode = audioInputNode
+        let observer = configurationObserver
         audioEngine = nil
         audioInputNode = nil
+        configurationObserver = nil
         activeStartID = nil
+        isRecovering = false
+        watchdogGeneration &+= 1
+        streamHealth.reset()
+        currentChunkHasNonZeroPCM = false
+        automaticRecoveryCount = 0
+        preferredDeviceUID = nil
+        levelCallback = nil
+        recoveredChunkCallback = nil
+        streamFailureCallback = nil
         lifecycleLock.unlock()
 
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
         inputNode?.removeTap(onBus: 0)
         engine?.stop()
         fileLock.lock()
