@@ -2,12 +2,14 @@ import AppKit
 
 /// In-app updates via GitHub Releases.
 ///
-/// Checks https://api.github.com/repos/JanPlr/whisperino/releases/latest on
-/// launch and once a day, compares the tag against the bundle's version, and
-/// surfaces the result in the status bar menu. Installing an update downloads
-/// the release zip, swaps the app bundle in place, resets the stale
-/// Accessibility grant (the ad-hoc CDHash changes every build, so the old
-/// grant is dead anyway), and relaunches.
+/// Checks GitHub's public Atom releases feed on launch and once a day, compares
+/// the highest semantic-version tag against the bundle's version, and surfaces
+/// the result in the status bar menu. The feed deliberately avoids GitHub's
+/// anonymous REST API quota: many Whisperino installations share one office
+/// IP, so its 60-request/hour limit can be exhausted almost immediately.
+/// Installing an update downloads the release zip, swaps the app bundle in
+/// place, resets the stale Accessibility grant (the ad-hoc CDHash changes
+/// every build, so the old grant is dead anyway), and relaunches.
 final class UpdateChecker {
     static let shared = UpdateChecker()
 
@@ -29,6 +31,23 @@ final class UpdateChecker {
         case checking
         case available(Release)
         case downloading
+    }
+
+    enum UpdateError: LocalizedError {
+        case invalidResponse
+        case httpStatus(Int)
+        case invalidReleaseFeed
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidResponse:
+                return "GitHub returned an invalid update response."
+            case .httpStatus(let status):
+                return "GitHub returned HTTP \(status) while checking for updates."
+            case .invalidReleaseFeed:
+                return "GitHub's release feed did not contain an installable Whisperino version."
+            }
+        }
     }
 
     /// Read/written on the main thread only.
@@ -89,15 +108,19 @@ final class UpdateChecker {
         if case .checking = status { return }
         status = .checking
 
-        // Fetch the full list (not /releases/latest) and pick the highest
-        // version ourselves - GitHub's "latest" is sorted by the tagged
-        // commit's date, not by version. .reloadIgnoringLocalCacheData skips
-        // URLSession's shared cache, so a stale response from an earlier check
-        // can never make "Update now" install an older release.
-        let url = URL(string: "https://api.github.com/repos/\(Self.repo)/releases?per_page=100")!
+        // The unauthenticated GitHub API allows only 60 requests/hour per
+        // public IP. In an office, every installation shares that quota. The
+        // public Atom feed has no API quota and still exposes every release
+        // tag, so parse it and construct our predictably named asset URL.
+        // A query nonce plus no-cache headers also prevents a just-published
+        // patch from being hidden behind a CDN response.
+        let nonce = Int(Date().timeIntervalSince1970)
+        let url = URL(string: "https://github.com/\(Self.repo)/releases.atom?whisperino_cache=\(nonce)")!
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+        request.setValue("application/atom+xml", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error {
@@ -105,11 +128,23 @@ final class UpdateChecker {
                     completion?(.failure(error))
                     return
                 }
-                guard let data,
-                      let release = Self.parseLatestRelease(data) else {
-                    // No releases yet, or no zip asset - treat as up to date
+                guard let http = response as? HTTPURLResponse else {
                     self.status = .idle
-                    completion?(.success(nil))
+                    completion?(.failure(UpdateError.invalidResponse))
+                    return
+                }
+                guard (200..<300).contains(http.statusCode) else {
+                    self.status = .idle
+                    completion?(.failure(UpdateError.httpStatus(http.statusCode)))
+                    return
+                }
+                guard let data,
+                      let release = Self.parseLatestReleaseFeed(data) else {
+                    // Never report a malformed/error payload as "up to date".
+                    // That was the bug which hid v3.0.1 when the API returned
+                    // its JSON rate-limit error instead of release data.
+                    self.status = .idle
+                    completion?(.failure(UpdateError.invalidReleaseFeed))
                     return
                 }
                 if Self.isNewer(release.version, than: Self.currentVersion) {
@@ -123,27 +158,29 @@ final class UpdateChecker {
         }.resume()
     }
 
-    /// Parse the /releases array and return the highest-version installable
-    /// release - skipping drafts, pre-releases, and any without a zip asset.
-    private static func parseLatestRelease(_ data: Data) -> Release? {
-        guard let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return nil
-        }
-        return array
-            .filter { ($0["draft"] as? Bool) != true && ($0["prerelease"] as? Bool) != true }
-            .compactMap(parseRelease)
-            .max { isNewer($1.version, than: $0.version) }
-    }
+    /// Parse release-page links from GitHub's Atom feed and choose the highest
+    /// numeric version. Asset names are controlled by our release workflow:
+    /// `Whisperino-vX.Y.Z.zip` for tag `vX.Y.Z`.
+    static func parseLatestReleaseFeed(_ data: Data) -> Release? {
+        guard let feed = String(data: data, encoding: .utf8) else { return nil }
+        let escapedRepo = NSRegularExpression.escapedPattern(for: Self.repo)
+        let pattern = #"https://github\.com/"# + escapedRepo
+            + #"/releases/tag/v([0-9]+(?:\.[0-9]+)+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(feed.startIndex..<feed.endIndex, in: feed)
 
-    private static func parseRelease(_ json: [String: Any]) -> Release? {
-        guard let tag = json["tag_name"] as? String,
-              let page = (json["html_url"] as? String).flatMap(URL.init(string:)),
-              let assets = json["assets"] as? [[String: Any]],
-              let zip = assets.first(where: { ($0["name"] as? String)?.hasSuffix(".zip") == true }),
-              let assetURL = (zip["browser_download_url"] as? String).flatMap(URL.init(string:))
+        var versions = Set<String>()
+        regex.enumerateMatches(in: feed, range: range) { match, _, _ in
+            guard let match,
+                  let versionRange = Range(match.range(at: 1), in: feed) else { return }
+            versions.insert(String(feed[versionRange]))
+        }
+
+        guard let version = versions.max(by: { isNewer($1, than: $0) }),
+              let pageURL = URL(string: "https://github.com/\(Self.repo)/releases/tag/v\(version)"),
+              let assetURL = URL(string: "https://github.com/\(Self.repo)/releases/download/v\(version)/Whisperino-v\(version).zip")
         else { return nil }
-        let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-        return Release(version: version, assetURL: assetURL, pageURL: page)
+        return Release(version: version, assetURL: assetURL, pageURL: pageURL)
     }
 
     /// Numeric component-wise compare: "1.10.0" > "1.9.2". Non-numeric

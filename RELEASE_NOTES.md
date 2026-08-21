@@ -1,17 +1,17 @@
-# Whisperino 3.0.1 — Bluetooth Microphone Reliability
+# Whisperino 3.0.2 — Update Checker Fix
 
-This patch fixes an intermittent macOS audio failure where Bluetooth headphones appeared to start recording normally but delivered no sound.
+This patch fixes **Check for Updates** incorrectly reporting that Whisperino 3.0.0 was current after 3.0.1 had already been released.
 
 ## What changed
 
-- Detects microphones that return only digital silence despite a healthy-looking `AVAudioEngine`.
-- Detects missing or stalled audio-buffer callbacks after recording begins.
-- Rebuilds the microphone graph when macOS changes the Bluetooth hardware format or sample rate.
-- Waits for Bluetooth input routes to stabilize before recording, including when using **Automatic** input selection.
-- Retries a silent stream automatically instead of producing an empty transcription.
-- Preserves valid audio already captured before a Bluetooth route change.
-- Uses the same reliable graph-rebuild path when changing microphones from the notch.
+- Removed the updater's dependency on GitHub's anonymous REST API, whose shared 60-request-per-hour IP limit could be exhausted by a team or office.
+- Uses GitHub's public releases feed and still selects the highest semantic version.
+- Bypasses stale local and CDN responses when checking manually.
+- Reports network, HTTP, and malformed-response errors honestly instead of presenting them as “You're up to date.”
+- Constructs downloads from Whisperino's versioned release assets and keeps the existing automatic install-and-relaunch flow.
+
+This release also includes the Bluetooth microphone recovery introduced in 3.0.1.
 
 ## Upgrade note
 
-macOS may ask you to re-enable **Accessibility** after updating. Open **System Settings → Privacy & Security → Accessibility**, enable Whisperino, then quit and reopen it once.
+If an older version still says it is current, download 3.0.2 manually from this release page. Future updates will be detected normally. macOS may ask you to re-enable **Accessibility** after updating.
