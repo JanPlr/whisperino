@@ -218,18 +218,20 @@ class AudioRecorder {
 
     /// Map raw RMS dB → 0..1 level for the meter, with a noise gate so
     /// ambient room noise doesn't make the bars dance.
-    /// - dB scaling: -50 dB = 0, -15 dB = 1
+    /// - dB scaling begins at -54 dB so quiet, close speech is still visible
     /// - Anything below the noise gate is forced to 0
     /// - Above the gate, a sub-linear curve boosts mid-range so normal
     ///   conversational voice produces a satisfying excursion
     private static func gatedLevel(db: Float) -> Float {
-        let raw = max(0, min(1, (db + 50) / 35))
-        let gate: Float = 0.14  // soft threshold ~ -45 dB
+        let raw = max(0, min(1, (db + 54) / 40))
+        // Keep a real noise floor (~ -50 dB), but do not discard soft speech
+        // in the -49…-45 dB range as the previous gate did.
+        let gate: Float = 0.10
         if raw < gate { return 0 }
         let scaled = (raw - gate) / (1 - gate)
-        // pow(x, 0.65) - pulls mid-range values up (0.5 → 0.63, 0.3 → 0.45)
-        // so normal voice reads as a strong, visible swing.
-        return pow(scaled, 0.65)
+        // A slightly stronger lift keeps quiet speech alive while the hard
+        // gate above still prevents stationary room noise from animating.
+        return pow(scaled, 0.60)
     }
 
     /// Start recording without ever putting AVAudioEngine/CoreAudio setup on
@@ -412,12 +414,11 @@ class AudioRecorder {
             let db = 20 * log10(max(rms, 1e-6))
             let level = Self.gatedLevel(db: db)
 
-            if level > smoothedLevel && smoothedLevel < 0.05 {
-                smoothedLevel = level
-            } else {
-                let factor: Float = level > smoothedLevel ? 0.9 : 0.5
-                smoothedLevel += factor * (level - smoothedLevel)
-            }
+            // Preserve just enough filtering to avoid single-buffer jitter.
+            // Speech attacks immediately and silence clears within a few
+            // CoreAudio buffers instead of leaving a long synthetic tail.
+            let factor: Float = level > smoothedLevel ? 0.42 : 0.55
+            smoothedLevel += factor * (level - smoothedLevel)
             levelCallback(smoothedLevel)
         }
 
@@ -471,12 +472,8 @@ class AudioRecorder {
                 let rms = sqrt(sum / max(Float(frames), 1))
                 let db = 20 * log10(max(rms, 1e-6))
                 let level = Self.gatedLevel(db: db)
-                if level > self.smoothedLevel && self.smoothedLevel < 0.05 {
-                    self.smoothedLevel = level
-                } else {
-                    let factor: Float = level > self.smoothedLevel ? 0.9 : 0.5
-                    self.smoothedLevel += factor * (level - self.smoothedLevel)
-                }
+                let factor: Float = level > self.smoothedLevel ? 0.42 : 0.55
+                self.smoothedLevel += factor * (level - self.smoothedLevel)
                 levelCallback(self.smoothedLevel)
             }
 

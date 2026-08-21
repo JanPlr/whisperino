@@ -38,6 +38,7 @@ final class TranscriptionSession {
     var onProgress: ((Progress) -> Void)?
 
     private let transcriber: Transcriber
+    private let languages: [String]
     private let recoveryDir: URL
     private let recoveryFile: URL
 
@@ -52,8 +53,9 @@ final class TranscriptionSession {
     private var cancelled = false
     private var chain: Task<Void, Never>?
 
-    init(transcriber: Transcriber) {
+    init(transcriber: Transcriber, languages: [String] = []) {
         self.transcriber = transcriber
+        self.languages = languages
         let home = FileManager.default.homeDirectoryForCurrentUser
         recoveryDir = home.appendingPathComponent(".whisperino/recovery")
         recoveryFile = recoveryDir.appendingPathComponent("last-raw-transcript.txt")
@@ -84,7 +86,7 @@ final class TranscriptionSession {
                 return
             }
             do {
-                let text = try await transcriber.transcribe(audioURL: chunkURL)
+                let text = try await transcriber.transcribe(audioURL: chunkURL, languages: languages)
                 try? FileManager.default.removeItem(at: chunkURL)
                 doneCount += 1
                 if !text.isEmpty {

@@ -69,7 +69,10 @@ struct ChatTurn: Identifiable {
 
 class AppState: ObservableObject {
     @Published var state: TranscriptionState = .idle
-    @Published var audioLevel: Float = 0
+    // CoreAudio updates this roughly 90 times per second. It is sampled into
+    // `audioSamples` below, so publishing every raw callback only invalidates
+    // the entire overlay repeatedly and makes the meter visibly stutter.
+    private(set) var audioLevel: Float = 0
     /// True while recording but the mic has produced no real signal since the
     /// take began - almost always the wrong/dead input device. Drives the
     /// "check your mic" nudge above the pill. Cleared the instant real audio
@@ -96,14 +99,27 @@ class AppState: ObservableObject {
     /// Native tool result / confirmation UI. Tool reads can populate this
     /// directly; side effects must first move through a confirmation card.
     @Published var assistantCard: AssistantCard? = nil
+    /// Geometry supplied by OverlayPanel for the display it is anchored to.
+    /// On a notched Mac the visible surface starts at y=0 and reserves this
+    /// inset for the camera housing, making the UI one continuous silhouette
+    /// with the hardware rather than a pill floating underneath it.
+    @Published var overlayHasPhysicalNotch = false
+    /// True when the live surface should merge into the display's top edge.
+    /// This includes both a real MacBook notch and the virtual island used on
+    /// an attached external display.
+    @Published var overlayUsesTopEdgeSurface = false
+    @Published var overlayNotchInset: CGFloat = 0
+    /// Camera-housing width measured from the display's auxiliary menu-bar
+    /// regions. Compact notch UI grows outward from this exact width.
+    @Published var overlayPhysicalNotchWidth: CGFloat = 210
+    /// Explicit lifecycle for agent/edit sessions. Dictation keeps using the
+    /// lightweight transcription state; every assistant callback must match
+    /// this session id before it can mutate the surface.
+    @Published private(set) var assistantSession: AssistantSessionState? = nil
     /// Seconds the fallback card lingers before auto-dismissing. The
     /// overlay's countdown ring animates over this same duration.
     static let fallbackTimeout: TimeInterval = 8
     private var fallbackTimer: Timer?
-    /// Dynamic status text during agent execution (e.g. "Searching the web…")
-    @Published var agentStatus: String? = nil
-    /// Name of the currently active agent (shown in overlay)
-    @Published var activeAgentName: String? = nil
     /// Available audio input devices
     @Published var inputDevices: [AudioInputDevice] = []
     /// Currently selected input device (nil = system default)
@@ -144,6 +160,15 @@ class AppState: ObservableObject {
     private let refiner = LLMRefiner()
     private let agentClient = AgentClient()
     private let store = SettingsStore.shared
+    private let assistantTools = AssistantToolRegistry(tools: [
+        LocalFinderAssistantTool(),
+        OpenLocalFileAssistantTool(),
+        CreateCalendarEventAssistantTool(),
+        WebSearchAssistantTool(),
+    ])
+    private lazy var assistantPlanner = AssistantPlanner(descriptors: assistantTools.descriptors)
+    private var assistantResponseTask: Task<Void, Never>?
+    private var pendingAssistantInvocation: PreparedToolInvocation?
 
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
@@ -153,6 +178,15 @@ class AppState: ObservableObject {
     /// this token prevents a cancelled or timed-out attempt from updating a
     /// newer take.
     private var recordingToken: UUID?
+
+    /// True only when Whisperino paused an active media session for the
+    /// current take. This prevents us from starting media that the user had
+    /// already paused before dictating.
+    private var mediaWasPausedForRecording = false
+
+    /// Language is snapshotted once per take so a Settings change cannot make
+    /// later rolling chunks use a different recognizer language.
+    private var recordingLanguageCodes: [String] = []
 
     /// Whether, at the moment recording started, the target app had a
     /// focused editable text element. Captured then - not at paste time -
@@ -195,20 +229,19 @@ class AppState: ObservableObject {
     private var noAudioNudgeTimer: Timer?
     /// How long the nudge lingers before fading out on its own.
     private static let noAudioNudgeDuration: TimeInterval = 3
-    /// A gated level at/above this counts as genuine captured audio. Kept at
-    /// the meter's own silence floor (`chunkSilenceLevel`) so anything the app
-    /// doesn't already treat as silence marks the mic alive - the nudge then
-    /// only fires for a truly dead/wrong input, not for quiet-but-real speech.
-    private static let noAudioLevelThreshold: Float = 0.02
+    /// A gated level at/above this counts as genuine captured audio. This is
+    /// intentionally below the chunk-rotation silence threshold: softly
+    /// spoken words should prove the microphone is alive even when they are
+    /// not strong enough to influence long-recording chunk boundaries.
+    private static let noAudioLevelThreshold: Float = 0.012
     /// How long the mic may stay completely silent from take start before we
     /// surface the nudge. Deliberately generous - this should fire for a
     /// wrong/dead device, not for a thoughtful pause before speaking.
     private static let noAudioGraceSeconds: TimeInterval = 3
 
-    /// Drives the waveform's rolling history. The leftmost bar tracks
-    /// audio level in real-time via the recorder callback; this timer just
-    /// shifts the value into history at a fixed cadence so the wave
-    /// visibly travels left-to-right.
+    /// Drives the waveform's rolling history at a deliberately calm cadence.
+    /// Keeping UI publication on this timer (rather than every CoreAudio
+    /// buffer) prevents the compact notch indicator from flickering.
     private var sampleTimer: Timer?
 
     var isSetUp: Bool { transcriber.isAvailable }
@@ -259,34 +292,34 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Pin a specific input device as the user's preferred mic. The choice is
-    /// persisted by UID so it sticks across relaunches and reconnects, and is
-    /// force-applied as the input at every record start.
-    /// If currently recording, restarts the engine on the new device seamlessly.
-    func selectInputDevice(_ device: AudioInputDevice) {
-        selectedInputDevice = device
+    /// Persist the choice immediately, but defer the observable row selection
+    /// and CoreAudio graph rebuild until the notch has finished collapsing.
+    /// Updating the selected row in the same transaction as dismissal made its
+    /// icon and label animate sideways with the disappearing list.
+    func selectInputDeviceAfterPickerCollapse(_ device: AudioInputDevice) {
         store.settings.preferredInputDeviceUID = device.uid
-
-        guard case .recording = state else { return }
-        do {
-            try recorder.switchDevice(deviceID: device.id) { [weak self] level in
-                DispatchQueue.main.async {
-                    self?.handleAudioLevel(level)
-                }
-            }
-        } catch {
-            print("[whisperino] failed to switch device mid-recording: \(error)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { [weak self] in
+            guard let self,
+                  self.store.settings.preferredInputDeviceUID == device.uid else { return }
+            self.selectedInputDevice = device
+            self.applyInputDeviceNow(device)
         }
     }
 
-    /// Clear the preferred-mic pin and fall back to following the system
-    /// default. If recording, switch live to whatever the system default is.
-    func clearPreferredInputDevice() {
+    func clearPreferredInputDeviceAfterPickerCollapse() {
         store.settings.preferredInputDeviceUID = nil
-        selectedInputDevice = nil
-        refreshInputDevices()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { [weak self] in
+            guard let self,
+                  self.store.settings.preferredInputDeviceUID == nil else { return }
+            self.selectedInputDevice = nil
+            self.refreshInputDevices()
+            guard let device = self.selectedInputDevice else { return }
+            self.applyInputDeviceNow(device)
+        }
+    }
 
-        guard case .recording = state, let device = selectedInputDevice else { return }
+    private func applyInputDeviceNow(_ device: AudioInputDevice) {
+        guard case .recording = state else { return }
         do {
             try recorder.switchDevice(deviceID: device.id) { [weak self] level in
                 DispatchQueue.main.async {
@@ -377,6 +410,13 @@ class AppState: ObservableObject {
     /// `.cancelled` plays the cancel flash; `.idle` tears down silently (used
     /// when a take is aborted with no user-facing "cancelled" feedback).
     private func teardownRecording(finalState: TranscriptionState) {
+        assistantResponseTask?.cancel()
+        assistantResponseTask = nil
+        pendingAssistantInvocation = nil
+        if var session = assistantSession {
+            session.transition(to: .cancelled, label: "Cancelled")
+            assistantSession = session
+        }
         showingInputPicker = false
         isLatchedRecording = false
         noAudioDetected = false
@@ -390,6 +430,7 @@ class AppState: ObservableObject {
         if let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
+        resumeMediaAfterRecordingIfNeeded()
         stopWaveformSampling()
         audioLevel = 0
         recordingStartTime = nil
@@ -398,14 +439,14 @@ class AppState: ObservableObject {
         state = finalState
     }
 
-    /// Enter / "finish" gesture (the ✓ button / Enter). While recording,
-    /// submits the current take. Otherwise dismisses the fallback card if up.
+    /// Enter / "finish" gesture. While recording it submits the take; while a
+    /// prepared action card is visible it approves that exact invocation.
     func submitOrFinish() {
         switch state {
         case .recording:
             stopRecording()
         default:
-            if case .confirmOpen = assistantCard {
+            if assistantCard != nil, pendingAssistantInvocation != nil {
                 approveAssistantAction()
             } else if assistantCard != nil {
                 dismissAssistantCard()
@@ -420,21 +461,15 @@ class AppState: ObservableObject {
     private func startWaveformSampling() {
         audioSamples = Array(repeating: 0, count: Self.waveformBarCount)
         sampleTimer?.invalidate()
-        // 22 Hz - every ~45ms the wave rolls one step. With a per-step decay
-        // factor, the historical "trail" fades AND moves left, so when voice
-        // stops the pill clears within ~250ms instead of holding stale
-        // snapshots until they roll off.
-        sampleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 22.0, repeats: true) { [weak self] _ in
+        // Publish at 30 Hz so speech and silence reach the notch within one
+        // display frame or two. The meter applies its own restrained visual
+        // envelope, so this higher cadence stays smooth without feeling late.
+        sampleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             var s = self.audioSamples
-            // Gentle per-tick fade - the wave keeps enough amplitude to
-            // visibly travel across the pill before it disappears off the
-            // right edge (after ~9 ticks ≈ 410ms total visible duration).
-            for i in 0..<s.count { s[i] *= 0.92 }
-            // Roll right + insert the current live level at the front
-            // (overwritten by the next audio callback, so the leftmost
-            // bar stays real-time). Newest-first → the wave travels
-            // left to right.
+            // Store the real envelope without an artificial historical fade.
+            // Newest-first means each actual spoken peak advances one fixed
+            // position to the right per tick, then leaves the meter promptly.
             s.removeLast()
             s.insert(self.audioLevel, at: 0)
             self.audioSamples = s
@@ -454,11 +489,9 @@ class AppState: ObservableObject {
     /// no-audio nudge the moment genuine signal arrives.
     private func handleAudioLevel(_ level: Float) {
         audioLevel = level
-        // Real-time tracking: leftmost bar reflects live voice immediately, no
-        // timer-tick wait. The sample timer only rolls history left to right.
-        if !audioSamples.isEmpty {
-            audioSamples[0] = level
-        }
+        // Waveform publication is intentionally left to the 30 Hz sampler.
+        // Publishing on every CoreAudio buffer made the whole overlay redraw
+        // roughly 90 times per second and caused the indicator to feel laggy.
         // Any real signal means the mic is alive: latch that for the take and
         // retract the nudge if it had appeared.
         if level >= Self.noAudioLevelThreshold {
@@ -471,6 +504,10 @@ class AppState: ObservableObject {
         // A fresh take supersedes a lingering fallback card.
         fallbackResult = nil
         assistantCard = nil
+        assistantResponseTask?.cancel()
+        assistantResponseTask = nil
+        pendingAssistantInvocation = nil
+        assistantSession = nil
         // Reset per-take mic-liveness tracking.
         heardRealAudio = false
         didNudgeNoAudio = false
@@ -511,6 +548,8 @@ class AppState: ObservableObject {
                 state = .idle
                 return
             }
+
+            assistantSession = AssistantSessionState(phase: .listening)
         }
 
         // Capture the frontmost app so we can re-activate it before pasting,
@@ -519,6 +558,13 @@ class AppState: ObservableObject {
         // this can be read reliably.
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         recordingTargetEditable = Self.focusedElementIsEditable()
+
+        // Pause before AVAudioEngine and the optional start sound become
+        // active, otherwise our own audio session could make the output query
+        // look busy and turn an idle Play/Pause toggle into accidental play.
+        recordingLanguageCodes = store.settings.transcriptionLanguageCodes
+        mediaWasPausedForRecording = store.settings.pauseMediaOnRecordingStart
+            && MediaPlaybackController.pauseIfAudioIsPlaying()
 
         // AI mode: silently grab the current screen as image context and flash
         // a frame around the window we captured, so the user can just talk to
@@ -560,6 +606,7 @@ class AppState: ObservableObject {
                     self.recordingStartTime = Date()
                 case .failure(let error):
                     self.recordingToken = nil
+                    self.resumeMediaAfterRecordingIfNeeded()
                     self.isLatchedRecording = false
                     HotkeyManager.shared.resetTriggerState()
                     self.windowHighlighter.dismiss()
@@ -567,6 +614,13 @@ class AppState: ObservableObject {
                     self.screenshotTask = nil
                     self.recordingTargetPID = nil
                     self.resetInstructionMode()
+                    if var session = self.assistantSession {
+                        session.transition(
+                            to: .failed(error.localizedDescription),
+                            label: "Microphone failed"
+                        )
+                        self.assistantSession = session
+                    }
                     self.state = .error(message: "Mic error: \(error.localizedDescription)")
                     self.autoDismiss(after: 4)
                 }
@@ -627,7 +681,10 @@ class AppState: ObservableObject {
         chunksDone = 0
         chunksTotal = 0
 
-        let session = TranscriptionSession(transcriber: transcriber)
+        let session = TranscriptionSession(
+            transcriber: transcriber,
+            languages: recordingLanguageCodes
+        )
         session.onProgress = { [weak self] progress in
             guard let self = self else { return }
             self.liveTranscript = progress.text
@@ -666,8 +723,12 @@ class AppState: ObservableObject {
                 isLatchedRecording = true
                 HotkeyManager.shared.promoteToLatched()
             }
+            // Put the recovery action directly in front of the user. Device
+            // enumeration was already refreshed when the recording panel was
+            // presented, so this is a state-only, animation-safe operation.
+            showingInputPicker = true
             // Fade it out on its own after a few seconds - the mic selector
-            // it summoned stays, so the hint has done its job.
+            // stays open, so the hint has done its job.
             noAudioNudgeTimer?.invalidate()
             noAudioNudgeTimer = Timer.scheduledTimer(
                 withTimeInterval: Self.noAudioNudgeDuration, repeats: false
@@ -702,6 +763,15 @@ class AppState: ObservableObject {
         chunksTotal = 0
     }
 
+    /// Resume only playback that this take actually paused. The explicit Play
+    /// command is idempotent, unlike a Play/Pause toggle, so a player that has
+    /// already resumed itself remains playing.
+    private func resumeMediaAfterRecordingIfNeeded() {
+        guard mediaWasPausedForRecording else { return }
+        mediaWasPausedForRecording = false
+        MediaPlaybackController.resumePlayback()
+    }
+
     private func stopRecording() {
         showingInputPicker = false
         noAudioDetected = false
@@ -721,10 +791,13 @@ class AppState: ObservableObject {
         // level/completion callbacks from this take as stale.
         recordingToken = nil
 
-        guard let audioURL = recorder.stop() else {
+        let stoppedAudioURL = recorder.stop()
+        resumeMediaAfterRecordingIfNeeded()
+        guard let audioURL = stoppedAudioURL else {
             abandonTranscriptionSession()
             stopWaveformSampling()
             resetInstructionMode()
+            assistantSession = nil
             state = .idle
             return
         }
@@ -738,6 +811,7 @@ class AppState: ObservableObject {
             try? FileManager.default.removeItem(at: audioURL)
             abandonTranscriptionSession()
             resetInstructionMode()
+            assistantSession = nil
             state = .idle
             return
         }
@@ -745,6 +819,11 @@ class AppState: ObservableObject {
         state = .transcribing
 
         let instructionMode = isInstructionMode
+        let assistantSessionID = instructionMode ? assistantSession?.id : nil
+        if instructionMode, var assistantSession {
+            assistantSession.transition(to: .transcribing, label: "Transcribing locally")
+            self.assistantSession = assistantSession
+        }
         // Snapshot the in-flight screen capture on the main actor so the
         // response Task reads a stable reference (resetInstructionMode may
         // clear the property concurrently).
@@ -753,18 +832,29 @@ class AppState: ObservableObject {
         // Hand the final chunk to the rolling pipeline. Everything before
         // it has been transcribing in the background since ~40s into the
         // take, so even an hour-long recording only waits on the tail.
-        let session = transcriptionSession ?? TranscriptionSession(transcriber: transcriber)
+        let session = transcriptionSession ?? TranscriptionSession(
+            transcriber: transcriber,
+            languages: recordingLanguageCodes
+        )
         transcriptionSession = nil
         session.submit(chunkURL: audioURL)
         chunksTotal = session.chunksSubmitted
 
-        Task {
+        assistantResponseTask = Task {
             do {
                 let rawText = try await session.finish()
+                try Task.checkCancellation()
 
                 guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     await MainActor.run {
                         self.state = .error(message: "No speech detected")
+                        if let assistantSessionID {
+                            _ = self.updateAssistantSession(
+                                assistantSessionID,
+                                phase: .failed("No speech detected"),
+                                label: "No speech detected"
+                            )
+                        }
                         self.resetInstructionMode()
                         self.autoDismiss(after: 2)
                     }
@@ -773,6 +863,18 @@ class AppState: ObservableObject {
 
                 await MainActor.run {
                     self.state = .refining
+                    if let assistantSessionID {
+                        if var session = self.assistantSession,
+                           session.id == assistantSessionID {
+                            session.transcript = rawText
+                            self.assistantSession = session
+                        }
+                        self.updateAssistantSession(
+                            assistantSessionID,
+                            phase: .planning,
+                            label: "Planning"
+                        )
+                    }
                 }
 
                 let settings = store.settings
@@ -784,18 +886,19 @@ class AppState: ObservableObject {
                 // screenshot captures whatever's now on screen (including the
                 // last answer).
                 if instructionMode {
-                    // Local tools route before any remote model call. Finder
-                    // searches stay on-device and return a native glance card;
-                    // opening a result is a separate, confirmed action.
-                    if let query = LocalFinderTool.query(from: rawText) {
-                        let results = try await LocalFinderTool.search(query: query)
-                        await MainActor.run {
-                            self.recordingTargetPID = nil
-                            self.resetInstructionMode()
-                            self.store.addTranscript(rawText, isInstruction: true)
-                            self.assistantCard = .fileResults(query: query, results: results)
-                            self.state = .result(text: "Found \(results.count) files")
-                        }
+                    guard let assistantSessionID else { throw CancellationError() }
+
+                    // Local plans run through the allowlisted typed registry.
+                    // Reads execute immediately; external actions can only be
+                    // resumed from a host-owned confirmation card.
+                    if let plan = await MainActor.run(body: {
+                        self.assistantPlanner.plan(rawText)
+                    }) {
+                        try await self.executeAssistantPlan(
+                            plan,
+                            sessionID: assistantSessionID,
+                            transcript: rawText
+                        )
                         return
                     }
 
@@ -805,25 +908,88 @@ class AppState: ObservableObject {
                         contextAttachments.append(shot)
                     }
 
+                    // Local parsing deliberately stays conservative. For
+                    // screen-relative commands such as "open this person's
+                    // LinkedIn", the model may resolve the visible subject and
+                    // emit one typed request. Registry validation still rejects
+                    // invented tools/arguments, and every external action lands
+                    // on a host-owned confirmation card before execution.
+                    if !settings.apiKey.isEmpty,
+                       await MainActor.run(body: {
+                           self.assistantPlanner.shouldAttemptModelPlanning(rawText)
+                       }) {
+                        do {
+                            let modelTools = assistantTools.descriptors.filter {
+                                $0.id != OpenLocalFileAssistantTool.id
+                            }
+                            if let request = try await refiner.planToolCall(
+                                transcription: rawText,
+                                attachments: contextAttachments,
+                                descriptors: modelTools,
+                                apiKey: settings.apiKey
+                            ) {
+                                let plan = AssistantPlan(
+                                    summary: "Preparing \(request.toolID)",
+                                    requests: [request]
+                                )
+                                try await self.executeAssistantPlan(
+                                    plan,
+                                    sessionID: assistantSessionID,
+                                    transcript: rawText
+                                )
+                                return
+                            }
+                        } catch is AssistantRuntimeError {
+                            await MainActor.run {
+                                _ = self.updateAssistantSession(
+                                    assistantSessionID,
+                                    phase: .planning,
+                                    label: "Rejected an invalid tool request"
+                                )
+                            }
+                            // A rejected model plan is not fatal. Continue to
+                            // the ordinary screen-aware answer path.
+                        }
+                    }
+
                     if !settings.apiKey.isEmpty,
                        let match = await detectAgent(in: rawText, apiKey: settings.apiKey) {
-                        await MainActor.run {
+                        let shouldExecute = await MainActor.run {
+                            guard self.updateAssistantSession(
+                                assistantSessionID,
+                                phase: .executing(toolID: "langdock.agent"),
+                                label: "Asked \(match.agent.name)"
+                            ) else { return false }
                             self.isAgentMode = true
-                            self.activeAgentName = match.agent.name
+                            return true
                         }
+                        guard shouldExecute else { throw CancellationError() }
 
                         let finalText = try await agentClient.execute(
                             agentId: match.agent.agentId,
                             userMessage: match.cleanedText,
                             attachments: contextAttachments,
-                            apiKey: settings.apiKey,
-                            onStatusUpdate: { _ in }
+                            apiKey: settings.apiKey
                         )
+                        try Task.checkCancellation()
 
                         await MainActor.run {
+                            guard self.updateAssistantSession(
+                                assistantSessionID,
+                                phase: .presenting,
+                                label: "Presented answer"
+                            ) else { return }
                             self.deliverAIResult(finalText)
                         }
                     } else {
+                        let shouldExecute = await MainActor.run {
+                            self.updateAssistantSession(
+                                assistantSessionID,
+                                phase: .executing(toolID: "langdock.answer"),
+                                label: "Answering with screen context"
+                            )
+                        }
+                        guard shouldExecute else { throw CancellationError() }
                         let terms = store.dictionary.map { $0.term }
                         let snips = store.snippets.map { (name: $0.name, text: $0.text) }
                         let finalText = try await refiner.instructConversation(
@@ -835,8 +1001,14 @@ class AppState: ObservableObject {
                             snippets: snips,
                             onChunk: { _ in }
                         )
+                        try Task.checkCancellation()
 
                         await MainActor.run {
+                            guard self.updateAssistantSession(
+                                assistantSessionID,
+                                phase: .presenting,
+                                label: "Presented answer"
+                            ) else { return }
                             self.deliverAIResult(finalText)
                         }
                     }
@@ -862,13 +1034,17 @@ class AppState: ObservableObject {
                     await MainActor.run {
                         self.lastTranscriptionResult = finalText
                         self.store.addTranscript(finalText, isInstruction: false)
-                        self.state = .result(text: finalText)
                         if self.insertResult(finalText) {
+                            // A real target field owns the result. Stay in the
+                            // compact processing surface until the paste fires,
+                            // then shrink away without ever rendering the
+                            // transcript rescue card for a single frame.
                             self.startDismissSequence()
                         } else {
                             // No editable field was focused when recording
                             // began - surface the take in the rescue card so
                             // the user can copy it manually.
+                            self.state = .result(text: finalText)
                             self.showFallback(finalText)
                         }
                     }
@@ -876,6 +1052,15 @@ class AppState: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.resetInstructionMode()
+                    if let assistantSessionID,
+                       !(error is CancellationError) {
+                        _ = self.updateAssistantSession(
+                            assistantSessionID,
+                            phase: .failed(error.localizedDescription),
+                            label: "Failed"
+                        )
+                    }
+                    guard !(error is CancellationError) else { return }
                     // Salvage whatever the rolling pipeline got through
                     // before the failure (e.g. the AI call died after a
                     // 20-minute dictation). The raw text also survives in
@@ -900,10 +1085,10 @@ class AppState: ObservableObject {
     private func deliverAIResult(_ finalText: String) {
         lastTranscriptionResult = finalText
         store.addTranscript(finalText, isInstruction: true)
-        state = .result(text: finalText)
         if insertResult(finalText) {
             startDismissSequence()
         } else {
+            state = .result(text: finalText)
             showFallback(finalText)
         }
     }
@@ -913,37 +1098,209 @@ class AppState: ObservableObject {
     /// Selecting a file is still only intent: surface the exact target and ask
     /// before crossing the side-effect boundary.
     func requestOpen(_ result: LocalFileResult) {
-        assistantCard = .confirmOpen(result)
+        guard let sessionID = assistantSession?.id else { return }
+        do {
+            let request = ToolRequest(
+                toolID: OpenLocalFileAssistantTool.id,
+                arguments: [
+                    "path": .string(result.path),
+                    "name": .string(result.name),
+                    "detail": .string(result.detail),
+                    "symbol": .string(result.symbolName),
+                ]
+            )
+            let invocation = try assistantTools.prepare(request, sessionID: sessionID)
+            pendingAssistantInvocation = invocation
+            guard updateAssistantSession(
+                sessionID,
+                phase: .awaitingConfirmation(invocation),
+                label: "Waiting for approval to open \(result.name)"
+            ) else { return }
+            assistantCard = .confirmOpen(result)
+        } catch {
+            _ = updateAssistantSession(
+                sessionID,
+                phase: .failed(error.localizedDescription),
+                label: "Could not prepare action"
+            )
+            assistantCard = .message(
+                symbol: "exclamationmark.triangle.fill",
+                title: "Can’t open that file",
+                detail: error.localizedDescription
+            )
+        }
     }
 
     func approveAssistantAction() {
-        guard case .confirmOpen(let result) = assistantCard else { return }
-        let opened = NSWorkspace.shared.open(result.url)
-        assistantCard = .message(
-            symbol: opened ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
-            title: opened ? "Opened \(result.name)" : "Couldn’t open \(result.name)",
-            detail: opened ? result.detail : "The file may have moved or its app may be unavailable."
-        )
-        state = .result(text: opened ? "Opened \(result.name)" : "Could not open \(result.name)")
+        guard assistantCard != nil,
+              let invocation = pendingAssistantInvocation,
+              invocation.sessionID == assistantSession?.id else { return }
+        pendingAssistantInvocation = nil
+        guard updateAssistantSession(
+            invocation.sessionID,
+            phase: .executing(toolID: invocation.toolID),
+            label: "Approved action"
+        ) else { return }
 
-        if opened {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                guard case .message = self?.assistantCard else { return }
-                self?.dismissAssistantCard()
+        assistantResponseTask?.cancel()
+        assistantResponseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.assistantTools.execute(invocation, confirmed: true)
+                try Task.checkCancellation()
+                guard self.updateAssistantSession(
+                    invocation.sessionID,
+                    phase: .presenting,
+                    label: "Action completed"
+                ) else { return }
+                self.presentAssistantToolResult(result)
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    guard case .message = self?.assistantCard else { return }
+                    self?.dismissAssistantCard()
+                }
+            } catch {
+                guard !(error is CancellationError) else { return }
+                _ = self.updateAssistantSession(
+                    invocation.sessionID,
+                    phase: .failed(error.localizedDescription),
+                    label: "Action failed"
+                )
+                self.assistantCard = .message(
+                    symbol: "exclamationmark.triangle.fill",
+                    title: "Action failed",
+                    detail: error.localizedDescription
+                )
+                self.state = .result(text: error.localizedDescription)
             }
         }
     }
 
     func dismissAssistantCard() {
+        assistantResponseTask?.cancel()
+        assistantResponseTask = nil
+        pendingAssistantInvocation = nil
         assistantCard = nil
+        assistantSession = nil
         if case .result = state { state = .idle }
+    }
+
+    @discardableResult
+    private func updateAssistantSession(
+        _ id: UUID,
+        phase: AssistantSessionPhase,
+        label: String
+    ) -> Bool {
+        guard var session = assistantSession, session.id == id else { return false }
+        session.transition(to: phase, label: label)
+        assistantSession = session
+        return true
+    }
+
+    private func presentAssistantToolResult(_ result: AssistantToolResult) {
+        switch result {
+        case .localFiles(let query, let results):
+            assistantCard = .fileResults(query: query, results: results)
+            state = .result(text: "Found \(results.count) files")
+        case .actionMessage(let symbol, let title, let detail):
+            assistantCard = .message(symbol: symbol, title: title, detail: detail)
+            state = .result(text: title)
+        }
+    }
+
+    private func executeAssistantPlan(
+        _ plan: AssistantPlan,
+        sessionID: UUID,
+        transcript: String
+    ) async throws {
+        var lastResult: AssistantToolResult?
+        for request in plan.requests {
+            try Task.checkCancellation()
+            let invocation = try await MainActor.run {
+                try self.assistantTools.prepare(request, sessionID: sessionID)
+            }
+
+            if invocation.effect == .externalAction {
+                let didPresent = await MainActor.run {
+                    self.pendingAssistantInvocation = invocation
+                    guard self.updateAssistantSession(
+                        sessionID,
+                        phase: .awaitingConfirmation(invocation),
+                        label: plan.summary
+                    ) else { return false }
+                    self.recordingTargetPID = nil
+                    self.resetInstructionMode()
+                    self.store.addTranscript(transcript, isInstruction: true)
+                    self.presentAssistantConfirmation(invocation)
+                    return true
+                }
+                guard didPresent else { throw CancellationError() }
+                return
+            }
+
+            let isCurrent = await MainActor.run {
+                self.updateAssistantSession(
+                    sessionID,
+                    phase: .executing(toolID: invocation.toolID),
+                    label: plan.summary
+                )
+            }
+            guard isCurrent else { throw CancellationError() }
+            lastResult = try await assistantTools.execute(invocation, confirmed: false)
+        }
+
+        try Task.checkCancellation()
+        guard let result = lastResult else {
+            throw AssistantRuntimeError.invalidArgument(
+                tool: "Assistant plan",
+                argument: "requests"
+            )
+        }
+        await MainActor.run {
+            guard self.updateAssistantSession(
+                sessionID,
+                phase: .presenting,
+                label: "Tool completed"
+            ) else { return }
+            self.recordingTargetPID = nil
+            self.resetInstructionMode()
+            self.store.addTranscript(transcript, isInstruction: true)
+            self.presentAssistantToolResult(result)
+        }
+    }
+
+    private func presentAssistantConfirmation(_ invocation: PreparedToolInvocation) {
+        switch invocation.toolID {
+        case CreateCalendarEventAssistantTool.id:
+            guard let draft = CreateCalendarEventAssistantTool.draft(from: invocation.arguments) else {
+                assistantCard = .message(
+                    symbol: "exclamationmark.triangle.fill",
+                    title: "Invalid calendar event",
+                    detail: "The proposed event could not be displayed safely."
+                )
+                return
+            }
+            assistantCard = .calendarDraft(draft)
+            state = .result(text: "Review calendar event")
+
+        case WebSearchAssistantTool.id:
+            guard let query = invocation.arguments["query"]?.stringValue else { return }
+            assistantCard = .webSearch(WebSearchDraft(query: query))
+            state = .result(text: "Review web search")
+
+        default:
+            assistantCard = .message(
+                symbol: "exclamationmark.shield.fill",
+                title: "Unsupported action",
+                detail: invocation.toolID
+            )
+            state = .result(text: "Unsupported action")
+        }
     }
 
     private func resetInstructionMode() {
         isInstructionMode = false
         isAgentMode = false
-        agentStatus = nil
-        activeAgentName = nil
         screenshotTask?.cancel()
         screenshotTask = nil
     }
@@ -1253,12 +1610,18 @@ class AppState: ObservableObject {
     }
 
     private func startDismissSequence() {
-        // Tiny hold so the paste visibly lands, then the pill exits -
-        // slight scale-down + blur + fade, 0.14s (OverlayView's
-        // unified-pill exit) - before the panel goes idle.
+        // Tiny hold so the paste visibly lands, then the pill exits directly
+        // from processing. Successful insertion must never pass through
+        // `.result`: that state owns the visible rescue transcript card and
+        // caused a one-frame popup even when a target field received the text.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard case .result = self?.state else { return }
-            self?.state = .dismissing
+            guard let self else { return }
+            switch self.state {
+            case .refining, .result:
+                self.state = .dismissing
+            default:
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
                 guard case .dismissing = self?.state else { return }
                 self?.state = .idle
@@ -1323,15 +1686,6 @@ class AppState: ObservableObject {
         keyUp?.flags = []
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
-    }
-
-    /// Send `text` to the focused app via the clipboard, then restore
-    /// whatever was there. Used by the per-bubble "paste this version"
-    /// action so the user can commit a later iteration of an AI reply.
-    func pasteIntoTargetApp(_ text: String) {
-        // Re-activate the original target if we still know it; otherwise
-        // deliverPaste falls through to whatever is currently frontmost.
-        deliverPaste(text, reactivating: recordingTargetPID)
     }
 
     /// Copy `text` to the system clipboard, no paste. Used to salvage a

@@ -79,6 +79,52 @@ private struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
+/// Whisperino's text-input chrome. The editable control stays native for
+/// keyboard, selection, password-manager, and accessibility behavior, while
+/// every visible part (surface, border, spacing, focus treatment) belongs to
+/// the app's design system.
+private struct BrandTextInputModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .font(.system(size: 12.5))
+            .padding(.horizontal, 11)
+            .frame(minHeight: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Brand.canvas)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Brand.border, lineWidth: 1)
+            )
+    }
+}
+
+private extension View {
+    func brandTextInput() -> some View {
+        modifier(BrandTextInputModifier())
+    }
+}
+
+/// Small custom icon action used inside setting rows and inputs.
+private struct InputIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 36, height: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(configuration.isPressed ? Brand.selected : Brand.canvas)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Brand.border, lineWidth: 1)
+            )
+    }
+}
+
 /// Flat keycap chip - mono label, hairline border (Langfuse keyboard hints).
 private struct KeyCap: View {
     let label: String
@@ -147,29 +193,31 @@ private struct BrandCard<Content: View>: View {
 // MARK: - Pages
 
 enum FlowPage: String, CaseIterable, Identifiable {
-    case home, ai, dictionary, snippets, agents, settings
+    case home, general, dictation, ai, dictionary, snippets, agents
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .home:       return "Home"
-        case .ai:         return "Langdock"
+        case .home:       return "Overview"
+        case .general:    return "General"
+        case .dictation:  return "Dictation"
+        case .ai:         return "AI"
         case .dictionary: return "Dictionary"
         case .snippets:   return "Snippets"
         case .agents:     return "Agents"
-        case .settings:   return "Settings"
         }
     }
 
     var icon: String {
         switch self {
         case .home:       return "square.grid.2x2"
+        case .general:    return "gearshape"
+        case .dictation:  return "waveform"
         case .ai:         return "sparkles"
         case .dictionary: return "text.book.closed"
         case .snippets:   return "text.quote"
         case .agents:     return "cpu"
-        case .settings:   return "gearshape"
         }
     }
 }
@@ -177,7 +225,9 @@ enum FlowPage: String, CaseIterable, Identifiable {
 // MARK: - Root
 
 struct SettingsView: View {
-    @State private var page: FlowPage = .home
+    // A window opened from “Settings…” should land on an actual preference
+    // category, never an overview that asks the user to find Settings again.
+    @State private var page: FlowPage = .general
 
     var body: some View {
         HStack(spacing: 0) {
@@ -192,11 +242,12 @@ struct SettingsView: View {
             Group {
                 switch page {
                 case .home:       HomePage(page: $page)
+                case .general:    GeneralSettingsPage()
+                case .dictation:  DictationSettingsPage()
                 case .ai:         AIPage()
                 case .dictionary: DictionaryPage()
                 case .snippets:   SnippetsPage()
                 case .agents:     AgentsPage()
-                case .settings:   SettingsPage()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -237,13 +288,22 @@ private struct FlowSidebar: View {
             .padding(.top, 44)   // clear the traffic lights (transparent titlebar)
             .padding(.bottom, 20)
 
-            ForEach([FlowPage.home, .ai, .dictionary, .snippets, .agents]) { item in
+            SidebarSectionHeading("App")
+            SidebarItem(item: .home, selection: $page)
+
+            SidebarSectionHeading("Preferences")
+                .padding(.top, 11)
+            ForEach([FlowPage.general, .dictation, .ai]) { item in
+                SidebarItem(item: item, selection: $page)
+            }
+
+            SidebarSectionHeading("Personalize")
+                .padding(.top, 11)
+            ForEach([FlowPage.dictionary, .snippets, .agents]) { item in
                 SidebarItem(item: item, selection: $page)
             }
 
             Spacer()
-
-            SidebarItem(item: .settings, selection: $page)
 
             if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                 Text("v\(version)")
@@ -255,6 +315,20 @@ private struct FlowSidebar: View {
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 12)
+    }
+}
+
+private struct SidebarSectionHeading: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(Brand.mono(9, .semibold))
+            .kerning(0.9)
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
     }
 }
 
@@ -759,13 +833,18 @@ private struct AIPage: View {
                 HStack {
                     if showAPIKey {
                         TextField("Paste Langdock API key", text: $store.settings.apiKey)
-                            .textFieldStyle(.roundedBorder)
+                            .brandTextInput()
                     } else {
                         SecureField("Paste Langdock API key", text: $store.settings.apiKey)
-                            .textFieldStyle(.roundedBorder)
+                            .brandTextInput()
                     }
-                    Button(showAPIKey ? "Hide" : "Show") { showAPIKey.toggle() }
-                        .buttonStyle(.borderless)
+                    Button {
+                        showAPIKey.toggle()
+                    } label: {
+                        Image(systemName: showAPIKey ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(InputIconButtonStyle())
+                    .help(showAPIKey ? "Hide API key" : "Show API key")
                 }
                 CaptionText("Without a key, transcription falls back to raw whisper output - no cleanup, no Talk to your screen.")
             }
@@ -826,17 +905,18 @@ private struct AIPage: View {
     }
 }
 
-// MARK: - Settings page
+// MARK: - Preference pages
 
-private struct SettingsPage: View {
+private struct GeneralSettingsPage: View {
     @ObservedObject private var store = SettingsStore.shared
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
-        let triggerLabel = store.settings.triggerKey.shortLabel
-
-        PageScaffold(title: "Settings") {
-            SettingsCard(title: "App") {
+        PageScaffold(
+            title: "General",
+            subtitle: "Startup, playback, and the overall Whisperino experience."
+        ) {
+            SettingsCard(title: "Startup") {
                 ToggleRow(label: "Launch at login", isOn: Binding(
                     get: { launchAtLogin },
                     set: { newValue in
@@ -850,40 +930,65 @@ private struct SettingsPage: View {
                         launchAtLogin = SMAppService.mainApp.status == .enabled
                     }
                 ))
-                Divider()
-                ToggleRow(label: "Sound effects on start / stop", isOn: $store.settings.soundEffectsEnabled)
+                CaptionText("Keep Whisperino ready in the menu bar after you sign in.")
             }
 
-            // Team Rafterino easter egg - the flag flies here whether the
-            // mode is on or not; the toggle decides if the pill sails.
-            SettingsCard(title: "Rafterino mode") {
+            SettingsCard(title: "Playback & feedback") {
+                ToggleRow(
+                    label: "Pause media while dictating",
+                    isOn: $store.settings.pauseMediaOnRecordingStart
+                )
+                Divider()
+                ToggleRow(label: "Sound effects on start / stop", isOn: $store.settings.soundEffectsEnabled)
+                CaptionText("Paused media resumes automatically when recording ends or is cancelled.")
+            }
+
+            SettingsCard(title: "Appearance") {
                 HStack(alignment: .center, spacing: 16) {
                     RafterinoFlag()
                         .frame(width: 64)
 
                     VStack(alignment: .leading, spacing: 8) {
                         ToggleRow(label: "Hoist the flag", isOn: $store.settings.rafterinoModeEnabled)
-                        CaptionText("The official Team Rafterino edition. The pill goes to sea: your voice makes ocean waves while you speak, and a little raft sails across while your words come ashore. In memory of the raft that held.")
+                        CaptionText("Rafterino mode gives the notch an ocean waveform and a tiny sailing raft.")
                     }
                 }
             }
+        }
+    }
+}
 
-            // Trigger key - let users pick an alternative if Fn is mapped to
-            // something else (emoji picker, system function, etc.)
-            SettingsCard(title: "Trigger key") {
-                HStack {
-                    Text("Press to dictate")
-                        .font(.system(size: 13))
-                    Spacer()
-                    Picker("", selection: $store.settings.triggerKey) {
-                        ForEach(TriggerKey.allCases) { key in
-                            Text(key.displayName).tag(key)
+private struct DictationSettingsPage: View {
+    @ObservedObject private var store = SettingsStore.shared
+
+    var body: some View {
+        let triggerLabel = store.settings.triggerKey.shortLabel
+
+        PageScaffold(
+            title: "Dictation",
+            subtitle: "Choose how recording starts, which languages to expect, and where text goes."
+        ) {
+            SettingsCard(title: "Languages") {
+                LanguageMultiSelector(selection: $store.settings.transcriptionLanguageCodes)
+            }
+
+            SettingsCard(title: "Recording shortcut") {
+                HStack(alignment: .top, spacing: 10) {
+                    ForEach(TriggerKey.allCases) { key in
+                        ChoiceCard(
+                            title: key == .fn ? "Function key" : "Option + D",
+                            detail: key == .fn
+                                ? "Hold Fn and speak. Release to submit."
+                                : "Hold ⌥D and speak. Release to submit.",
+                            selected: store.settings.triggerKey == key
+                        ) {
+                            store.settings.triggerKey = key
                         }
                     }
-                    .labelsHidden()
-                    .fixedSize()
                 }
-                CaptionText("The key combo you hold to start recording. Combos like ⌥D need Accessibility permission so the keystroke can be intercepted (no stray “∂” typed).")
+                .fixedSize(horizontal: false, vertical: true)
+
+                CaptionText("Option + D needs Accessibility permission so Whisperino can intercept the shortcut without typing “∂”.")
 
                 Divider().padding(.vertical, 4)
 
@@ -894,11 +999,15 @@ private struct SettingsPage: View {
                 ShortcutRow(keys: "esc", label: "Cancel")
             }
 
-            // Auto-submit - press Return after pasting so chat apps send the
-            // message on their own.
-            SettingsCard(title: "Auto-submit") {
+            SettingsCard(title: "Delivery") {
+                Text("Auto-submit in selected apps")
+                    .font(.system(size: 13, weight: .semibold))
+                CaptionText("After pasting a dictation, Whisperino presses Return in these apps so the message sends immediately.")
+
+                Divider().padding(.vertical, 2)
+
                 if store.autoSubmitApps.isEmpty {
-                    Text("No apps yet - add one below.")
+                    Text("No apps selected")
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
                         .padding(.vertical, 2)
@@ -938,6 +1047,288 @@ private struct SettingsPage: View {
     private func deleteAutoSubmit(_ app: AutoSubmitApp) {
         guard let index = store.autoSubmitApps.firstIndex(where: { $0.id == app.id }) else { return }
         store.removeAutoSubmitApps(at: [index])
+    }
+}
+
+/// A fully custom, inline multi-select instead of the platform Picker. The
+/// collapsed control reads like the rest of Whisperino's flat settings cards;
+/// expansion reveals a searchable two-column language surface without
+/// spawning an AppKit menu or visually leaving the page.
+private struct LanguageMultiSelector: View {
+    @Binding var selection: [String]
+    @State private var isExpanded = false
+    @State private var search = ""
+    @State private var hoveringTrigger = false
+
+    private var allOptions: [(code: String, name: String)] {
+        TranscriptionLanguageCatalog.localizedOptions
+    }
+
+    private var selectedOptions: [(code: String, name: String)] {
+        allOptions.filter { selection.contains($0.code) }
+    }
+
+    private var filteredOptions: [(code: String, name: String)] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return allOptions }
+        return allOptions.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || $0.code.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var helperText: String {
+        switch selection.count {
+        case 0:
+            return "Any language · automatic detection"
+        case 1:
+            return "Recognition is locked to this language"
+        default:
+            return "Automatic switching between your selected languages"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Button {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    isExpanded.toggle()
+                }
+                if !isExpanded { search = "" }
+            } label: {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Brand.ink)
+                        Image(systemName: "character.bubble.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Brand.card)
+                    }
+                    .frame(width: 30, height: 30)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Transcription languages")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text(helperText)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    if selectedOptions.isEmpty {
+                        LanguageChip(label: "AUTO")
+                    } else {
+                        HStack(spacing: 5) {
+                            ForEach(Array(selectedOptions.prefix(2)), id: \.code) { option in
+                                LanguageChip(label: option.code.uppercased())
+                            }
+                            if selectedOptions.count > 2 {
+                                LanguageChip(label: "+\(selectedOptions.count - 2)")
+                            }
+                        }
+                    }
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                }
+                .padding(.horizontal, 11)
+                .frame(height: 54)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(hoveringTrigger || isExpanded ? Brand.hover : Brand.canvas)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(isExpanded ? Brand.ink.opacity(0.42) : Brand.border, lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveringTrigger = $0 }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 9) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        TextField("Search languages", text: $search)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12.5))
+                        if !search.isEmpty {
+                            Button {
+                                search = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 11)
+                    .frame(height: 34)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Brand.card)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(Brand.border, lineWidth: 1)
+                    )
+
+                    ScrollView {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.flexible(), spacing: 8),
+                                GridItem(.flexible(), spacing: 8),
+                            ],
+                            spacing: 7
+                        ) {
+                            ForEach(filteredOptions, id: \.code) { option in
+                                LanguageChoiceRow(
+                                    code: option.code,
+                                    name: option.name,
+                                    isSelected: selection.contains(option.code),
+                                    action: { toggle(option.code) }
+                                )
+                            }
+                        }
+                        .padding(.vertical, 1)
+                    }
+                    .frame(height: 224)
+
+                    HStack {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.14)) {
+                                selection = []
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "waveform.badge.magnifyingglass")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text("Use any language")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .foregroundStyle(selection.isEmpty ? .tertiary : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(selection.isEmpty)
+
+                        Spacer()
+
+                        Text(selection.isEmpty ? "AUTO" : "\(selection.count) SELECTED")
+                            .font(Brand.mono(9.5, .semibold))
+                            .kerning(0.7)
+                            .foregroundStyle(.secondary)
+
+                        Button("Done") {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                isExpanded = false
+                            }
+                            search = ""
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                    }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Brand.canvas)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Brand.border, lineWidth: 1)
+                )
+                // Keep the panel spatially anchored below the trigger. A move
+                // transition made every row fly down from the top edge and
+                // felt like a detached menu instead of an inline control.
+                .transition(.opacity.combined(with: .scale(scale: 0.992, anchor: .top)))
+            }
+        }
+    }
+
+    private func toggle(_ code: String) {
+        withAnimation(.easeOut(duration: 0.13)) {
+            if let index = selection.firstIndex(of: code) {
+                selection.remove(at: index)
+            } else {
+                selection.append(code)
+            }
+        }
+    }
+}
+
+private struct LanguageChip: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(Brand.mono(9.5, .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Brand.selected)
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Brand.border, lineWidth: 1)
+            )
+    }
+}
+
+private struct LanguageChoiceRow: View {
+    let code: String
+    let name: String
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isSelected ? Brand.ink : Color.clear)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(isSelected ? Color.clear : Brand.border, lineWidth: 1)
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .foregroundStyle(Brand.card)
+                    }
+                }
+                .frame(width: 19, height: 19)
+
+                Text(name)
+                    .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(code.uppercased())
+                    .font(Brand.mono(9.5, .medium))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isSelected ? Brand.selected : (hovering ? Brand.hover : Brand.card))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(isSelected ? Brand.ink.opacity(0.28) : Brand.border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -1006,17 +1397,49 @@ private struct ToggleRow: View {
     var disabled = false
 
     var body: some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 13))
-                .foregroundStyle(disabled ? .secondary : .primary)
-            Spacer()
-            Toggle("", isOn: $isOn)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .labelsHidden()
-                .disabled(disabled)
+        Button {
+            guard !disabled else { return }
+            withAnimation(.easeOut(duration: 0.15)) {
+                isOn.toggle()
+            }
+        } label: {
+            HStack {
+                Text(label)
+                    .font(.system(size: 13))
+                    .foregroundStyle(disabled ? .secondary : .primary)
+                Spacer()
+                BrandSwitch(isOn: isOn, disabled: disabled)
+            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(label)
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+private struct BrandSwitch: View {
+    let isOn: Bool
+    let disabled: Bool
+
+    var body: some View {
+        ZStack {
+            Capsule(style: .continuous)
+                .fill(isOn ? Brand.ink : Brand.selected)
+            Capsule(style: .continuous)
+                .stroke(isOn ? Color.clear : Brand.border, lineWidth: 1)
+
+            Circle()
+                .fill(isOn ? Brand.card : Color.secondary.opacity(0.7))
+                .frame(width: 13, height: 13)
+                .shadow(color: .black.opacity(isOn ? 0.18 : 0.08), radius: 1, y: 0.5)
+                .offset(x: isOn ? 7 : -7)
+        }
+        .frame(width: 34, height: 19)
+        .opacity(disabled ? 0.42 : 1)
+        .animation(.easeOut(duration: 0.15), value: isOn)
     }
 }
 
@@ -1209,7 +1632,7 @@ private struct DictionaryEditorSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             TextField("e.g. Langdock  or  langdonk = Langdock", text: $term)
-                .textFieldStyle(.roundedBorder)
+                .brandTextInput()
         }
     }
 
@@ -1298,7 +1721,7 @@ private struct SnippetEditorSheet: View {
             onSubmit: submit
         ) {
             TextField("Snippet name - what you'll say", text: $name)
-                .textFieldStyle(.roundedBorder)
+                .brandTextInput()
 
             TextEditor(text: $text)
                 .font(.system(size: 13, design: .monospaced))
@@ -1409,9 +1832,9 @@ private struct AgentEditorSheet: View {
             onSubmit: submit
         ) {
             TextField("Agent name - what you'll say", text: $name)
-                .textFieldStyle(.roundedBorder)
+                .brandTextInput()
             TextField("Agent ID", text: $agentId)
-                .textFieldStyle(.roundedBorder)
+                .brandTextInput()
                 .font(Brand.mono(12))
         }
     }

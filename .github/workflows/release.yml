@@ -30,4 +30,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "Whisperino-${GITHUB_REF_NAME}.zip" \
             --title "Whisperino ${GITHUB_REF_NAME}" \
-            --generate-notes
+            --notes-file RELEASE_NOTES.md

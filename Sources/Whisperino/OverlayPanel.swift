@@ -4,26 +4,44 @@ import SwiftUI
 
 class OverlayPanel {
     private let panel: NSPanel
+    /// A separate, notch-sized window remains available while the main overlay
+    /// is hidden. Keeping this hit target tiny prevents a transparent 420pt
+    /// panel from swallowing clicks in the app underneath it.
+    private let notchHotspotPanel: NSPanel
+    private var notchHoverView: NotchHoverTargetView?
     private let appState: AppState
     private var isVisible = false
     private var dismissGeneration = 0
-    private var cancellable: AnyCancellable?
+    private var cancellables = Set<AnyCancellable>()
     private var trackTimer: Timer?
     /// The origin we last asked the panel to move to. Compared against (rather
     /// than the live frame) so the 60fps tracker doesn't restart an in-flight
     /// slide every tick - during an animator move `panel.frame.origin` reports
     /// the intermediate value, not the destination.
     private var targetOrigin: NSPoint?
+    private var screenChangeObservers: [NSObjectProtocol] = []
 
     /// Base panel height with no picker expanded. The transparent window is
     /// taller than the listening pill so native assistant cards can grow down
     /// from the notch without resizing the NSPanel mid-transition.
     private static let baseHeight: CGFloat = 380
+    private static let panelWidth: CGFloat = 420
+    /// A centered virtual island competes with macOS's microphone privacy
+    /// indicator on crowded external-display menu bars. Keep every external
+    /// state on one slightly left-biased anchor so the system indicator has a
+    /// reliable clear lane without any movement between idle and recording.
+    private static let externalIslandHorizontalOffset: CGFloat = -28
 
     init(appState: AppState) {
         self.appState = appState
+        notchHotspotPanel = NSPanel(
+            contentRect: .zero,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: Self.baseHeight),
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.baseHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -58,20 +76,131 @@ class OverlayPanel {
         hostingView.layer?.isOpaque = false
         panel.contentView = hostingView
 
+        configureNotchHotspot()
+
         // Resize panel whenever picker visibility or device count changes.
         // Uses the exact same formula as OverlayView.panelContentHeight.
-        cancellable = Publishers.CombineLatest(
+        Publishers.CombineLatest(
             appState.$showingInputPicker.removeDuplicates(),
             appState.$inputDevices.map(\.count).removeDuplicates()
         )
         .sink { [weak self] pickerShowing, deviceCount in
             self?.updatePanelHeight(pickerShowing: pickerShowing, deviceCount: deviceCount)
         }
+        .store(in: &cancellables)
 
     }
 
     deinit {
         trackTimer?.invalidate()
+        for observer in screenChangeObservers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+    }
+
+    /// VoiceOS-style direct manipulation: moving behind the physical notch
+    /// gives tactile feedback, and clicking starts a normal dictation take.
+    /// Hover widens the hardware silhouette and reveals a small activity lip,
+    /// matching the legible-but-attached VoiceOS treatment.
+    private func configureNotchHotspot() {
+        notchHotspotPanel.level = .screenSaver
+        notchHotspotPanel.isOpaque = false
+        notchHotspotPanel.backgroundColor = .clear
+        notchHotspotPanel.hasShadow = false
+        notchHotspotPanel.hidesOnDeactivate = false
+        notchHotspotPanel.isMovableByWindowBackground = false
+        notchHotspotPanel.animationBehavior = .none
+        notchHotspotPanel.collectionBehavior = [
+            .canJoinAllSpaces,
+            .stationary,
+            .fullScreenAuxiliary,
+        ]
+        notchHotspotPanel.acceptsMouseMovedEvents = true
+
+        let hoverView = NotchHoverTargetView { [weak self] in
+            self?.appState.toggleRecording()
+        }
+        notchHoverView = hoverView
+        notchHotspotPanel.contentView = hoverView
+
+        // The discovery lip belongs only to the idle hardware notch. During a
+        // take or transcription, the live surface already communicates state;
+        // revealing another hover layer on top made the notch look duplicated.
+        appState.$state
+            .map { state in
+                if case .idle = state { return true }
+                return false
+            }
+            .removeDuplicates()
+            .sink { [weak hoverView] enabled in
+                hoverView?.setInteractionEnabled(enabled)
+            }
+            .store(in: &cancellables)
+
+        positionNotchHotspot()
+        if notchHotspotPanel.contentView != nil {
+            notchHotspotPanel.orderFront(nil)
+        }
+
+        let center = NotificationCenter.default
+        screenChangeObservers.append(
+            center.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in self?.positionNotchHotspot() }
+        )
+        screenChangeObservers.append(
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.activeSpaceDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in self?.positionNotchHotspot() }
+        )
+    }
+
+    private func positionNotchHotspot() {
+        guard let screen = preferredOverlayScreen() else {
+            notchHotspotPanel.orderOut(nil)
+            return
+        }
+
+        let hasNotch = Self.hasPhysicalNotch(screen)
+        let isExternal = Self.isExternalDisplay(screen)
+        guard hasNotch || isExternal else {
+            notchHotspotPanel.orderOut(nil)
+            return
+        }
+
+        let width: CGFloat
+        let height: CGFloat
+        if isExternal {
+            // A virtual, always-visible top-edge island. The panel is larger
+            // than the resting silhouette so the shell can grow on hover
+            // without moving or resizing the NSWindow hit target.
+            notchHoverView?.setStyle(.externalTopEdge)
+            width = 244
+            height = 36
+        } else {
+            notchHoverView?.setStyle(.physicalNotch)
+            let inset = max(screen.safeAreaInsets.top, 28)
+            let hardwareWidth = Self.physicalNotchWidth(on: screen)
+            // Hover is only a slight physical expansion of the real notch.
+            width = hardwareWidth + 36
+            height = inset + 16
+        }
+        notchHotspotPanel.setFrame(
+            NSRect(
+                x: screen.frame.midX - width / 2
+                    + (isExternal ? Self.externalIslandHorizontalOffset : 0),
+                y: screen.frame.maxY - height,
+                width: width,
+                height: height
+            ),
+            display: true
+        )
+        notchHotspotPanel.orderFront(nil)
     }
 
     /// The pill rides a `.canJoinAllSpaces` panel, so it follows the user
@@ -233,32 +362,84 @@ class OverlayPanel {
         }
     }
 
-    /// Prefer the physical MacBook notch even when the focused window is on an
-    /// external monitor. If the built-in display is unavailable (for example,
-    /// clamshell mode), emulate the same focus area just below the active
-    /// monitor's menu bar.
+    /// A connected external display owns Whisperino's single overlay. This
+    /// keeps the live surface beside the work being dictated and avoids a
+    /// duplicate island on the MacBook display. Without an external display,
+    /// the physical MacBook notch remains the preferred anchor.
     private func computeTargetOrigin() -> NSPoint? {
         let panelSize = panel.frame.size
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let window = ScreenCapture.focusedWindowFrame(pid: pid)
-
-        let activeScreen: NSScreen? = {
-            if let mx = window?.midX,
-               let hit = NSScreen.screens.first(where: { $0.frame.minX <= mx && mx <= $0.frame.maxX }) {
-                return hit
-            }
-            return NSScreen.main ?? NSScreen.screens.first
-        }()
-        let notchScreen = NSScreen.screens.first(where: Self.hasPhysicalNotch)
-        let screen = notchScreen ?? activeScreen
-        guard let screen else { return nil }
-        let topEdge = notchScreen == nil ? screen.visibleFrame.maxY - 8 : screen.frame.maxY
+        guard let screen = preferredOverlayScreen() else { return nil }
+        let hasNotch = Self.hasPhysicalNotch(screen)
+        let isExternal = Self.isExternalDisplay(screen)
+        let usesTopEdgeSurface = hasNotch || isExternal
+        let notchInset = usesTopEdgeSurface
+            ? (hasNotch ? max(screen.safeAreaInsets.top, 28) : 28)
+            : 0
+        if appState.overlayHasPhysicalNotch != hasNotch {
+            appState.overlayHasPhysicalNotch = hasNotch
+        }
+        if appState.overlayUsesTopEdgeSurface != usesTopEdgeSurface {
+            appState.overlayUsesTopEdgeSurface = usesTopEdgeSurface
+        }
+        if abs(appState.overlayNotchInset - notchInset) > 0.5 {
+            appState.overlayNotchInset = notchInset
+        }
+        let centerWidth: CGFloat = hasNotch
+            ? Self.physicalNotchWidth(on: screen)
+            // The idle discovery tab remains 188pt wide, but once recording
+            // starts the virtual "hardware" center contracts to 160pt. With
+            // two fixed 32pt control wings the full live surface is 224pt,
+            // buying 18pt of clearance per side versus the former 260pt
+            // surface without introducing any horizontal panel movement.
+            : (isExternal ? 160 : 170)
+        if abs(appState.overlayPhysicalNotchWidth - centerWidth) > 0.5 {
+            appState.overlayPhysicalNotchWidth = centerWidth
+        }
+        let topEdge = usesTopEdgeSurface ? screen.frame.maxY : screen.visibleFrame.maxY - 8
         let x = screen.frame.midX - panelSize.width / 2
+            + (isExternal ? Self.externalIslandHorizontalOffset : 0)
         let clampedX = min(
             max(x, screen.frame.minX + 8),
             screen.frame.maxX - panelSize.width - 8
         )
         return NSPoint(x: clampedX, y: topEdge - panelSize.height)
+    }
+
+    private func preferredOverlayScreen() -> NSScreen? {
+        let screens = NSScreen.screens
+        let activeScreen: NSScreen? = {
+            let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let window = ScreenCapture.focusedWindowFrame(pid: pid)
+            if let window,
+               let hit = screens.first(where: {
+                   $0.frame.contains(CGPoint(x: window.midX, y: window.midY))
+               }) {
+                return hit
+            }
+            return NSScreen.main ?? screens.first
+        }()
+
+        let externalScreens = screens.filter(Self.isExternalDisplay)
+        if !externalScreens.isEmpty {
+            if let activeScreen,
+               externalScreens.contains(where: { $0 === activeScreen }) {
+                return activeScreen
+            }
+            if let main = NSScreen.main, Self.isExternalDisplay(main) {
+                return main
+            }
+            return externalScreens.first
+        }
+
+        return screens.first(where: Self.hasPhysicalNotch) ?? activeScreen
+    }
+
+    private static func isExternalDisplay(_ screen: NSScreen) -> Bool {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        guard let displayID = (screen.deviceDescription[key] as? NSNumber)?.uint32Value else {
+            return false
+        }
+        return CGDisplayIsBuiltin(displayID) == 0
     }
 
     private static func hasPhysicalNotch(_ screen: NSScreen) -> Bool {
@@ -268,6 +449,12 @@ class OverlayPanel {
         return screen.safeAreaInsets.top > 0
             || screen.auxiliaryTopLeftArea != nil
             || screen.auxiliaryTopRightArea != nil
+    }
+
+    private static func physicalNotchWidth(on screen: NSScreen) -> CGFloat {
+        guard let left = screen.auxiliaryTopLeftArea,
+              let right = screen.auxiliaryTopRightArea else { return 210 }
+        return max(170, right.minX - left.maxX)
     }
 
     /// Move the panel one frame's worth toward `targetOrigin`. Driven by the
@@ -289,4 +476,367 @@ class OverlayPanel {
         panel.setFrameOrigin(NSPoint(x: cur.x + dx * f, y: cur.y + dy * f))
     }
 
+}
+
+/// AppKit owns the idle notch hit target so it remains clickable even while
+/// SwiftUI's recording surface is not on screen.
+private final class NotchHoverTargetView: NSView {
+    enum Style: Equatable {
+        case physicalNotch
+        case externalTopEdge
+    }
+
+    private let onClick: () -> Void
+    private let shellLayer = CAShapeLayer()
+    private let innerBloomLayer = CAGradientLayer()
+    private let innerBloomMaskLayer = CAShapeLayer()
+    private let hoverContourLayer = CAShapeLayer()
+    private var trackingArea: NSTrackingArea?
+    private var hovering = false
+    private var interactionEnabled = true
+    private var lastHapticTime: TimeInterval = 0
+    private var style: Style = .physicalNotch
+
+    init(onClick: @escaping () -> Void) {
+        self.onClick = onClick
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        shellLayer.fillColor = NSColor.black.cgColor
+        layer?.addSublayer(shellLayer)
+
+        // VoiceOS-style broad bloom inside the lower part of the black
+        // surface. The thin outer stroke alone is almost invisible against a
+        // bright menu bar; this soft vertical falloff makes hover legible.
+        innerBloomLayer.colors = [
+            NSColor.white.withAlphaComponent(0.27).cgColor,
+            NSColor.white.withAlphaComponent(0.11).cgColor,
+            NSColor.clear.cgColor,
+        ]
+        innerBloomLayer.locations = [0, 0.34, 1]
+        innerBloomLayer.startPoint = CGPoint(x: 0.5, y: 0)
+        innerBloomLayer.endPoint = CGPoint(x: 0.5, y: 1)
+        innerBloomLayer.mask = innerBloomMaskLayer
+        innerBloomLayer.opacity = 0
+        layer?.addSublayer(innerBloomLayer)
+
+        hoverContourLayer.fillColor = NSColor.clear.cgColor
+        hoverContourLayer.strokeColor = NSColor.white.withAlphaComponent(0.24).cgColor
+        hoverContourLayer.lineWidth = 1
+        hoverContourLayer.lineJoin = .round
+        hoverContourLayer.shadowColor = NSColor.white.cgColor
+        hoverContourLayer.shadowOpacity = 0.22
+        hoverContourLayer.shadowRadius = 8
+        hoverContourLayer.shadowOffset = .zero
+        hoverContourLayer.opacity = 0
+        layer?.addSublayer(hoverContourLayer)
+        alphaValue = 0
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Start dictation from notch")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    func setStyle(_ style: Style) {
+        guard self.style != style else { return }
+        self.style = style
+        hovering = false
+        stopHoverGlow()
+        layer?.removeAllAnimations()
+        innerBloomLayer.opacity = 0
+        hoverContourLayer.opacity = 0
+        alphaValue = interactionEnabled && style == .externalTopEdge ? 1 : 0
+        setAccessibilityLabel(
+            style == .externalTopEdge
+                ? "Start dictation from top edge"
+                : "Start dictation from notch"
+        )
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        shellLayer.frame = bounds
+        innerBloomLayer.frame = bounds
+        innerBloomMaskLayer.frame = bounds
+        hoverContourLayer.frame = bounds
+        updateShellGeometry(animated: false)
+    }
+
+    private func shellRect(hovered: Bool) -> CGRect {
+        switch style {
+        case .physicalNotch:
+            return CGRect(
+                x: bounds.minX,
+                y: bounds.minY + 10,
+                width: bounds.width,
+                height: max(0, bounds.height - 10)
+            )
+        case .externalTopEdge:
+            let width = min(bounds.width, hovered ? 226 : 188)
+            let depth: CGFloat = hovered ? 20 : 8
+            return CGRect(
+                x: bounds.midX - width / 2,
+                y: bounds.maxY - depth,
+                width: width,
+                height: depth
+            )
+        }
+    }
+
+    private func updateShellGeometry(animated: Bool) {
+        let rect = shellRect(hovered: hovering)
+        setPath(hoverShellPath(in: rect), on: shellLayer, animated: animated, key: "shellMorph")
+        setPath(hoverShellPath(in: rect), on: innerBloomMaskLayer, animated: animated, key: "bloomMorph")
+        // Leave the display-edge segment open. Closing this path draws a pale
+        // one-pixel line across the absolute top of the screen.
+        setPath(hoverOpenContourPath(in: rect), on: hoverContourLayer, animated: animated, key: "contourMorph")
+    }
+
+    private func setPath(
+        _ path: CGPath,
+        on shapeLayer: CAShapeLayer,
+        animated: Bool,
+        key: String
+    ) {
+        let oldPath = shapeLayer.presentation()?.path ?? shapeLayer.path
+        shapeLayer.path = path
+        guard animated, let oldPath else { return }
+        let animation = CABasicAnimation(keyPath: "path")
+        animation.fromValue = oldPath
+        animation.toValue = path
+        animation.duration = 0.18
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        shapeLayer.add(animation, forKey: key)
+    }
+
+    private func hoverShellPath(in rect: CGRect) -> CGPath {
+        // Match `NativeNotchShape` in OverlayView: the panel begins slightly
+        // wider at the menu-bar edge, then reverse-curves inward into the
+        // body. Hover and live transcription must read as the same object.
+        let topRadius: CGFloat = min(10, rect.width * 0.15, rect.height * 0.42)
+        let bottomRadius: CGFloat = min(14, max(1, rect.height - topRadius))
+        let bodyLeft = rect.minX + topRadius
+        let bodyRight = rect.maxX - topRadius
+        let path = CGMutablePath()
+
+        // AppKit's y-axis points upward: maxY is the display's top edge.
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyLeft, y: rect.maxY - topRadius),
+            control: CGPoint(x: bodyLeft, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: bodyLeft, y: rect.minY + bottomRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyLeft + bottomRadius, y: rect.minY),
+            control: CGPoint(x: bodyLeft, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: bodyRight - bottomRadius, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyRight, y: rect.minY + bottomRadius),
+            control: CGPoint(x: bodyRight, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: bodyRight, y: rect.maxY - topRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.maxY),
+            control: CGPoint(x: bodyRight, y: rect.maxY)
+        )
+        path.closeSubpath()
+        return path
+    }
+
+    private func hoverOpenContourPath(in rect: CGRect) -> CGPath {
+        let topRadius: CGFloat = min(10, rect.width * 0.15, rect.height * 0.42)
+        let bottomRadius: CGFloat = min(14, max(1, rect.height - topRadius))
+        let bodyLeft = rect.minX + topRadius
+        let bodyRight = rect.maxX - topRadius
+        let path = CGMutablePath()
+
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyLeft, y: rect.maxY - topRadius),
+            control: CGPoint(x: bodyLeft, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: bodyLeft, y: rect.minY + bottomRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyLeft + bottomRadius, y: rect.minY),
+            control: CGPoint(x: bodyLeft, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: bodyRight - bottomRadius, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyRight, y: rect.minY + bottomRadius),
+            control: CGPoint(x: bodyRight, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: bodyRight, y: rect.maxY - topRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.maxY),
+            control: CGPoint(x: bodyRight, y: rect.maxY)
+        )
+        return path
+    }
+
+    override func updateTrackingAreas() {
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [
+                .mouseEnteredAndExited,
+                .mouseMoved,
+                .activeAlways,
+                .inVisibleRect,
+            ],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        beginHoverIfNeeded()
+    }
+
+    /// Transparent, non-activating panels can occasionally begin receiving
+    /// movement without AppKit first delivering `mouseEntered`. Treat the
+    /// first movement as the same user gesture so the haptic is reliable.
+    override func mouseMoved(with event: NSEvent) {
+        beginHoverIfNeeded()
+    }
+
+    private func beginHoverIfNeeded() {
+        guard interactionEnabled, !hovering else { return }
+        hovering = true
+        performHoverHaptic()
+        updateShellGeometry(animated: true)
+        startHoverGlow()
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.14)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        innerBloomLayer.opacity = 1
+        hoverContourLayer.opacity = 1
+        CATransaction.commit()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.14
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = 1
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        updateShellGeometry(animated: true)
+        stopHoverGlow()
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.16)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+        innerBloomLayer.opacity = 0
+        hoverContourLayer.opacity = 0
+        CATransaction.commit()
+        guard style == .physicalNotch else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            animator().alphaValue = 0
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard interactionEnabled else { return }
+        guard event.buttonNumber == 0 else { return }
+        // A second, firmer confirmation distinguishes the click that starts a
+        // take from merely discovering the notch hit target on hover.
+        performClickHaptic()
+        onClick()
+    }
+
+    /// One deliberate, firm native tick. AppKit exposes patterns rather than
+    /// an intensity scalar; `.generic` is more pronounced than `.levelChange`
+    /// while preserving the single-pulse feel (no accidental double haptic).
+    private func performHoverHaptic() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastHapticTime >= 0.28 else { return }
+        lastHapticTime = now
+
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            .generic,
+            performanceTime: .now
+        )
+    }
+
+    private func performClickHaptic() {
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            .generic,
+            performanceTime: .now
+        )
+        lastHapticTime = ProcessInfo.processInfo.systemUptime
+    }
+
+    func setInteractionEnabled(_ enabled: Bool) {
+        interactionEnabled = enabled
+        hovering = false
+        stopHoverGlow()
+        layer?.removeAllAnimations()
+        innerBloomLayer.opacity = 0
+        hoverContourLayer.opacity = 0
+        alphaValue = enabled && style == .externalTopEdge ? 1 : 0
+        updateShellGeometry(animated: false)
+    }
+
+    private func startHoverGlow() {
+        guard innerBloomLayer.animation(forKey: "bloomBreathe") == nil else { return }
+
+        let bloomBreathe = CABasicAnimation(keyPath: "opacity")
+        bloomBreathe.fromValue = 0.78
+        bloomBreathe.toValue = 1.0
+        bloomBreathe.duration = 2.0
+        bloomBreathe.autoreverses = true
+        bloomBreathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        bloomBreathe.repeatCount = .infinity
+        innerBloomLayer.add(bloomBreathe, forKey: "bloomBreathe")
+
+        let edgeBreathe = CABasicAnimation(keyPath: "opacity")
+        edgeBreathe.fromValue = 0.82
+        edgeBreathe.toValue = 1.0
+        edgeBreathe.duration = 2.0
+        edgeBreathe.autoreverses = true
+        edgeBreathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        edgeBreathe.repeatCount = .infinity
+        hoverContourLayer.add(edgeBreathe, forKey: "edgeBreathe")
+    }
+
+    private func stopHoverGlow() {
+        innerBloomLayer.removeAnimation(forKey: "bloomBreathe")
+        hoverContourLayer.removeAnimation(forKey: "edgeBreathe")
+    }
+
+    /// Used only by the environment-gated visual QA window so it renders the
+    /// production AppKit hover layers rather than a hand-built approximation.
+    func revealForVisualQA() {
+        beginHoverIfNeeded()
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// Production-layer factory for `NotchVisualQAPreview`. Returning `NSView`
+/// keeps the private hover implementation out of the rest of the app surface.
+func makeNotchHoverVisualQAView() -> NSView {
+    let view = NotchHoverTargetView(onClick: {})
+    view.frame = NSRect(x: 0, y: 0, width: 246, height: 48)
+    view.layoutSubtreeIfNeeded()
+    view.revealForVisualQA()
+    return view
+}
+
+func makeExternalTopEdgeVisualQAView(hovered: Bool) -> NSView {
+    let view = NotchHoverTargetView(onClick: {})
+    view.frame = NSRect(x: 0, y: 0, width: 244, height: 36)
+    view.setStyle(.externalTopEdge)
+    view.layoutSubtreeIfNeeded()
+    if hovered { view.revealForVisualQA() }
+    return view
 }

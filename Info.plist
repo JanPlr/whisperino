@@ -26,5 +26,7 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Whisperino needs microphone access to transcribe your voice.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Whisperino needs calendar access only when you approve saving a spoken event.</string>
 </dict>
 </plist>

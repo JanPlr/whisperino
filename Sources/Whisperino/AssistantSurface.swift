@@ -10,8 +10,22 @@ struct LocalFileResult: Identifiable, Equatable, Sendable {
     let path: String
     let detail: String
     let symbolName: String
+    var sizeLabel: String? = nil
+    var modifiedLabel: String? = nil
 
     var url: URL { URL(fileURLWithPath: path) }
+}
+
+struct CalendarEventDraft: Equatable, Sendable {
+    let title: String
+    let start: Date
+    let end: Date
+    let attendeeEmails: [String]
+    let location: String?
+}
+
+struct WebSearchDraft: Equatable, Sendable {
+    let query: String
 }
 
 /// The compact, native card shown below the notch after a tool call. Keeping
@@ -20,6 +34,8 @@ struct LocalFileResult: Identifiable, Equatable, Sendable {
 enum AssistantCard: Equatable {
     case fileResults(query: String, results: [LocalFileResult])
     case confirmOpen(LocalFileResult)
+    case calendarDraft(CalendarEventDraft)
+    case webSearch(WebSearchDraft)
     case message(symbol: String, title: String, detail: String)
 }
 
@@ -125,7 +141,17 @@ enum LocalFinderTool {
                     name: url.lastPathComponent,
                     path: path,
                     detail: "\(kind) · \(parent)",
-                    symbolName: isDirectory ? "folder.fill" : symbol(for: extensionName)
+                    symbolName: isDirectory ? "folder.fill" : symbol(for: extensionName),
+                    sizeLabel: values?.fileSize.map {
+                        ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+                    },
+                    modifiedLabel: values?.contentModificationDate.map {
+                        DateFormatter.localizedString(
+                            from: $0,
+                            dateStyle: .short,
+                            timeStyle: .short
+                        )
+                    }
                 )
             }
             .prefix(limit)

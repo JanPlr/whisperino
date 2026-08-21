@@ -1,119 +1,23 @@
 import AppKit
 import Foundation
 
-/// Current phase of agent execution, displayed in the overlay
-enum AgentPhase: Equatable {
-    case uploadingAttachments
-    case thinking
-    case toolCall(name: String)
-    case readingDocuments
-    case generating
-
-    var displayText: String {
-        switch self {
-        case .uploadingAttachments:
-            return "Uploading attachments\u{2026}"
-        case .thinking:
-            return "Thinking\u{2026}"
-        case .toolCall(let name):
-            switch name {
-            case "webSearch":
-                return "Searching the web\u{2026}"
-            case "dataAnalyst":
-                return "Analyzing data\u{2026}"
-            case "imageGeneration":
-                return "Generating image\u{2026}"
-            case "canvas":
-                return "Working on canvas\u{2026}"
-            default:
-                return "Using \(name)\u{2026}"
-            }
-        case .readingDocuments:
-            return "Reading documents\u{2026}"
-        case .generating:
-            return "Generating response\u{2026}"
-        }
-    }
-
-    /// SF Symbol that represents this phase in the chat step timeline.
-    /// Tool names from the agent API arrive in snake_case (`web_search`)
-    /// or camelCase (`webSearch`) depending on the backend revision -
-    /// normalising to a key without separators lets one switch handle
-    /// both shapes.
-    var stepIcon: String {
-        switch self {
-        case .uploadingAttachments: return "paperclip"
-        case .thinking: return "brain"
-        case .toolCall(let name):
-            switch Self.normalizedToolKey(name) {
-            case "websearch", "search", "browse", "browsing": return "globe"
-            case "openurl", "fetchurl", "url", "browser": return "link"
-            case "dataanalyst", "codeinterpreter": return "chart.bar"
-            case "imagegeneration", "imagegen": return "photo"
-            case "canvas": return "rectangle.and.pencil.and.ellipsis"
-            case "readfile", "filereader": return "doc.text"
-            default: return "hammer"
-            }
-        case .readingDocuments: return "doc.text"
-        case .generating: return "sparkle"
-        }
-    }
-
-    /// Title-case label for the step timeline. No trailing ellipsis -
-    /// the timeline visualises in-flight vs. completed via icon state,
-    /// not punctuation.
-    var stepTitle: String {
-        switch self {
-        case .uploadingAttachments: return "Uploading attachments"
-        case .thinking: return "Thinking"
-        case .toolCall(let name):
-            switch Self.normalizedToolKey(name) {
-            case "websearch", "search", "browse", "browsing": return "Searching the web"
-            case "openurl", "fetchurl", "url", "browser": return "Opening link"
-            case "dataanalyst", "codeinterpreter": return "Analyzing data"
-            case "imagegeneration", "imagegen": return "Generating image"
-            case "canvas": return "Working on canvas"
-            case "readfile", "filereader": return "Reading file"
-            default:
-                let pretty = name
-                    .replacingOccurrences(of: "_", with: " ")
-                    .replacingOccurrences(of: "-", with: " ")
-                return "Using \(pretty)"
-            }
-        case .readingDocuments: return "Reading documents"
-        case .generating: return "Generating response"
-        }
-    }
-
-    private static func normalizedToolKey(_ name: String) -> String {
-        name.lowercased()
-            .replacingOccurrences(of: "_", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: " ", with: "")
-    }
-}
-
 struct AgentClient {
     private let completionsEndpoint = URL(string: "https://api.langdock.com/agent/v1/chat/completions")!
     private let uploadEndpoint = URL(string: "https://api.langdock.com/attachment/v1/upload")!
     private let timeout: TimeInterval = 120
 
-    /// Execute an agent request with streaming.
-    /// Calls `onStatusUpdate` when the agent phase changes, returns the final text output.
+    /// Execute an agent request with streaming and return its final text.
     func execute(
         agentId: String,
         userMessage: String,
         attachments: [AttachedContext] = [],
-        apiKey: String,
-        onStatusUpdate: @escaping @Sendable (AgentPhase) -> Void
+        apiKey: String
     ) async throws -> String {
         // Upload image attachments and collect IDs; inline text into the message
         var attachmentIds: [String] = []
         var textContexts: [String] = []
 
         if !attachments.isEmpty {
-            onStatusUpdate(.uploadingAttachments)
-
             for (i, ctx) in attachments.enumerated() {
                 switch ctx.content {
                 case .text(let text):
@@ -166,8 +70,6 @@ struct AgentClient {
         }
 
         var collectedText = ""
-        var currentPhase: AgentPhase = .thinking
-        onStatusUpdate(currentPhase)
 
         for try await line in bytes.lines {
             // SSE format: "data: {JSON}" or "data: [DONE]"
@@ -182,34 +84,8 @@ struct AgentClient {
                 continue
             }
 
-            switch type {
-            case "text-delta":
-                if let delta = json["delta"] as? String {
-                    collectedText += delta
-                    if currentPhase != .generating {
-                        currentPhase = .generating
-                        onStatusUpdate(currentPhase)
-                    }
-                }
-
-            case "tool-input-start":
-                if let toolName = json["toolName"] as? String {
-                    let newPhase = AgentPhase.toolCall(name: toolName)
-                    if newPhase != currentPhase {
-                        currentPhase = newPhase
-                        onStatusUpdate(currentPhase)
-                    }
-                }
-
-            case "tool-output-available":
-                // Tool finished, back to thinking for next step
-                if currentPhase != .thinking {
-                    currentPhase = .thinking
-                    onStatusUpdate(currentPhase)
-                }
-
-            default:
-                break
+            if type == "text-delta", let delta = json["delta"] as? String {
+                collectedText += delta
             }
         }
 

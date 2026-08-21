@@ -53,6 +53,21 @@ After install, grant two permissions:
 
 If you've configured agents in Settings → Agents, mention an agent's name during your request to route it there instead.
 
+AI mode also supports typed tools with native notch cards:
+
+- **Finder:** “Find my tax PDF.” Spotlight runs on-device and displays a local
+  file table. Opening a result requires a second confirmation.
+- **Calendar:** “Schedule a design review meeting tomorrow at 2 PM.” Whisperino
+  shows the parsed title, time, attendees, and location before **Save** writes
+  the event to macOS Calendar.
+- **Web:** “Find and open Ada Lovelace on LinkedIn.” Whisperino previews the
+  exact search before **Search** opens the default browser.
+
+The screen-aware planner may use the captured screen to resolve references such
+as “this person,” but screenshots cannot authorize actions. The planner can
+only emit registered tool IDs and validated arguments; every operation that
+writes data or opens another app waits for explicit confirmation.
+
 ## Long recordings
 
 There's no practical length limit. While you talk, the recording is rotated into ~40s chunks (cut at silence, so no clipped words) and each finished chunk is transcribed in the background. When you stop, only the last chunk still needs processing - a 30-minute take resolves in seconds, and the pill shows live progress (`4/5`) plus a rolling preview of the text so far.
@@ -67,7 +82,7 @@ Nothing gets lost:
 
 Click the menu bar icon → **Settings**.
 
-- **General**: launch at login · sound effects · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
+- **General**: launch at login · pause and resume playing media around dictation · custom multi-select transcription languages (or automatic detection) · sound effects · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
 - **Dictionary**: terms the LLM should always spell correctly (`Langdock` or `langdonk = Langdock` mappings)
 - **Snippets**: reusable text blocks
 - **History**: last 50 transcriptions
@@ -97,7 +112,7 @@ cd whisperino && git pull && ./build.sh
 ./release.sh 1.2.0
 ```
 
-That's it. [release.sh](release.sh) bumps the version in `Info.plist`, commits, tags `v1.2.0`, and pushes. The pushed tag triggers GitHub Actions ([release.yml](.github/workflows/release.yml)), which builds the app (version stamped from the tag), zips it, and publishes a GitHub Release with auto-generated notes. Installed apps pick it up on their next check.
+That's it. [release.sh](release.sh) bumps the version in `Info.plist`, commits, tags `v1.2.0`, and pushes. The pushed tag triggers GitHub Actions ([release.yml](.github/workflows/release.yml)), which builds the app (version stamped from the tag), zips it, and publishes a GitHub Release using the curated notes in [RELEASE_NOTES.md](RELEASE_NOTES.md). Installed apps pick it up on their next check.
 
 The committed `Info.plist` version is the source of truth, kept in lockstep with the tag — so a `git clone`, a worktree, or even a "Download ZIP" build all report the correct version, not `0.0.0`.
 

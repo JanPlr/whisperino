@@ -1,6 +1,6 @@
 # Whisperino voice assistant rebuild
 
-Status: implementation started on `codex/voiceos-rebuild`  
+Status: Phase 1 complete; Phase 2 typed tools and confirmation runtime live on `codex/voiceos-rebuild`
 Research date: 2026-08-12
 
 ## Product thesis
@@ -223,7 +223,7 @@ release/Escape recovers the UI; debug and release builds pass.
 - Local Finder search via Spotlight.
 - Explicit confirmation before opening a result.
 
-Acceptance: “Find my tax PDF” searches locally, returns up to five results,
+Acceptance: “Find my tax PDF” searches locally, returns up to eight results,
 uploads no filenames, and opens nothing until the user approves.
 
 ### Phase 2 — Agent runtime
@@ -274,9 +274,29 @@ all writes confirm.
 
 - CoreAudio hang fix and stale-device recovery.
 - Notch-first placement with physical-notch preference and external fallback.
+- A true notch-attached silhouette on MacBook displays: the surface starts at
+  the screen edge behind the camera housing, keeps controls inside the shape,
+  and expands downward for listening, planning, results, and confirmation.
 - Native assistant result and confirmation cards.
 - Local, shell-safe Finder search using Spotlight.
 - Explicit confirmation before `NSWorkspace` opens a selected result.
+- Explicit assistant sessions with unique IDs, lifecycle phases, cancellation,
+  and a compact execution trace.
+- A typed JSON-value boundary, tool descriptors, argument schemas, read/action
+  classification, and an allowlisted tool registry.
+- Conservative local planning for Finder, Calendar event drafts, and web
+  searches, plus screenshot-aware model planning into the same typed request
+  boundary.
+- EventKit-backed Calendar writes and default-browser searches, both held as
+  immutable prepared invocations until the visible card is approved.
+- Spoken request, live tool-status chip, native Finder table, calendar draft,
+  web-search preview, and compact completion card inside the morphing notch.
+- Immutable prepared invocations: the file approved by the user is the exact
+  invocation executed after confirmation, with path and existence validation
+  repeated at the runtime boundary.
+- Runtime safety coverage for unknown tools, malformed arguments, local intent
+  routing, and confirmation enforcement.
 
-This proves the host-owned safety and UI loop. It is not yet a general planner,
-computer-use engine, OAuth integration, or full VoiceOS feature replacement.
+This proves the host-owned safety/UI loop and the core runtime contract. It is
+not yet a model-driven multi-step chain, background-task engine, general
+computer-use layer, OAuth integration, or full VoiceOS feature replacement.

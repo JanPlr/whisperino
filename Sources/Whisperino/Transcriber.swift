@@ -121,17 +121,26 @@ class Transcriber {
 
     /// Transcribe one audio file. The caller owns the file - it is never
     /// deleted here, so a failed run can't destroy the user's audio.
-    func transcribe(audioURL: URL) async throws -> String {
+    func transcribe(audioURL: URL, languages: [String] = []) async throws -> String {
         guard isAvailable else { throw TranscriberError.notInstalled }
+        let recognition = TranscriptionLanguageCatalog.recognitionConfiguration(for: languages)
 
         if await ensureServer() {
             do {
-                return try await transcribeViaServer(audioURL: audioURL)
+                return try await transcribeViaServer(
+                    audioURL: audioURL,
+                    language: recognition.language,
+                    prompt: recognition.prompt
+                )
             } catch {
                 print("[whisperino] server transcription failed (\(error.localizedDescription)) - falling back to whisper-cli")
             }
         }
-        return try await transcribeViaCLI(audioURL: audioURL)
+        return try await transcribeViaCLI(
+            audioURL: audioURL,
+            language: recognition.language,
+            prompt: recognition.prompt
+        )
     }
 
     // MARK: - Server path
@@ -216,7 +225,7 @@ class Transcriber {
         return false
     }
 
-    private func transcribeViaServer(audioURL: URL) async throws -> String {
+    private func transcribeViaServer(audioURL: URL, language: String, prompt: String?) async throws -> String {
         let audioData = try Data(contentsOf: audioURL)
 
         let boundary = "whisperino-\(UUID().uuidString)"
@@ -226,6 +235,8 @@ class Transcriber {
         }
         appendField("response_format", "text")
         appendField("temperature", "0.0")
+        appendField("language", language)
+        if let prompt { appendField("prompt", prompt) }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8))
         body.append(audioData)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
@@ -248,7 +259,7 @@ class Transcriber {
 
     // MARK: - CLI fallback path
 
-    private func transcribeViaCLI(audioURL: URL) async throws -> String {
+    private func transcribeViaCLI(audioURL: URL, language: String, prompt: String?) async throws -> String {
         let threads = self.threads
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
@@ -259,12 +270,15 @@ class Transcriber {
                 "--no-timestamps",
                 "--print-progress", "false",
                 "--print-special", "false",
-                "--language", "auto",
+                "--language", language,
                 "--threads", String(threads),
                 // Greedy decoding - same speed rationale as the server.
                 "--beam-size", "1",
                 "--best-of", "1",
             ]
+            if let prompt {
+                process.arguments?.append(contentsOf: ["--prompt", prompt])
+            }
 
             let stdout = Pipe()
             let stderr = Pipe()

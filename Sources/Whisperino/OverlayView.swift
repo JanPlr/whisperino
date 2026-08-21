@@ -27,6 +27,37 @@ struct OverlayView: View {
         }
     }
 
+    /// A deliberately small set of visual phases for the physical-notch shell.
+    /// The shell itself never gets replaced while a take is active; only this
+    /// phase changes, which lets SwiftUI interpolate one top-anchored shape
+    /// instead of crossfading unrelated pills and cards.
+    private var notchPresentation: String {
+        if appState.assistantCard != nil { return "assistant" }
+        if appState.fallbackResult != nil { return "fallback" }
+        if appState.showingInputPicker,
+           case .recording = appState.state {
+            return "inputPicker"
+        }
+        if let phase = appState.assistantSession?.phase {
+            switch phase {
+            case .planning, .executing:
+                return "toolWorking"
+            default:
+                break
+            }
+        }
+        if isProcessingState,
+           !appState.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "transcript"
+        }
+        switch appState.state {
+        case .idle: return "idle"
+        case .recording, .cancelled: return "listening"
+        case .transcribing, .refining, .result, .dismissing: return "processing"
+        case .error: return "error"
+        }
+    }
+
 
     /// Extra height reserved for the input device picker.
     /// Always included (even when picker is closed) so the panel and body frame
@@ -41,45 +72,55 @@ struct OverlayView: View {
 
     var body: some View {
         Group {
-            if let assistantCard = appState.assistantCard {
-                assistantCardView(assistantCard).padding(.top, 6)
-            } else if appState.fallbackResult != nil {
-                // The take had no text field to land in - show it in a
-                // card with a Copy escape hatch instead of losing it.
-                fallbackResultCard.padding(.top, 6)
+            if appState.overlayUsesTopEdgeSurface {
+                notchAttachedSurface
             } else {
-                switch appState.state {
-                case .idle:
-                    Color.clear.frame(width: 0, height: 0)
-                // One case for the ENTIRE take lifecycle so the pill is a
-                // single stable element the whole way: the waveform morphs
-                // into the typing flow, then the same pill fades out.
-                // Separate cases re-created the view at each state hop,
-                // turning the morph into crossfades. AI takes keep the same
-                // pill and show the typing flow while the model works.
-                case .recording, .cancelled,
-                     .transcribing, .refining, .result, .dismissing:
-                    recordingView.padding(.top, 6)
-                case .error(let message):
-                    errorView(message: message).padding(.top, 6)
+                if let assistantCard = appState.assistantCard {
+                    assistantCardView(assistantCard)
+                } else if appState.fallbackResult != nil {
+                    // The take had no text field to land in - show it in a
+                    // card with a Copy escape hatch instead of losing it.
+                    fallbackResultCard
+                } else {
+                    switch appState.state {
+                    case .idle:
+                        Color.clear.frame(width: 0, height: 0)
+                    case .recording, .cancelled,
+                         .transcribing, .refining, .result, .dismissing:
+                        floatingRecordingView
+                    case .error(let message):
+                        errorView(message: message)
+                    }
                 }
             }
         }
-        .frame(width: 380)
-        .padding(.top, 4)
+        .frame(width: 420)
+        .padding(.top, appState.overlayUsesTopEdgeSurface ? 0 : 10)
         .frame(height: panelContentHeight, alignment: .top)
+        .animation(
+            appState.suppressStateAnimation
+                ? nil
+                : .spring(response: 0.46, dampingFraction: 0.88, blendDuration: 0.12),
+            value: notchPresentation
+        )
         .animation(appState.suppressStateAnimation ? nil : .spring(response: 0.24, dampingFraction: 0.85), value: appState.state)
-        // Picker pop is its own, snappier curve - it's a menu, not a
-        // panel morph; it should appear, not unfold.
-        .animation(.spring(response: 0.16, dampingFraction: 0.9), value: appState.showingInputPicker)
+        // The microphone list is revealed by clipping one continuous notch
+        // surface, so a calm non-bouncy curve reads more like native system UI
+        // than a cross-fade between two independently springing views.
+        .animation(.smooth(duration: 0.32), value: appState.showingInputPicker)
         .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.fallbackResult != nil)
         .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.assistantCard)
     }
 
     // MARK: - Assistant glance + confirmation cards
 
-    @ViewBuilder
     private func assistantCardView(_ card: AssistantCard) -> some View {
+        assistantCardContent(card)
+            .assistantCardChrome()
+    }
+
+    @ViewBuilder
+    private func assistantCardContent(_ card: AssistantCard) -> some View {
         switch card {
         case .fileResults(let query, let results):
             VStack(alignment: .leading, spacing: 12) {
@@ -89,11 +130,35 @@ struct OverlayView: View {
                     subtitle: "Spotlight · On-device"
                 )
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Results for “\(query)”")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.94))
-                        .lineLimit(1)
+                assistantRequestLine
+                assistantToolStatusChip
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text("\(query) — \(results.count) items")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .lineLimit(1)
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.32))
+                    }
+
+                    if !results.isEmpty {
+                        HStack(spacing: 6) {
+                            Text("Name")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text("Size")
+                                .frame(width: 42, alignment: .trailing)
+                            Text("Modified")
+                                .frame(width: 66, alignment: .trailing)
+                        }
+                        .padding(.leading, 24)
+                        .padding(.trailing, 5)
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.32))
+                    }
 
                     if results.isEmpty {
                         Text("No matching files found on this Mac.")
@@ -101,23 +166,31 @@ struct OverlayView: View {
                             .foregroundStyle(.white.opacity(0.55))
                             .padding(.vertical, 18)
                     } else {
-                        ForEach(Array(results.prefix(5))) { result in
+                        ForEach(Array(results.prefix(8))) { result in
                             assistantFileRow(result)
                         }
                     }
                 }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.055))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.075), lineWidth: 1)
+                )
 
                 HStack {
-                    Label("Filenames stay local", systemImage: "lock.fill")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.4))
-                    Spacer()
-                    Text("Choose a file to open")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.4))
+                    Text("I found \(results.count) matching items on this Mac.")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.58))
+                    Spacer(minLength: 8)
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.white.opacity(0.3))
                 }
             }
-            .assistantCardChrome()
 
         case .confirmOpen(let result):
             VStack(alignment: .leading, spacing: 14) {
@@ -126,6 +199,9 @@ struct OverlayView: View {
                     title: "Open this file?",
                     subtitle: "Confirmation required"
                 )
+
+                assistantRequestLine
+                assistantToolStatusChip
 
                 HStack(spacing: 11) {
                     Image(systemName: result.symbolName)
@@ -145,6 +221,15 @@ struct OverlayView: View {
                             .lineLimit(1)
                     }
                 }
+                .padding(11)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.055))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.075), lineWidth: 1)
+                )
 
                 HStack(spacing: 8) {
                     assistantCardButton("Cancel", prominent: false) {
@@ -155,17 +240,222 @@ struct OverlayView: View {
                     }
                 }
             }
-            .assistantCardChrome()
+
+        case .calendarDraft(let draft):
+            VStack(alignment: .leading, spacing: 12) {
+                assistantCardHeader(
+                    symbol: "calendar",
+                    title: "New Event",
+                    subtitle: "Review before saving"
+                )
+
+                assistantRequestLine
+                assistantToolStatusChip
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(draft.title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.96))
+                        .lineLimit(2)
+
+                    Rectangle()
+                        .fill(Color(red: 0.24, green: 0.52, blue: 1.0))
+                        .frame(height: 2)
+
+                    HStack(spacing: 9) {
+                        Image(systemName: "clock")
+                            .foregroundStyle(.white.opacity(0.52))
+                        Text(calendarIntervalLabel(draft))
+                            .foregroundStyle(.white.opacity(0.82))
+                    }
+
+                    if !draft.attendeeEmails.isEmpty {
+                        HStack(alignment: .top, spacing: 9) {
+                            Image(systemName: "person")
+                                .foregroundStyle(.white.opacity(0.52))
+                                .padding(.top, 4)
+                            VStack(alignment: .leading, spacing: 5) {
+                                ForEach(draft.attendeeEmails, id: \.self) { email in
+                                    Text(email)
+                                        .font(.system(size: 9.5, weight: .medium))
+                                        .foregroundStyle(Color(red: 0.72, green: 0.82, blue: 1.0))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Capsule().fill(Color(red: 0.18, green: 0.23, blue: 0.33)))
+                                }
+                            }
+                        }
+                    }
+
+                    if let location = draft.location, !location.isEmpty {
+                        Label(location, systemImage: "location")
+                            .foregroundStyle(.white.opacity(0.66))
+                    }
+                }
+                .font(.system(size: 11, weight: .medium))
+                .padding(13)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.055))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.075), lineWidth: 1)
+                )
+
+                if !draft.attendeeEmails.isEmpty {
+                    Label("Invitees are saved in the event notes; no invitation is sent.", systemImage: "info.circle")
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.34))
+                }
+
+                HStack(spacing: 8) {
+                    assistantCardButton("Cancel", prominent: false) {
+                        appState.dismissAssistantCard()
+                    }
+                    assistantCardButton("Save", prominent: true) {
+                        appState.approveAssistantAction()
+                    }
+                }
+            }
+
+        case .webSearch(let draft):
+            VStack(alignment: .leading, spacing: 12) {
+                assistantCardHeader(
+                    symbol: "globe",
+                    title: "Web Search",
+                    subtitle: "Opens your default browser"
+                )
+
+                assistantRequestLine
+                assistantToolStatusChip
+
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.48))
+                    Text(draft.query)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.88))
+                        .lineLimit(3)
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.055))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.075), lineWidth: 1)
+                )
+
+                HStack(spacing: 8) {
+                    assistantCardButton("Cancel", prominent: false) {
+                        appState.dismissAssistantCard()
+                    }
+                    assistantCardButton("Search", prominent: true) {
+                        appState.approveAssistantAction()
+                    }
+                }
+            }
 
         case .message(let symbol, let title, let detail):
             VStack(alignment: .leading, spacing: 10) {
-                assistantCardHeader(symbol: symbol, title: title, subtitle: "Finder")
+                assistantCardHeader(symbol: symbol, title: title, subtitle: "Whisperino")
+                assistantRequestLine
+                assistantToolStatusChip
                 Text(detail)
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(2)
+                assistantTraceStrip
             }
-            .assistantCardChrome()
+        }
+    }
+
+    @ViewBuilder
+    private var assistantRequestLine: some View {
+        if let transcript = appState.assistantSession?.transcript,
+           !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text(transcript)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.64))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var assistantToolStatusChip: some View {
+        let status = assistantToolStatus
+        return HStack(spacing: 5) {
+            Image(systemName: status.symbol)
+                .font(.system(size: 8, weight: .semibold))
+            Text(status.label)
+                .font(.system(size: 9, weight: .semibold))
+            if status.complete {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 7.5, weight: .bold))
+            }
+        }
+        .foregroundStyle(.white.opacity(0.48))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(.white.opacity(0.07)))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var assistantToolStatus: (label: String, symbol: String, complete: Bool) {
+        guard let phase = appState.assistantSession?.phase else {
+            return ("Ready", "sparkles", true)
+        }
+        switch phase {
+        case .planning:
+            return ("Planning", "sparkles", false)
+        case .executing(let toolID):
+            return (toolLabel(toolID, active: true), "magnifyingglass", false)
+        case .awaitingConfirmation(let invocation):
+            return (toolLabel(invocation.toolID, active: false), "checkmark.circle", true)
+        case .presenting:
+            if case .fileResults = appState.assistantCard {
+                return ("Searching", "magnifyingglass", true)
+            }
+            return ("Tool completed", "checkmark.circle", true)
+        case .failed:
+            return ("Tool failed", "exclamationmark.triangle", false)
+        default:
+            return ("Ready", "sparkles", false)
+        }
+    }
+
+    private func toolLabel(_ id: String, active: Bool) -> String {
+        switch id {
+        case LocalFinderAssistantTool.id: return active ? "Searching this Mac" : "Search ready"
+        case OpenLocalFileAssistantTool.id: return active ? "Opening file" : "Ready to open"
+        case CreateCalendarEventAssistantTool.id: return active ? "Saving event" : "Event ready"
+        case WebSearchAssistantTool.id: return active ? "Searching" : "Search ready"
+        default: return active ? "Working" : "Ready"
+        }
+    }
+
+    private func calendarIntervalLabel(_ draft: CalendarEventDraft) -> String {
+        let weekday = DateFormatter.localizedString(from: draft.start, dateStyle: .full, timeStyle: .none)
+        let start = DateFormatter.localizedString(from: draft.start, dateStyle: .none, timeStyle: .short)
+        let end = DateFormatter.localizedString(from: draft.end, dateStyle: .none, timeStyle: .short)
+        return "\(weekday) · \(start) - \(end)"
+    }
+
+    @ViewBuilder
+    private var assistantTraceStrip: some View {
+        if let steps = appState.assistantSession?.trace, !steps.isEmpty {
+            HStack(spacing: 6) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(steps.suffix(2).joined(separator: "  →  "))
+                    .lineLimit(1)
+            }
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(.white.opacity(0.34))
         }
     }
 
@@ -200,31 +490,33 @@ struct OverlayView: View {
     }
 
     private func assistantFileRow(_ result: LocalFileResult) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             Image(systemName: result.symbolName)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.blue.opacity(0.88))
-                .frame(width: 26, height: 26)
-                .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.07)))
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.78))
+                .frame(width: 18, height: 18)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(result.name)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(1)
-                Text(result.detail)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.25))
+            Text(result.name)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.86))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(result.sizeLabel ?? "—")
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.42))
+                .frame(width: 42, alignment: .trailing)
+
+            Text(result.modifiedLabel ?? "—")
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.42))
+                .lineLimit(1)
+                .frame(width: 66, alignment: .trailing)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(0.045)))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(0.045)))
         .contentShape(Rectangle())
         .onTapGesture { appState.requestOpen(result) }
         .pointerOnHover()
@@ -237,12 +529,16 @@ struct OverlayView: View {
     ) -> some View {
         Text(label)
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(prominent ? Color.black.opacity(0.85) : Color.white.opacity(0.82))
+            .foregroundStyle(Color.white.opacity(prominent ? 0.98 : 0.82))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(prominent ? Color.white.opacity(0.92) : Color.white.opacity(0.09))
+                    .fill(
+                        prominent
+                            ? Color(red: 0.23, green: 0.51, blue: 1.0)
+                            : Color.white.opacity(0.09)
+                    )
             )
             .contentShape(Rectangle())
             .onTapGesture(perform: action)
@@ -252,66 +548,24 @@ struct OverlayView: View {
     // MARK: - Fallback result card (nothing focused to paste into)
 
     @State private var copiedFallback = false
-    @State private var isHoveringFallbackClose = false
     @State private var isHoveringFallbackCopy = false
-    /// Drains 1→0 over `AppState.fallbackTimeout`, drawing the countdown
-    /// ring around the ✕. Reset on each card appearance.
-    @State private var fallbackCountdown: CGFloat = 1
+    @State private var fallbackProgress: CGFloat = 0
 
     /// Wispr-style rescue card: the transcription couldn't be pasted
     /// (no focused text field), so it's shown here with a Copy button
     /// instead of silently vanishing.
     private var fallbackResultCard: some View {
+        fallbackResultContent
+            .fallbackCardChrome()
+    }
+
+    private var fallbackResultContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                if rafterino {
-                    RafterinoRaftMark()
-                        .frame(width: 17, height: 17)
-                } else {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-
-                Spacer(minLength: 8)
-
-                Text("Select a textbox first, then dictate")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .lineLimit(1)
-
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(isHoveringFallbackClose ? 1 : 0.8))
-                    .frame(width: 26, height: 26)
-                    .background(
-                        // Track ring + draining countdown arc, starting
-                        // at 12 o'clock and sweeping clockwise.
-                        ZStack {
-                            Circle().strokeBorder(
-                                .white.opacity(isHoveringFallbackClose ? 0.7 : 0.18),
-                                lineWidth: 1
-                            )
-                            Circle()
-                                .trim(from: 0, to: fallbackCountdown)
-                                .stroke(
-                                    .white.opacity(isHoveringFallbackClose ? 0.9 : 0.55),
-                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
-                                )
-                                .rotationEffect(.degrees(-90))
-                                .padding(0.75)
-                        }
-                    )
-                    .contentShape(Circle())
-                    .onHover { isHoveringFallbackClose = $0 }
-                    .onTapGesture { appState.dismissFallback() }
-                    .pointerOnHover()
-            }
-
             Text(appState.fallbackResult ?? "")
-                .font(.system(size: 14))
+                .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(.white.opacity(0.92))
                 .multilineTextAlignment(.leading)
+                .lineSpacing(4)
                 .lineLimit(4)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -319,13 +573,13 @@ struct OverlayView: View {
             HStack {
                 Spacer()
                 Text(copiedFallback ? "Copied" : "Copy")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.95))
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 8)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 6)
                     .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(.white.opacity(isHoveringFallbackCopy ? 0.3 : 0.22))
+                        Capsule()
+                            .fill(.white.opacity(isHoveringFallbackCopy ? 0.16 : 0.10))
                     )
                     .contentShape(Rectangle())
                     .onHover { isHoveringFallbackCopy = $0 }
@@ -343,22 +597,17 @@ struct OverlayView: View {
                     .pointerOnHover()
             }
         }
-        .padding(16)
-        .frame(width: 340, alignment: .leading)
-        .background(Color.black)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.32), lineWidth: 1)
-        )
-        .transition(.scale(scale: 0.95).combined(with: .opacity))
-        .onAppear {
-            // Snap full, then drain over the same window AppState's
-            // auto-dismiss timer uses, so the ring empties exactly as
-            // the card vanishes.
-            fallbackCountdown = 1
+        .onAppear(perform: restartFallbackProgress)
+        .onChange(of: appState.fallbackResult) { _, result in
+            if result != nil { restartFallbackProgress() }
+        }
+    }
+
+    private func restartFallbackProgress() {
+        withAnimation(nil) { fallbackProgress = 0 }
+        DispatchQueue.main.async {
             withAnimation(.linear(duration: AppState.fallbackTimeout)) {
-                fallbackCountdown = 0
+                fallbackProgress = 1
             }
         }
     }
@@ -374,13 +623,587 @@ struct OverlayView: View {
     @State private var isHoveringWaveform = false
     @State private var isHoveringLatchedCancel = false
     @State private var isHoveringLatchedSubmit = false
+    @State private var isHoveringNotchMeter = false
+    @State private var isHoveringNotchCancel = false
     /// Drives the pulsing orange ping around the mic button while the
     /// no-audio nudge is showing.
     @State private var micPulse = false
 
     // MARK: - Recording
 
-    private var recordingView: some View {
+    /// External displays have no camera housing to clear. Their virtual island
+    /// can therefore stay noticeably narrower than the MacBook treatment,
+    /// leaving room for macOS's orange microphone privacy indicator even when
+    /// the right side of the menu bar is crowded.
+    private var usesExternalTopEdgeIsland: Bool {
+        appState.overlayUsesTopEdgeSurface && !appState.overlayHasPhysicalNotch
+    }
+
+    private var notchSurfaceWidth: CGFloat {
+        switch notchPresentation {
+        case "assistant", "fallback", "toolWorking", "transcript": return 360
+        // Never shrink horizontally when opening on a wide hardware notch.
+        // The selector grows outward from the compact recording width.
+        // Keep the selector content at the compact recording width. Only the
+        // notch's vertical body and reverse corners morph, so list rows never
+        // reflow sideways during dismissal.
+        case "inputPicker":
+            return usesExternalTopEdgeIsland
+                ? 224
+                : max(appState.overlayPhysicalNotchWidth + 72, 260)
+        case "error":
+            return usesExternalTopEdgeIsland
+                ? 272
+                : max(appState.overlayPhysicalNotchWidth + 72, 292)
+        // Keep the compact recording wings clear of macOS's orange microphone
+        // privacy indicator. Thirty-six points per side gives the meter hover
+        // treatment a little breathing room without returning to the earlier
+        // oversized footprint; the selector can still grow when opened.
+        default:
+            return usesExternalTopEdgeIsland
+                ? 224
+                : max(appState.overlayPhysicalNotchWidth + 72, 260)
+        }
+    }
+
+    /// A slightly more pronounced take on the established macOS notch radii.
+    /// It remains independent of the full menu-bar height so the edge reads
+    /// clearly without ever turning back into a long funnel.
+    private var notchTopCornerRadius: CGFloat {
+        // Opening the microphone picker must be a vertical-only operation.
+        // Keeping the recording shoulder radius constant prevents the shell's
+        // total width from changing by 22pt while a selected row dismisses.
+        if case .recording = appState.state { return 10 }
+        return notchIsExpanded ? 21 : 10
+    }
+
+    private var notchShellWidth: CGFloat {
+        notchSurfaceWidth + notchTopCornerRadius * 2
+    }
+
+    private var notchIsExpanded: Bool {
+        notchPresentation == "assistant"
+            || notchPresentation == "fallback"
+            || notchPresentation == "toolWorking"
+            || notchPresentation == "transcript"
+            || notchPresentation == "inputPicker"
+            || notchPresentation == "error"
+    }
+
+    /// One continuous shell, pinned to the physical camera housing. Listening,
+    /// working and result states are content phases inside this same view; its
+    /// dimensions and bottom corners spring between phases without ever
+    /// becoming a detached pill or a replacement card.
+    @ViewBuilder
+    private var notchAttachedSurface: some View {
+        if notchPresentation == "idle" {
+            Color.clear.frame(width: 0, height: 0)
+        } else {
+            let bottomRadius: CGFloat = notchIsExpanded ? 24 : 14
+            let inAIContext = appState.isInstructionMode || appState.isAgentMode
+            let usesToolAccent = notchPresentation == "assistant"
+                || notchPresentation == "toolWorking"
+            let usesLiftedShadow = notchIsExpanded
+                && notchPresentation != "inputPicker"
+            // DynamicNotchKit/Boring Notch's proven reverse-corner geometry:
+            // a small outward top fillet, straight body sides, rounded chin.
+            let notchShape = NativeNotchShape(
+                topCornerRadius: notchTopCornerRadius,
+                bottomRadius: bottomRadius
+            )
+
+            ZStack(alignment: .top) {
+                Group {
+                    if case .recording = appState.state {
+                        recordingNotchBody
+                    } else if notchIsExpanded {
+                        VStack(spacing: 0) {
+                            Color.clear
+                                .frame(height: max(appState.overlayNotchInset, 28))
+
+                            notchAttachedContent
+                                .id(notchPresentation)
+                                .transition(
+                                    .opacity.combined(
+                                        with: .scale(scale: 0.985, anchor: .top)
+                                    )
+                                )
+                        }
+                    } else {
+                        compactNotchContent
+                    }
+                }
+                .frame(width: notchSurfaceWidth)
+                .frame(width: notchShellWidth)
+                .background(
+                    ZStack {
+                        Color.black
+                        LinearGradient(
+                            colors: notchIsExpanded && usesToolAccent
+                                ? [
+                                    Color.black,
+                                    Color(red: 0.035, green: 0.045, blue: 0.075),
+                                  ]
+                                : [
+                                    Color.black,
+                                    inAIContext
+                                        ? Color(red: 0.075, green: 0.085, blue: 0.15)
+                                        : Color(red: 0.015, green: 0.018, blue: 0.024),
+                                  ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+                )
+                .clipShape(notchShape)
+                .overlay(alignment: .bottom) {
+                    Group {
+                        if notchPresentation != "fallback" {
+                            LinearGradient(
+                                colors: [
+                                    .clear,
+                                    notchIsExpanded && usesToolAccent
+                                        ? Color(red: 0.18, green: 0.42, blue: 1).opacity(0.42)
+                                        : Color.white.opacity(notchIsExpanded ? 0.10 : 0.14),
+                                    .clear,
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .frame(height: 1)
+                            .padding(.horizontal, notchIsExpanded ? 22 : 18)
+                            .transition(.identity)
+                        }
+                    }
+                    // The lifetime contour replaces this hairline. Do not fade
+                    // one through the other or both are visible after a take.
+                    .animation(nil, value: notchPresentation)
+                }
+                .overlay {
+                    if notchPresentation == "fallback" {
+                        let lifetimeTrack = FallbackPerimeterProgress(
+                                progress: 1,
+                                topCornerRadius: notchTopCornerRadius,
+                                bottomRadius: bottomRadius
+                            )
+                        let lifetimeContour = FallbackPerimeterProgress(
+                                progress: fallbackProgress,
+                                topCornerRadius: notchTopCornerRadius,
+                                bottomRadius: bottomRadius
+                            )
+
+                        ZStack {
+                            // A quiet full route makes the timer readable as a
+                            // perimeter control before any progress accumulates.
+                            // Insetting keeps every pixel over the black shell,
+                            // so white windows cannot erase half the stroke.
+                            lifetimeTrack
+                                .stroke(
+                                    fallbackLifetimeGradient(peakOpacity: 0.17),
+                                    style: StrokeStyle(
+                                        lineWidth: 0.85,
+                                        lineCap: .round,
+                                        lineJoin: .round
+                                    )
+                                )
+                                .padding(1.25)
+
+                            // The filled lifetime is a crisp neutral line with
+                            // one soft shadow—not a second blurred duplicate.
+                            // This holds contrast over light, saturated, and
+                            // dark backgrounds without introducing a blue halo.
+                            lifetimeContour
+                                .stroke(
+                                    fallbackLifetimeGradient(peakOpacity: 0.90),
+                                    style: StrokeStyle(
+                                        lineWidth: 1.15,
+                                        lineCap: .round,
+                                        lineJoin: .round
+                                    )
+                                )
+                                .padding(1.25)
+                                .shadow(color: .white.opacity(0.34), radius: 1.6)
+                        }
+                    }
+                }
+                .shadow(
+                    color: usesLiftedShadow
+                        ? (usesToolAccent
+                            ? Color(red: 0.05, green: 0.32, blue: 1.0).opacity(0.28)
+                            : Color.black.opacity(0.32))
+                        : .clear,
+                    radius: usesLiftedShadow ? 18 : 0,
+                    y: usesLiftedShadow ? 7 : 0
+                )
+                .scaleEffect((isCancelled || isDismissing) ? 0.97 : 1, anchor: .top)
+                .opacity((isCancelled || isDismissing) ? 0 : 1)
+                .blur(radius: (isCancelled || isDismissing) ? 2 : 0)
+                .animation(
+                    .smooth(duration: 0.34),
+                    value: notchShellWidth
+                )
+                .animation(
+                    .smooth(duration: 0.34),
+                    value: notchIsExpanded
+                )
+                .animation(.easeOut(duration: 0.14), value: isCancelled || isDismissing)
+
+                // Recording controls live on a fixed-size canvas that is a
+                // sibling of the morphing shell. Their global coordinates do
+                // not depend on the shell's current or interpolated bounds.
+                if case .recording = appState.state {
+                    recordingNotchControls
+                        .frame(
+                            width: 420,
+                            height: max(appState.overlayNotchInset, 28),
+                            alignment: .top
+                        )
+                        .zIndex(10)
+                        .animation(nil, value: appState.showingInputPicker)
+                }
+            }
+            .frame(width: 420, alignment: .top)
+        }
+    }
+
+    /// Fade the lifetime contour at the two points where the notch meets the
+    /// menu bar. The broad middle remains legible as the path fills around the
+    /// chin; only the outer joins dissolve into the hardware silhouette.
+    private func fallbackLifetimeGradient(peakOpacity: Double) -> LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .white.opacity(0), location: 0),
+                .init(color: .white.opacity(peakOpacity * 0.18), location: 0.022),
+                .init(color: .white.opacity(peakOpacity * 0.76), location: 0.052),
+                .init(color: .white.opacity(peakOpacity), location: 0.085),
+                .init(color: .white.opacity(peakOpacity), location: 0.915),
+                .init(color: .white.opacity(peakOpacity * 0.76), location: 0.948),
+                .init(color: .white.opacity(peakOpacity * 0.18), location: 0.978),
+                .init(color: .white.opacity(0), location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    @ViewBuilder
+    private var notchAttachedContent: some View {
+        if let card = appState.assistantCard {
+            assistantCardContent(card)
+                .padding(EdgeInsets(top: 12, leading: 14, bottom: 14, trailing: 14))
+        } else if appState.fallbackResult != nil {
+            fallbackResultContent
+                .padding(EdgeInsets(top: 12, leading: 16, bottom: 14, trailing: 16))
+        } else {
+            switch appState.state {
+            case .recording, .cancelled:
+                if notchPresentation == "inputPicker" {
+                    physicalNotchInputPicker
+                } else {
+                    EmptyView()
+                }
+            case .transcribing, .refining, .result, .dismissing:
+                if notchPresentation == "toolWorking" {
+                    VStack(alignment: .leading, spacing: 9) {
+                        assistantRequestLine
+                        assistantToolStatusChip
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 14)
+                } else if notchPresentation == "transcript" {
+                    liveTranscriptPreview
+                } else {
+                    EmptyView()
+                }
+            case .error(let message):
+                let presentation = errorPresentation(for: message)
+                HStack(spacing: 10) {
+                    Image(systemName: presentation.symbol)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(presentation.tint.opacity(0.92))
+                        .frame(width: 25, height: 25)
+                        .background(
+                            Circle().fill(presentation.tint.opacity(0.12))
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(presentation.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.90))
+                            .lineLimit(1)
+
+                        if let detail = presentation.detail {
+                            Text(detail)
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.46))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 7)
+                .padding(.bottom, 14)
+            case .idle:
+                EmptyView()
+            }
+        }
+    }
+
+    private var compactHardwareWidth: CGFloat {
+        if usesExternalTopEdgeIsland { return 160 }
+        return min(
+            max(appState.overlayPhysicalNotchWidth, 170),
+            notchSurfaceWidth - 48
+        )
+    }
+
+    private var compactWingWidth: CGFloat {
+        (notchSurfaceWidth - compactHardwareWidth) / 2
+    }
+
+    /// Recording controls are pinned to the physical camera housing rather
+    /// than the animated shell. The shell may widen for the source picker,
+    /// but these coordinates never change, so the live meter cannot slide
+    /// underneath the hardware notch or drift sideways during the morph.
+    private var recordingControlWingWidth: CGFloat { 32 }
+
+    private var recordingHardwareWidth: CGFloat {
+        if usesExternalTopEdgeIsland { return 160 }
+        return max(appState.overlayPhysicalNotchWidth, 170)
+    }
+
+    private var recordingControlsWidth: CGFloat {
+        recordingHardwareWidth + recordingControlWingWidth * 2
+    }
+
+    /// Exact intrinsic height of the physical-notch microphone chooser. The
+    /// recording shell animates this amount from zero while clipping the list,
+    /// which makes it slide back into the notch instead of fading or swapping.
+    private var physicalPickerBodyHeight: CGFloat {
+        if appState.inputDevices.isEmpty { return 66 }
+        // 19pt section label + 8pt picker-internal vertical padding +
+        // 9pt outer bottom inset, plus one 33pt row per route. Together with
+        // the picker's own 4pt inset this leaves a balanced 13pt at the chin.
+        return 36 + CGFloat(appState.inputDevices.count + 1) * 33
+    }
+
+    /// Recording always owns one stable view tree. Opening the selector simply
+    /// reveals more of it below the hardware inset; closing reverses that same
+    /// geometry, so the live meter never gets recreated or stutters.
+    private var recordingNotchBody: some View {
+        let notchHeight = max(appState.overlayNotchInset, 28)
+        let visibleHeight = notchHeight
+            + (appState.showingInputPicker ? physicalPickerBodyHeight : 0)
+
+        return VStack(spacing: 0) {
+            Color.clear
+                .frame(height: notchHeight)
+
+            physicalNotchInputPicker
+                .frame(height: physicalPickerBodyHeight, alignment: .top)
+                .animation(nil, value: appState.showingInputPicker)
+        }
+        .frame(width: notchSurfaceWidth)
+        .frame(height: visibleHeight, alignment: .top)
+        .clipped()
+    }
+
+    /// Compact recording and processing occupy only the physical notch's
+    /// height. The center remains reserved for the camera housing while the
+    /// activity signal slides into the symmetric left extension.
+    @ViewBuilder
+    private var compactNotchContent: some View {
+        HStack(spacing: 0) {
+            Group {
+                switch appState.state {
+                case .recording, .cancelled:
+                    Color.clear
+                case .transcribing, .refining, .result, .dismissing:
+                    NotchProcessingDots()
+                default:
+                    Color.clear
+                }
+            }
+            .frame(width: compactWingWidth, height: max(appState.overlayNotchInset, 28))
+
+            Color.clear
+                .frame(width: compactHardwareWidth)
+
+            Color.clear
+                .frame(width: compactWingWidth)
+        }
+        .frame(
+            width: notchSurfaceWidth,
+            height: max(appState.overlayNotchInset, 28)
+        )
+    }
+
+    /// The physical camera housing remains a dead center zone. Recording
+    /// controls live in the two small menu-bar wings that the notch opens on
+    /// either side: live input on the left, destructive cancel on the right.
+    private var recordingNotchControls: some View {
+        HStack(spacing: 0) {
+            notchMeterButton
+                .frame(width: recordingControlWingWidth)
+
+            Color.clear
+                .frame(width: recordingHardwareWidth)
+                .allowsHitTesting(false)
+
+            notchCancelButton
+                .frame(width: recordingControlWingWidth)
+        }
+        .frame(
+            width: recordingControlsWidth,
+            height: max(appState.overlayNotchInset, 28)
+        )
+        // This overlay deliberately has no frame derived from the animated
+        // shell. SwiftUI therefore has no horizontal geometry to interpolate
+        // when the picker opens or closes: both controls remain screen-locked
+        // while the black surface grows around them. Suppress only the picker
+        // transaction here; audio-level animations inside the meter remain
+        // active and responsive.
+        .animation(nil, value: appState.showingInputPicker)
+    }
+
+    /// The audio visualization is also the source selector. Its quiet hover
+    /// plate makes the affordance discoverable without turning it into a
+    /// separate button floating beside the hardware notch.
+    private var notchMeterButton: some View {
+        Button {
+            appState.noAudioDetected = false
+            appState.showingInputPicker.toggle()
+        } label: {
+            subtleVolumeIndicator
+                .frame(width: 30, height: 22)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(
+                            Color.white.opacity(
+                                appState.showingInputPicker
+                                    ? 0.13
+                                    : (isHoveringNotchMeter ? 0.09 : 0)
+                            )
+                        )
+                )
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(
+                            Color.white.opacity(
+                                appState.showingInputPicker
+                                    ? 0.19
+                                    : (isHoveringNotchMeter ? 0.12 : 0)
+                            ),
+                            lineWidth: 0.75
+                        )
+                }
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onHover { isHoveringNotchMeter = $0 }
+        .pointerOnHover()
+        .help("Choose microphone")
+        .accessibilityLabel("Choose microphone")
+        .animation(.easeInOut(duration: 0.14), value: isHoveringNotchMeter)
+        .animation(.easeInOut(duration: 0.14), value: appState.showingInputPicker)
+    }
+
+    /// Cancel is intentionally quieter than the audio meter until hovered,
+    /// then warms slightly to communicate that it discards the current take.
+    private var notchCancelButton: some View {
+        Button {
+            appState.cancelRecording()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 8.5, weight: .bold))
+                .foregroundStyle(
+                    isHoveringNotchCancel
+                        ? Color.white
+                        : Color.white.opacity(0.68)
+                )
+                .frame(width: 22, height: 22)
+                .background(
+                    Circle().fill(
+                        isHoveringNotchCancel
+                            ? Color(red: 0.72, green: 0.18, blue: 0.18).opacity(0.86)
+                            : Color.white.opacity(0.075)
+                    )
+                )
+                .overlay(
+                    Circle().strokeBorder(
+                        Color.white.opacity(isHoveringNotchCancel ? 0.18 : 0.09),
+                        lineWidth: 0.75
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onHover { isHoveringNotchCancel = $0 }
+        .pointerOnHover()
+        .help("Cancel transcription")
+        .accessibilityLabel("Cancel transcription")
+        .animation(.easeInOut(duration: 0.14), value: isHoveringNotchCancel)
+    }
+
+    /// Expanded source chooser. This is content inside the existing notch
+    /// shell—not a detached menu—so opening it morphs the island itself.
+    private var physicalNotchInputPicker: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Input source")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.38))
+                .textCase(.uppercase)
+                .tracking(0.35)
+                .padding(.horizontal, 15)
+                .padding(.top, 8)
+
+            InputDevicePicker(
+                appState: appState,
+                isPresented: $appState.showingInputPicker,
+                showsHeader: false
+            )
+            .padding(.horizontal, 8)
+            .padding(.bottom, 9)
+        }
+        .frame(width: notchSurfaceWidth)
+    }
+
+    private var subtleVolumeIndicator: some View {
+        NotchListeningBars(
+            samples: appState.audioSamples,
+            noAudioDetected: appState.noAudioDetected
+        )
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var liveTranscriptPreview: some View {
+        Text(appState.liveTranscript)
+            .font(.system(size: 13, weight: .regular))
+            .foregroundStyle(.white.opacity(0.88))
+            .lineSpacing(4)
+            .lineLimit(4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.055))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+            )
+    }
+
+    /*
+     The external-display recorder keeps the compact floating control cluster;
+     the physical-notch path above intentionally has no permanent mic, cancel
+     or submit buttons. Fn/Return/Escape remain available from the keyboard.
+     */
+    private var floatingRecordingView: some View {
         let cancelled = isCancelled
         // Recording stopped → same pill, typing-flow content. Applies to both
         // raw dictation and AI takes: once the mic closes, the waveform hands
@@ -549,7 +1372,7 @@ struct OverlayView: View {
         .onHover { hovering in
             isHoveringPill = hovering
         }
-        .animation(.easeOut(duration: 0.04), value: appState.audioSamples)
+        .animation(.easeOut(duration: 0.16), value: appState.audioSamples)
         .animation(.easeInOut(duration: 0.15), value: isHoveringPill)
         .animation(.easeInOut(duration: 0.15), value: isHoveringMic)
         .animation(.spring(response: 0.24, dampingFraction: 0.85), value: appState.isLatchedRecording)
@@ -610,7 +1433,6 @@ struct OverlayView: View {
                 // this button) has served its purpose - clear it immediately
                 // so the two never overlap.
                 appState.noAudioDetected = false
-                appState.refreshInputDevices()
                 appState.showingInputPicker.toggle()
             }
             .pointerOnHover()
@@ -705,17 +1527,52 @@ struct OverlayView: View {
 
     // MARK: - Error
 
-    private func errorView(message: String) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(.orange)
+    private func errorPresentation(
+        for message: String
+    ) -> (symbol: String, tint: Color, title: String, detail: String?) {
+        let lowercased = message.lowercased()
 
-            Text(message)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(1)
-                .truncationMode(.tail)
+        if lowercased.contains("microphone") || lowercased.contains("mic error") {
+            let detail = lowercased.contains("did not respond")
+                ? "Reconnect it or choose another input"
+                : "Check the selected input and try again"
+            return ("mic.slash.fill", .orange, "Microphone unavailable", detail)
+        }
+
+        if lowercased.contains("no speech") {
+            return ("waveform.slash", .orange, "No speech detected", "Try again when you’re ready")
+        }
+
+        if lowercased.contains("api key") {
+            return ("key.fill", .orange, "API key required", "Add it in Settings to continue")
+        }
+
+        return ("exclamationmark", .orange, "Something went wrong", message)
+    }
+
+    private func errorView(message: String) -> some View {
+        let presentation = errorPresentation(for: message)
+        return HStack(spacing: 9) {
+            Image(systemName: presentation.symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(presentation.tint.opacity(0.92))
+                .frame(width: 23, height: 23)
+                .background(Circle().fill(presentation.tint.opacity(0.12)))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(presentation.title)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.90))
+                    .lineLimit(1)
+
+                if let detail = presentation.detail {
+                    Text(detail)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.46))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
         }
         .overlayChrome()
     }
@@ -727,6 +1584,20 @@ struct OverlayView: View {
 /// (30pt tall, radius 15), 16pt content row, 11/7 padding, white 0.32
 /// hairline.
 private extension View {
+    func fallbackCardChrome() -> some View {
+        self
+            .padding(16)
+            .frame(width: 340, alignment: .leading)
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.24), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
+            .transition(.scale(scale: 0.95).combined(with: .opacity))
+    }
+
     func assistantCardChrome() -> some View {
         self
             .padding(14)
@@ -767,6 +1638,193 @@ private extension View {
                     }
                 }
             )
+    }
+}
+
+// MARK: - Notch shape + activity motion
+
+/// Reverse-corner notch silhouette used by DynamicNotchKit and Boring Notch.
+/// The outer top edge curls inward by a small radius and immediately becomes a
+/// vertical body. This creates the characteristic outward-facing top corners
+/// without separate tabs or an exaggerated diagonal shoulder.
+private struct NativeNotchShape: Shape {
+    var topCornerRadius: CGFloat
+    var bottomRadius: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(topCornerRadius, bottomRadius) }
+        set {
+            topCornerRadius = newValue.first
+            bottomRadius = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let topRadius = min(max(topCornerRadius, 0), rect.width * 0.2)
+        let bodyLeft = rect.minX + topRadius
+        let bodyRight = rect.maxX - topRadius
+        let radius = min(
+            max(bottomRadius, 0),
+            min((bodyRight - bodyLeft) / 2, rect.height - topRadius)
+        )
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyLeft, y: rect.minY + topRadius),
+            control: CGPoint(x: bodyLeft, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: bodyLeft, y: rect.maxY - radius))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyLeft + radius, y: rect.maxY),
+            control: CGPoint(x: bodyLeft, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: bodyRight - radius, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyRight, y: rect.maxY - radius),
+            control: CGPoint(x: bodyRight, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: bodyRight, y: rect.minY + topRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY),
+            control: CGPoint(x: bodyRight, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Cumulative fallback lifetime: starts at the upper-left shoulder, descends
+/// the left edge, fills across the chin, then climbs the right edge. The path
+/// deliberately remains open across the top so completion lands at the upper
+/// right rather than drawing behind the physical camera housing.
+private struct FallbackPerimeterProgress: Shape {
+    var progress: CGFloat
+    var topCornerRadius: CGFloat
+    var bottomRadius: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
+        get {
+            AnimatablePair(
+                progress,
+                AnimatablePair(topCornerRadius, bottomRadius)
+            )
+        }
+        set {
+            progress = newValue.first
+            topCornerRadius = newValue.second.first
+            bottomRadius = newValue.second.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let topRadius = min(max(topCornerRadius, 0), rect.width * 0.2)
+        let bodyLeft = rect.minX + topRadius
+        let bodyRight = rect.maxX - topRadius
+        let radius = min(
+            max(bottomRadius, 0),
+            min((bodyRight - bodyLeft) / 2, rect.height - topRadius)
+        )
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyLeft, y: rect.minY + topRadius),
+            control: CGPoint(x: bodyLeft, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: bodyLeft, y: rect.maxY - radius))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyLeft + radius, y: rect.maxY),
+            control: CGPoint(x: bodyLeft, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: bodyRight - radius, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyRight, y: rect.maxY - radius),
+            control: CGPoint(x: bodyRight, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: bodyRight, y: rect.minY + topRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY),
+            control: CGPoint(x: bodyRight, y: rect.minY)
+        )
+        return path.trimmedPath(from: 0, to: min(max(progress, 0), 1))
+    }
+}
+
+/// A tiny Apple-style audio meter driven entirely by real microphone history.
+/// Each 30 Hz sample enters on the left and advances through five fixed bar
+/// positions. Two real samples form each spatial step, slowing the visible
+/// travel without inventing motion. Silence returns promptly to five dots.
+private struct NotchListeningBars: View {
+    let samples: [Float]
+    let noAudioDetected: Bool
+
+    private static let barCount = 5
+    private static let samplesPerBar = 2
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<Self.barCount, id: \.self) { index in
+                let activity = normalizedLevel(at: index)
+                let height = 2 + activity * 9
+
+                Capsule(style: .continuous)
+                    .fill(
+                        noAudioDetected
+                            ? Color.orange.opacity(0.68)
+                            : Color.white.opacity(0.46 + activity * 0.44)
+                    )
+                    .frame(width: 2, height: height)
+            }
+        }
+        .frame(width: 18, height: 12, alignment: .center)
+        // Slightly overlap neighboring 30 Hz samples to soften vertical steps
+        // without adding the delayed, elastic tail of a spring animation.
+        .animation(.linear(duration: 0.05), value: samples)
+        .animation(.easeInOut(duration: 0.18), value: noAudioDetected)
+    }
+
+    private func normalizedLevel(at index: Int) -> CGFloat {
+        let start = index * Self.samplesPerBar
+        guard start < samples.count else { return 0 }
+        let end = min(start + Self.samplesPerBar, samples.count)
+        // Keep the leading real sample dominant and lightly blend its neighbor
+        // to bridge 30 Hz updates. Using the previous window maximum made
+        // adjacent bars lock to the same height during normal speech.
+        let leading = CGFloat(max(samples[start], 0))
+        let neighbor = start + 1 < end ? CGFloat(max(samples[start + 1], 0)) : leading
+        let level = leading * 0.85 + neighbor * 0.15
+
+        // The recorder has already noise-gated and shaped this signal. The old
+        // `* 15` mapping saturated at only ~7% input, turning almost every word
+        // into five full-height bars. Keep the quiet-speech floor low, but
+        // spread the rest over a much wider range so normal speech has shape.
+        let floor: CGFloat = 0.012
+        let ceiling: CGFloat = 0.68
+        guard level > floor else { return 0 }
+        let normalized = min(1, (level - floor) / (ceiling - floor))
+        return pow(normalized, 0.86)
+    }
+}
+
+/// Three stationary dots with a gentle luminance handoff. They communicate a
+/// short processing pause without text, a spinner, or vertical movement.
+private struct NotchProcessingDots: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { index in
+                    let phase = t * 2.4 - Double(index) * 0.9
+                    let wave = (sin(phase) + 1) / 2
+                    Circle()
+                        .fill(Color.white.opacity(0.22 + wave * 0.58))
+                        .frame(width: 2.5, height: 2.5)
+                }
+            }
+            .frame(width: 14, height: 10, alignment: .center)
+        }
     }
 }
 
@@ -875,48 +1933,95 @@ private struct TypingFlowView: View {
 private struct InputDevicePicker: View {
     @ObservedObject var appState: AppState
     @Binding var isPresented: Bool
+    var showsHeader: Bool = true
     @State private var hoveredDeviceUID: String?
 
     /// Sentinel hover key for the "Follow system default" row - no real device
     /// carries this UID.
     private static let followDefaultUID = "__follow_system_default__"
 
-    /// One picker row: radio-style checkmark, label, hover highlight. Shared by
-    /// the "Follow system default" entry and each device.
+    /// A compact route row modeled after current macOS popovers: the selected
+    /// source is a neutral glass tile with a trailing check, never a legacy
+    /// radio list or a saturated success color.
     @ViewBuilder
-    private func row(title: String, isSelected: Bool, uid: String, action: @escaping () -> Void) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 10))
-                .foregroundStyle(isSelected ? .green : .white.opacity(0.3))
-                .frame(width: 14)
+    private func row(
+        title: String,
+        subtitle: String? = nil,
+        symbol: String,
+        isSelected: Bool,
+        uid: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: symbol)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(isSelected ? 0.86 : 0.48))
+                    .frame(width: 23, height: 23)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(.white.opacity(isSelected ? 0.10 : 0.055))
+                    )
 
-            Text(title)
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(isSelected ? 0.9 : 0.6))
-                .lineLimit(1)
-                .truncationMode(.tail)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(.white.opacity(isSelected ? 0.92 : 0.66))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 8.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.34))
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 6)
+
+                Image(systemName: "checkmark")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 17, height: 17)
+                    .background(Circle().fill(.white.opacity(0.13)))
+                    .opacity(isSelected ? 1 : 0)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(
+                        isSelected
+                            ? Color.white.opacity(0.085)
+                            : (hoveredDeviceUID == uid ? Color.white.opacity(0.055) : .clear)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(
+                        Color.white.opacity(isSelected ? 0.075 : 0),
+                        lineWidth: 0.75
+                    )
+            )
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(hoveredDeviceUID == uid ? Color.white.opacity(0.08) : Color.clear)
-        )
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
         .onHover { hovering in hoveredDeviceUID = hovering ? uid : nil }
-        .onTapGesture(perform: action)
+        .pointerOnHover()
+        .animation(.easeInOut(duration: 0.13), value: hoveredDeviceUID)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Input Source")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.4))
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+            if showsHeader {
+                Text("Input Source")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+            }
 
             if appState.inputDevices.isEmpty {
                 Text("No input devices found")
@@ -929,12 +2034,14 @@ private struct InputDevicePicker: View {
                 // no preferred mic is set.
                 let followingDefault = !appState.hasPreferredInputDevice
                 row(
-                    title: "Follow system default",
+                    title: "Automatic",
+                    subtitle: "Follow system input",
+                    symbol: "arrow.triangle.2.circlepath",
                     isSelected: followingDefault,
                     uid: Self.followDefaultUID
                 ) {
-                    appState.clearPreferredInputDevice()
                     isPresented = false
+                    appState.clearPreferredInputDeviceAfterPickerCollapse()
                 }
 
                 ForEach(Array(appState.inputDevices.enumerated()), id: \.element.uid) { _, device in
@@ -942,9 +2049,14 @@ private struct InputDevicePicker: View {
                     // the system default, no single device is singled out.
                     let isPinned = appState.hasPreferredInputDevice
                         && appState.selectedInputDevice?.uid == device.uid
-                    row(title: device.name, isSelected: isPinned, uid: device.uid) {
-                        appState.selectInputDevice(device)
+                    row(
+                        title: device.name,
+                        symbol: "mic.fill",
+                        isSelected: isPinned,
+                        uid: device.uid
+                    ) {
                         isPresented = false
+                        appState.selectInputDeviceAfterPickerCollapse(device)
                     }
                 }
             }

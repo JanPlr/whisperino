@@ -75,6 +75,59 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Languages understood by the bundled multilingual Whisper model. `auto`
+/// lets Whisper detect the language independently for every recorded chunk,
+/// which is the right choice when a user dictates in more than one language.
+enum TranscriptionLanguageCatalog {
+    static let automaticCode = "auto"
+
+    // whisper.cpp uses the same ISO-style language codes as Whisper. Keep the
+    // stored setting as a code so it is stable when the Mac's display language
+    // changes; labels are localized at presentation time.
+    static let supportedCodes = [
+        "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo",
+        "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es",
+        "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw",
+        "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja",
+        "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo",
+        "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
+        "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt",
+        "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq",
+        "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl",
+        "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "yue", "zh",
+    ]
+
+    static var localizedOptions: [(code: String, name: String)] {
+        supportedCodes
+            .map { code in
+                let name = Locale.current.localizedString(forLanguageCode: code)
+                    ?? code.uppercased()
+                return (code: code, name: name.capitalized(with: Locale.current))
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    static func recognitionConfiguration(for selectedCodes: [String]) -> (language: String, prompt: String?) {
+        let validCodes = selectedCodes.filter { supportedCodes.contains($0) }
+        guard validCodes.count != 1 else { return (validCodes[0], nil) }
+        guard !validCodes.isEmpty else { return (automaticCode, nil) }
+
+        // whisper.cpp accepts one forced language or automatic detection, not
+        // a native language whitelist. With several preferences we retain
+        // per-chunk detection and prime decoding with the chosen set. That
+        // preserves natural language switching while strongly steering short
+        // or ambiguous utterances toward the user's languages.
+        let english = Locale(identifier: "en")
+        let names = validCodes.map {
+            english.localizedString(forLanguageCode: $0) ?? $0.uppercased()
+        }
+        return (
+            automaticCode,
+            "The speaker uses only these languages: \(names.joined(separator: ", "))."
+        )
+    }
+}
+
 struct AppSettings: Codable, Equatable {
     /// Haiku post-processing on raw whisper output: dictionary terms,
     /// filler removal, punctuation, self-correction handling.
@@ -86,6 +139,13 @@ struct AppSettings: Codable, Equatable {
     var apiKey: String = ""
     var triggerKey: TriggerKey = .fn
     var soundEffectsEnabled: Bool = false
+    /// Pause the active system media session before opening the microphone.
+    /// Enabled by default so music does not leak into dictation recordings.
+    var pauseMediaOnRecordingStart: Bool = true
+    /// Empty means unrestricted automatic detection. One value pins Whisper
+    /// to that language; multiple values form the user's preferred language
+    /// set while retaining automatic per-chunk detection.
+    var transcriptionLanguageCodes: [String] = []
     /// CoreAudio UID of the user's preferred input device. Stored by UID
     /// (stable) rather than AudioDeviceID (a transient integer that changes
     /// across reconnects), so the choice survives unplugging a display or
@@ -115,8 +175,57 @@ struct AppSettings: Codable, Equatable {
             triggerKey = .fn
         }
         soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
+        pauseMediaOnRecordingStart = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .pauseMediaOnRecordingStart
+        ) ?? true
+        if let storedLanguages = try container.decodeIfPresent(
+            [String].self,
+            forKey: .transcriptionLanguageCodes
+        ) {
+            transcriptionLanguageCodes = storedLanguages.reduce(into: []) { result, code in
+                guard TranscriptionLanguageCatalog.supportedCodes.contains(code),
+                      !result.contains(code) else { return }
+                result.append(code)
+            }
+        } else {
+            // Migrate the single-language selector shipped briefly in 2.0.
+            let legacyLanguage = try container.decodeIfPresent(
+                String.self,
+                forKey: .transcriptionLanguageCode
+            )
+            transcriptionLanguageCodes = legacyLanguage.flatMap {
+                TranscriptionLanguageCatalog.supportedCodes.contains($0) ? [$0] : nil
+            } ?? []
+        }
         preferredInputDeviceUID = try container.decodeIfPresent(String.self, forKey: .preferredInputDeviceUID)
         rafterinoModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .rafterinoModeEnabled) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(llmRefinementEnabled, forKey: .llmRefinementEnabled)
+        try container.encode(aiModeEnabled, forKey: .aiModeEnabled)
+        try container.encode(apiKey, forKey: .apiKey)
+        try container.encode(triggerKey, forKey: .triggerKey)
+        try container.encode(soundEffectsEnabled, forKey: .soundEffectsEnabled)
+        try container.encode(pauseMediaOnRecordingStart, forKey: .pauseMediaOnRecordingStart)
+        try container.encode(transcriptionLanguageCodes, forKey: .transcriptionLanguageCodes)
+        try container.encodeIfPresent(preferredInputDeviceUID, forKey: .preferredInputDeviceUID)
+        try container.encode(rafterinoModeEnabled, forKey: .rafterinoModeEnabled)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case llmRefinementEnabled
+        case aiModeEnabled
+        case apiKey
+        case triggerKey
+        case soundEffectsEnabled
+        case pauseMediaOnRecordingStart
+        case transcriptionLanguageCode
+        case transcriptionLanguageCodes
+        case preferredInputDeviceUID
+        case rafterinoModeEnabled
     }
 }
 

@@ -9,5 +9,10 @@ let package = Package(
             name: "Whisperino",
             path: "Sources/Whisperino"
         ),
+        .testTarget(
+            name: "WhisperinoTests",
+            dependencies: ["Whisperino"],
+            path: "Tests/WhisperinoTests"
+        ),
     ]
 )

@@ -70,6 +70,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
+
+// Deterministic visual QA for the exact production overlay. This path is only
+// entered by an explicit developer environment variable and does not register
+// hotkeys, request permissions, or start audio/model services.
+if let previewMode = ProcessInfo.processInfo.environment["WHISPERINO_NOTCH_QA"] {
+    app.setActivationPolicy(.regular)
+    MainActor.assumeIsolated {
+        NotchVisualQAPreview.present(mode: previewMode)
+    }
+    app.activate(ignoringOtherApps: true)
+    app.run()
+    exit(0)
+}
+
 app.setActivationPolicy(.accessory)
 
 // Accessory apps have no default menu bar, so Cmd+V/C/X/A don't work
