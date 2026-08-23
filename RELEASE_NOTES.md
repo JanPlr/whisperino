@@ -1,17 +1,18 @@
-# Whisperino 3.0.2 — Update Checker Fix
+# Whisperino 3.1.0 — Faster, In-Process Transcription
 
-This patch fixes **Check for Updates** incorrectly reporting that Whisperino 3.0.0 was current after 3.0.1 had already been released.
+This release replaces the external whisper.cpp process with transcribe.cpp running directly inside Whisperino on Metal.
 
 ## What changed
 
-- Removed the updater's dependency on GitHub's anonymous REST API, whose shared 60-request-per-hour IP limit could be exhausted by a team or office.
-- Uses GitHub's public releases feed and still selects the highest semantic version.
-- Bypasses stale local and CDN responses when checking manually.
-- Reports network, HTTP, and malformed-response errors honestly instead of presenting them as “You're up to date.”
-- Constructs downloads from Whisperino's versioned release assets and keeps the existing automatic install-and-relaunch flow.
-
-This release also includes the Bluetooth microphone recovery introduced in 3.0.1.
+- Added Parakeet TDT 0.6B v3 as the new default model for fast, accurate local dictation in 25 European languages.
+- Added one-click model selection and downloads in **Settings → Dictation**.
+- Added Nemotron 3.5 ASR with a live streaming transcript while you speak.
+- Kept Whisper large-v3-turbo and large-v3 available for broad language support.
+- Removed the Homebrew and separate whisper.cpp setup requirement; the transcription engine is now bundled with the app.
+- Kept all speech recognition fully on-device with Metal acceleration.
 
 ## Upgrade note
 
-If an older version still says it is current, download 3.0.2 manually from this release page. Future updates will be detected normally. macOS may ask you to re-enable **Accessibility** after updating.
+On first launch, Whisperino starts downloading the default Parakeet model (about 705 MB). Dictation becomes available when that download finishes. You can choose a different model or follow download progress in **Settings → Dictation**.
+
+Thanks to Hendrik Hofstadt for this major transcription-engine upgrade.
