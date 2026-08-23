@@ -62,6 +62,18 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 # Copy binary
 cp .build/release/Whisperino "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
+# Embed transcribe.cpp's Metal framework. The binary loads it via @rpath;
+# @loader_path only covers Contents/MacOS, so add the standard Frameworks slot.
+FRAMEWORK_SRC=".build/release/CTranscribe.framework"
+if [ ! -d "$FRAMEWORK_SRC" ]; then
+    echo "Error: $FRAMEWORK_SRC missing after swift build" >&2
+    exit 1
+fi
+mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+ditto "$FRAMEWORK_SRC" "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
+install_name_tool -add_rpath "@executable_path/../Frameworks" \
+    "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+
 # Copy Info.plist and icon, stamp the version
 cp Info.plist "$APP_BUNDLE/Contents/"
 /usr/libexec/PlistBuddy \
@@ -76,10 +88,12 @@ cp AppIcon.icns "$APP_BUNDLE/Contents/Resources/"
 # the identity once with ./setup-signing.sh; until then we fall back to ad-hoc.
 SIGN_IDENTITY="Whisperino Self-Signed"
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+    codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
     STABLE_SIGNED=true
     echo "==> Signed with stable identity ($SIGN_IDENTITY) - permissions persist across builds"
 else
+    codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
     codesign --force --sign - "$APP_BUNDLE"
     STABLE_SIGNED=false
     echo "==> Ad-hoc signed - run ./setup-signing.sh once so permissions stop resetting"

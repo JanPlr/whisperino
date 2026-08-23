@@ -23,8 +23,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Screen Recording (AI mode's screenshot) is requested lazily: the first
         // AI-mode capture attempt drives the macOS prompt. Requesting it at
         // launch proved unreliable for an accessory app.
-        // Boot the persistent whisper server now so the model is already
-        // in memory by the first dictation.
+        // Download the selected GGUF if needed and load it onto Metal
+        // so the first dictation does not pay the model-load cost.
         appState.warmUpTranscriber()
         // Pre-load the input device list so the first time the picker is
         // opened the panel height is already correct. Without this, the

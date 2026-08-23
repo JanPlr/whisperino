@@ -89,6 +89,9 @@ class AudioRecorder {
     private var levelCallback: ((Float) -> Void)?
     private var recoveredChunkCallback: ((URL) -> Void)?
     private var streamFailureCallback: ((Error) -> Void)?
+    private var pcmCallback: (([Float]) -> Void)?
+    /// Resamples the live tap to 16 kHz mono for transcribe.cpp streaming.
+    private var pcmConverter: AVAudioConverter?
 
     /// List all available audio input devices via CoreAudio
     static func availableInputDevices() -> [AudioInputDevice] {
@@ -393,6 +396,7 @@ class AudioRecorder {
         levelCallback: @escaping (Float) -> Void,
         recoveredChunkCallback: @escaping (URL) -> Void,
         streamFailureCallback: @escaping (Error) -> Void,
+        pcmCallback: (([Float]) -> Void)? = nil,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         let requestID = UUID()
@@ -409,6 +413,7 @@ class AudioRecorder {
         self.levelCallback = levelCallback
         self.recoveredChunkCallback = recoveredChunkCallback
         self.streamFailureCallback = streamFailureCallback
+        self.pcmCallback = pcmCallback
         lifecycleLock.unlock()
 
         let newSessionID = requestID.uuidString
@@ -437,6 +442,12 @@ class AudioRecorder {
                 print("[whisperino] opening input at \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) channel(s)")
 
                 let newAudioFile = try AVAudioFile(forWriting: url, settings: inputFormat.settings)
+                let converter = AVAudioConverter(from: inputFormat, to: AudioPCM.mono16kFormat)
+                self.lifecycleLock.lock()
+                if self.pendingStartID == requestID {
+                    self.pcmConverter = converter
+                }
+                self.lifecycleLock.unlock()
                 newInputNode.installTap(onBus: 0, bufferSize: 512, format: inputFormat) { [weak self] buffer, _ in
                     self?.handleBuffer(buffer, requestID: requestID, levelCallback: levelCallback)
                 }
@@ -746,6 +757,9 @@ class AudioRecorder {
                     forWriting: nextURL,
                     settings: inputFormat.settings
                 )
+                self.lifecycleLock.lock()
+                self.pcmConverter = AVAudioConverter(from: inputFormat, to: AudioPCM.mono16kFormat)
+                self.lifecycleLock.unlock()
                 inputNode.installTap(
                     onBus: 0,
                     bufferSize: 512,
@@ -861,6 +875,15 @@ class AudioRecorder {
             levelCallback(smoothedLevel)
         }
 
+        lifecycleLock.lock()
+        let converter = pcmConverter
+        let pcmSink = pcmCallback
+        lifecycleLock.unlock()
+        if let converter, let pcmSink {
+            let samples = AudioPCM.convert(buffer, using: converter)
+            if !samples.isEmpty { pcmSink(samples) }
+        }
+
         // Re-check the generation while holding the same lock order used by
         // adoption. This prevents a late tap from writing into a newer take.
         lifecycleLock.lock()
@@ -947,14 +970,15 @@ class AudioRecorder {
         audioEngine = nil
         audioInputNode = nil
         configurationObserver = nil
-        activeStartID = nil
+        // Keep activeStartID, the tap sinks, and the WAV open until
+        // removeTap returns. It drains in-flight callbacks; nilling them
+        // first dropped the last buffers from both the file and PCM.
         isRecovering = false
         watchdogGeneration &+= 1
         streamHealth.reset()
         currentChunkHasNonZeroPCM = false
         automaticRecoveryCount = 0
         preferredDeviceUID = nil
-        levelCallback = nil
         recoveredChunkCallback = nil
         streamFailureCallback = nil
         lifecycleLock.unlock()
@@ -964,6 +988,14 @@ class AudioRecorder {
         }
         inputNode?.removeTap(onBus: 0)
         engine?.stop()
+
+        lifecycleLock.lock()
+        activeStartID = nil
+        levelCallback = nil
+        pcmCallback = nil
+        pcmConverter = nil
+        lifecycleLock.unlock()
+
         fileLock.lock()
         defer { fileLock.unlock() }
         audioFile = nil

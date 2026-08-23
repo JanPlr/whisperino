@@ -11,7 +11,7 @@ echo ""
 
 # Check for Xcode Command Line Tools
 if ! xcode-select -p &>/dev/null; then
-    echo "[1/3] Installing Xcode Command Line Tools..."
+    echo "[1/2] Installing Xcode Command Line Tools..."
     xcode-select --install
     echo ""
     echo "  Please re-run this script after installation completes."
@@ -31,20 +31,11 @@ if [ -z "$SWIFT_VER" ] || [ "$SWIFT_MAJOR" -lt 5 ] || { [ "$SWIFT_MAJOR" -eq 5 ]
     echo ""
     exit 1
 fi
-echo "[1/3] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
+echo "[1/2] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
 
-# Setup whisper.cpp + model. Either model counts as installed - existing
-# setups on medium keep working without re-downloading; fresh installs
-# get large-v3-turbo from setup.sh.
-if [ -f "$HOME/.whisperino/bin/whisper-cli" ] && { [ -f "$HOME/.whisperino/models/ggml-large-v3-turbo.bin" ] || [ -f "$HOME/.whisperino/models/ggml-medium.bin" ]; }; then
-    echo "[2/3] whisper.cpp + model: already installed"
-else
-    echo "[2/3] Installing whisper.cpp + downloading model (~1.6 GB)..."
-    ./setup.sh
-fi
-
-# Build the app + install to /Applications
-echo "[3/3] Building and installing Whisperino.app..."
+# Build the app + install to /Applications. Speech models download
+# in-app from Hugging Face the first time you use them.
+echo "[2/2] Building and installing Whisperino.app..."
 ./build.sh
 
 echo ""
@@ -63,6 +54,11 @@ echo "     window will open. Toggle Whisperino ON"
 echo "     in Privacy & Security → Accessibility."
 echo "     After enabling it, quit and reopen Whisperino"
 echo "     once so the running process picks up the grant."
+echo ""
+echo "  Speech models (Parakeet by default) download"
+echo "  automatically from Hugging Face into"
+echo "  ~/.whisperino/models. Pick Nemotron or Whisper"
+echo "  later in Settings → Dictation."
 echo ""
 echo "  ─────────────────────────────────────────"
 echo ""

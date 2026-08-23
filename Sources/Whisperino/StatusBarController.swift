@@ -161,8 +161,8 @@ class StatusBarController: NSObject, NSMenuDelegate {
         aiModeView = aiView
 
         // Setup-warning row - only shown if Whisper isn't installed
-        let setup = NSMenuItem(title: "⚠︎  Whisper not installed - run setup.sh", action: nil, keyEquivalent: "")
-        setup.isEnabled = false
+        let setup = NSMenuItem(title: "⚠︎  Speech model not ready", action: #selector(openSettings), keyEquivalent: "")
+        setup.target = self
         setup.isHidden = true
         menu.addItem(setup)
         setupItem = setup
@@ -213,8 +213,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
             aiModeView?.update(title: "Talk to your screen", shortcut: "\(triggerLabel) + ⇧", enabled: true)
         }
 
-        // Show setup warning only when Whisper isn't installed
-        setupItem?.isHidden = appState.isSetUp
+        refreshSetupItem()
 
         // Reflect updater state
         switch UpdateChecker.shared.status {
@@ -340,6 +339,28 @@ class StatusBarController: NSObject, NSMenuDelegate {
             .sink { [weak self] _ in self?.refreshUpdateBadge() }
             .store(in: &cancellables)
         refreshUpdateBadge()
+
+        ModelDownloader.shared.$status
+            .combineLatest(ModelDownloader.shared.$installedRevision)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshSetupItem()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func refreshSetupItem() {
+        if case .downloading(let id, _, _) = ModelDownloader.shared.status {
+            let name = ASRModelCatalog.descriptor(for: id).shortLabel
+            let percent = ModelDownloader.shared.status.fraction.map { Int($0 * 100) } ?? 0
+            setupItem?.title = "Downloading \(name)… \(percent)%"
+            setupItem?.isHidden = false
+            setupItem?.isEnabled = true
+        } else {
+            setupItem?.title = "⚠︎  Speech model not ready — open Settings"
+            setupItem?.isHidden = appState.isSetUp
+            setupItem?.isEnabled = !appState.isSetUp
+        }
     }
 
     private func updateStatusIcon(for state: TranscriptionState) {

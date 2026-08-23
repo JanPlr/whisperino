@@ -846,7 +846,7 @@ private struct AIPage: View {
                     .buttonStyle(InputIconButtonStyle())
                     .help(showAPIKey ? "Hide API key" : "Show API key")
                 }
-                CaptionText("Without a key, transcription falls back to raw whisper output - no cleanup, no Talk to your screen.")
+                CaptionText("Without a key, transcription falls back to raw on-device output - no cleanup, no Talk to your screen.")
             }
 
             SettingsCard(title: "Dictation cleanup") {
@@ -968,6 +968,8 @@ private struct DictationSettingsPage: View {
             title: "Dictation",
             subtitle: "Choose how recording starts, which languages to expect, and where text goes."
         ) {
+            SpeechModelPicker()
+
             SettingsCard(title: "Languages") {
                 LanguageMultiSelector(selection: $store.settings.transcriptionLanguageCodes)
             }
@@ -1054,6 +1056,83 @@ private struct DictationSettingsPage: View {
 /// collapsed control reads like the rest of Whisperino's flat settings cards;
 /// expansion reveals a searchable two-column language surface without
 /// spawning an AppKit menu or visually leaving the page.
+private struct SpeechModelPicker: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @ObservedObject private var downloader = ModelDownloader.shared
+
+    var body: some View {
+        let _ = downloader.installedRevision
+        SettingsCard(title: "Speech model") {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(ASRModelCatalog.all) { model in
+                    modelRow(model)
+                }
+            }
+            CaptionText("Models download from Hugging Face into ~/.whisperino/models and stay on this Mac. Parakeet is the default. Pick Nemotron if you want a live transcript while you speak.")
+        }
+    }
+
+    private func modelRow(_ model: ASRModelDescriptor) -> some View {
+        let selected = store.settings.asrModel == model.id
+        let installed = downloader.isInstalled(model.id)
+        let downloading: Bool = {
+            if case .downloading(let id, _, _) = downloader.status { return id == model.id }
+            return false
+        }()
+        let failed: String? = {
+            if case .failed(let id, let message) = downloader.status, id == model.id {
+                return message
+            }
+            return nil
+        }()
+
+        return VStack(alignment: .leading, spacing: 6) {
+            ChoiceCard(
+                title: model.displayName,
+                detail: model.detail,
+                selected: selected
+            ) {
+                store.settings.asrModel = model.id
+                if !installed {
+                    downloader.ensure(model.id)
+                }
+            }
+
+            HStack(spacing: 8) {
+                if model.supportsStreaming {
+                    Text("Streaming")
+                        .font(Brand.mono(10, .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                if installed {
+                    Text("On disk")
+                        .font(Brand.mono(10, .semibold))
+                        .foregroundStyle(.secondary)
+                } else if downloading, let fraction = downloader.status.fraction {
+                    Text("Downloading \(Int(fraction * 100))%")
+                        .font(Brand.mono(10, .semibold))
+                        .foregroundStyle(.secondary)
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                        .frame(maxWidth: 140)
+                } else {
+                    Button("Download") {
+                        downloader.ensure(model.id)
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                }
+                if let failed {
+                    Text(failed)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+}
+
 private struct LanguageMultiSelector: View {
     @Binding var selection: [String]
     @State private var isExpanded = false

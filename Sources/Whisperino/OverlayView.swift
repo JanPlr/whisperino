@@ -1543,6 +1543,14 @@ struct OverlayView: View {
             return ("waveform.slash", .orange, "No speech detected", "Try again when you’re ready")
         }
 
+        if lowercased.contains("unsupported language") {
+            return ("globe", .orange, "Language not supported", "Pick a language in Settings → Dictation")
+        }
+
+        if lowercased.contains("speech engine") || lowercased.contains("model") {
+            return ("cpu", .orange, "Speech engine failed", message)
+        }
+
         if lowercased.contains("api key") {
             return ("key.fill", .orange, "API key required", "Add it in Settings to continue")
         }
