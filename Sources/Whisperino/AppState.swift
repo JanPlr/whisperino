@@ -201,6 +201,10 @@ class AppState: ObservableObject {
     /// Pipeline transcribing finished chunks in the background while the
     /// user is still speaking. One per take; nil when not recording.
     private var transcriptionSession: TranscriptionSession?
+    /// True when this take feeds live PCM into a transcribe.cpp stream
+    /// (Nemotron) instead of rotating WAV chunks.
+    private var streamingTake = false
+    private var settingsObserver: AnyCancellable?
     /// Ticks once a second during recording to decide when to rotate the
     /// audio file into a new chunk.
     private var chunkTimer: Timer?
@@ -246,13 +250,22 @@ class AppState: ObservableObject {
 
     var isSetUp: Bool { transcriber.isAvailable }
 
-    /// Pre-load the whisper model into the persistent server so the
-    /// first dictation doesn't pay the model-load cost. Call at launch.
+    /// Pre-load the selected GGUF onto Metal so the first dictation
+    /// does not pay the model-load cost. Call at launch.
     func warmUpTranscriber() {
         transcriber.warmUp()
+        if settingsObserver == nil {
+            settingsObserver = store.$settings
+                .map(\.asrModel)
+                .removeDuplicates()
+                .dropFirst()
+                .sink { [weak self] id in
+                    self?.transcriber.select(id)
+                }
+        }
     }
 
-    /// Tear down the persistent whisper server. Call at app termination.
+    /// Drop the resident Metal model. Call at app termination.
     func shutdownTranscriber() {
         transcriber.shutdown()
     }
@@ -507,7 +520,12 @@ class AppState: ObservableObject {
         noAudioNudgeTimer?.invalidate()
         noAudioNudgeTimer = nil
         guard isSetUp else {
-            state = .error(message: "Run setup.sh first")
+            let name = transcriber.selectedDescriptor.shortLabel
+            if case .downloading = ModelDownloader.shared.status {
+                state = .error(message: "Downloading \(name)…")
+            } else {
+                state = .error(message: "Download \(name) in Settings")
+            }
             autoDismiss(after: 4)
             return
         }
@@ -576,6 +594,7 @@ class AppState: ObservableObject {
         recordingToken = token
         recordingStartTime = nil
         state = .recording
+        transcriber.prepareTake()
         recorder.start(
             preferredDeviceUID: store.settings.preferredInputDeviceUID,
             levelCallback: { [weak self] level in
@@ -591,6 +610,9 @@ class AppState: ObservableObject {
             },
             streamFailureCallback: { [weak self] error in
                 self?.handleRecorderStreamFailure(error, token: token)
+            },
+            pcmCallback: { [weak self] samples in
+                self?.transcriber.feedPCM(samples)
             },
             completion: { [weak self] result in
                 guard let self,
@@ -632,6 +654,7 @@ class AppState: ObservableObject {
     private func handleRecoveredRecorderChunk(_ url: URL, token: UUID) {
         guard recordingToken == token,
               case .recording = state,
+              !streamingTake,
               let session = transcriptionSession else {
             try? FileManager.default.removeItem(at: url)
             return
@@ -708,11 +731,50 @@ class AppState: ObservableObject {
     /// recordings get transcribed in ~40–90s chunks *while the user is
     /// still talking*, so stopping a 30-minute take only waits on the
     /// final chunk instead of one giant multi-minute whisper run.
+    /// Streaming models (Nemotron) skip the WAV chunks and consume PCM live.
     private func startTranscriptionSession(instruction: Bool) {
         liveTranscript = ""
         chunksDone = 0
         chunksTotal = 0
+        streamingTake = transcriber.supportsStreaming
 
+        if streamingTake {
+            let languages = recordingLanguageCodes
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.transcriber.startStream(languages: languages) { [weak self] text in
+                        DispatchQueue.main.async {
+                            guard let self else { return }
+                            self.liveTranscript = text
+                            if !text.isEmpty {
+                                let recovery = FileManager.default.homeDirectoryForCurrentUser
+                                    .appendingPathComponent(".whisperino/recovery/last-raw-transcript.txt")
+                                try? text.write(to: recovery, atomically: true, encoding: .utf8)
+                            }
+                        }
+                    }
+                } catch {
+                    print("[whisperino] stream start failed (\(error.localizedDescription)) - falling back to offline chunks")
+                    await MainActor.run { [weak self] in
+                        guard let self, case .recording = self.state else { return }
+                        self.streamingTake = false
+                        self.beginChunkedSession()
+                    }
+                }
+            }
+        } else {
+            beginChunkedSession()
+        }
+
+        currentChunkStart = Date()
+        chunkTimer?.invalidate()
+        chunkTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.chunkTimerTick()
+        }
+    }
+
+    private func beginChunkedSession() {
         let session = TranscriptionSession(
             transcriber: transcriber,
             languages: recordingLanguageCodes
@@ -724,12 +786,6 @@ class AppState: ObservableObject {
             self.chunksTotal = max(self.chunksTotal, progress.chunksTotal)
         }
         transcriptionSession = session
-
-        currentChunkStart = Date()
-        chunkTimer?.invalidate()
-        chunkTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.chunkTimerTick()
-        }
     }
 
     private func chunkTimerTick() {
@@ -770,6 +826,9 @@ class AppState: ObservableObject {
         }
 
         let elapsed = Date().timeIntervalSince(chunkStart)
+        // Streaming models consume PCM live; WAV rotation is only for
+        // offline families (Whisper / Parakeet) that run on finished files.
+        guard !streamingTake else { return }
         // Prefer cutting at silence so words aren't clipped; the hard cap
         // guarantees rotation even if the user never pauses for breath.
         let silent = audioLevel < Self.chunkSilenceLevel
@@ -790,6 +849,8 @@ class AppState: ObservableObject {
         currentChunkStart = nil
         transcriptionSession?.cancel()
         transcriptionSession = nil
+        transcriber.cancelStream()
+        streamingTake = false
         liveTranscript = ""
         chunksDone = 0
         chunksTotal = 0
@@ -861,20 +922,40 @@ class AppState: ObservableObject {
         // clear the property concurrently).
         let pendingShot = screenshotTask
 
-        // Hand the final chunk to the rolling pipeline. Everything before
-        // it has been transcribing in the background since ~40s into the
-        // take, so even an hour-long recording only waits on the tail.
-        let session = transcriptionSession ?? TranscriptionSession(
-            transcriber: transcriber,
-            languages: recordingLanguageCodes
-        )
-        transcriptionSession = nil
-        session.submit(chunkURL: audioURL)
-        chunksTotal = session.chunksSubmitted
+        // Streaming models finalize the same live stream on release.
+        // Offline models hand the file to the rolling pipeline.
+        let usedStreaming = streamingTake
+        let pipeline: TranscriptionSession?
+        if usedStreaming {
+            transcriptionSession = nil
+            streamingTake = false
+            pipeline = nil
+        } else {
+            let session = transcriptionSession ?? TranscriptionSession(
+                transcriber: transcriber,
+                languages: recordingLanguageCodes
+            )
+            transcriptionSession = nil
+            streamingTake = false
+            session.submit(chunkURL: audioURL)
+            chunksTotal = session.chunksSubmitted
+            pipeline = session
+        }
 
         assistantResponseTask = Task {
             do {
-                let rawText = try await session.finish()
+                let rawText: String
+                if usedStreaming {
+                    rawText = try await self.transcriber.finishTake(
+                        audioURL: audioURL,
+                        languages: recordingLanguageCodes
+                    )
+                    try? FileManager.default.removeItem(at: audioURL)
+                } else if let pipeline {
+                    rawText = try await pipeline.finish()
+                } else {
+                    rawText = ""
+                }
                 try Task.checkCancellation()
 
                 guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

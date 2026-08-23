@@ -1,6 +1,6 @@
 # Whisperino
 
-Local voice transcription for macOS. Lives in your menu bar, runs fully on-device via [whisper.cpp](https://github.com/ggerganov/whisper.cpp) with Metal GPU acceleration.
+Local voice transcription for macOS. Lives in your menu bar, runs fully on-device via [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) with Metal GPU acceleration. Parakeet TDT 0.6B v3 is the default; Nemotron (streaming) and Whisper are one click away.
 
 ## TL;DR
 
@@ -15,14 +15,14 @@ git clone https://github.com/JanPlr/whisperino.git
 cd whisperino && ./install.sh
 ```
 
-Requirements: macOS 14+, Apple Silicon, Xcode CLT (`xcode-select --install`), Homebrew.
+Requirements: macOS 14+, Apple Silicon, Xcode CLT (`xcode-select --install`).
 
-The script builds whisper.cpp + downloads the large-v3-turbo model (~1.6 GB), builds the app, and installs to `/Applications`.
+The script builds the app (transcribe.cpp is linked in) and installs to `/Applications`. Speech models download from Hugging Face the first time you use them — Parakeet TDT 0.6B v3 (~705 MB) starts automatically.
 
-> Run `install.sh` for a new laptop. `setup.sh` only installs whisper.cpp and
-> the speech model; it does not install or launch the macOS app. Accessibility
-> must be granted to the exact `/Applications/Whisperino.app` installed by
-> `install.sh`, followed by one quit/reopen.
+> Run `install.sh` for a new laptop. Accessibility must be granted to the exact
+> `/Applications/Whisperino.app` installed by `install.sh`, followed by one
+> quit/reopen. Developers on Nix can `nix-shell` for git/cmake/curl; Swift
+> still comes from Xcode CLT.
 
 ### Permissions
 
@@ -70,7 +70,7 @@ writes data or opens another app waits for explicit confirmation.
 
 ## Long recordings
 
-There's no practical length limit. While you talk, the recording is rotated into ~40s chunks (cut at silence, so no clipped words) and each finished chunk is transcribed in the background. When you stop, only the last chunk still needs processing - a 30-minute take resolves in seconds, and the pill shows live progress (`4/5`) plus a rolling preview of the text so far.
+There's no practical length limit. Parakeet and Whisper rotate the recording into ~40s chunks (cut at silence) and transcribe finished chunks in the background — when you stop, only the last chunk still needs processing. Nemotron streams on Metal as you speak, so the pill shows a live transcript instead.
 
 Nothing gets lost:
 
@@ -82,7 +82,8 @@ Nothing gets lost:
 
 Click the menu bar icon → **Settings**.
 
-- **General**: launch at login · pause and resume playing media around dictation · custom multi-select transcription languages (or automatic detection) · sound effects · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
+- **General**: launch at login · pause and resume playing media around dictation · sound effects · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
+- **Dictation**: speech model (Parakeet · Nemotron 3.5 · Whisper turbo · Whisper large-v3) · custom multi-select transcription languages (or automatic detection) · auto-submit apps
 - **Dictionary**: terms the LLM should always spell correctly (`Langdock` or `langdonk = Langdock` mappings)
 - **Snippets**: reusable text blocks
 - **History**: last 50 transcriptions
@@ -90,7 +91,7 @@ Click the menu bar icon → **Settings**.
 
 ## Privacy
 
-- **Transcription is 100% local.** Audio is processed on-device by whisper.cpp. No audio leaves your machine.
+- **Transcription is 100% local.** Audio is processed on-device by transcribe.cpp (Metal). No audio leaves your machine. Models are GGUFs from Hugging Face under `handy-computer`.
 - **LLM features are opt-in.** Only transcribed *text* (and your attached context) is sent to `api.langdock.com` (EU). Off by default.
 - **No telemetry, no analytics.** Everything stored as JSON in `~/.whisperino/`.
 
@@ -119,7 +120,8 @@ The committed `Info.plist` version is the source of truth, kept in lockstep with
 ## Troubleshooting
 
 - **Fn key doesn't trigger anything** - System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D.
-- **Paste doesn't work** - confirm you ran `./install.sh`, not only `./setup.sh`. Quit every running Whisperino copy, remove and re-add Whisperino in Accessibility, select `/Applications/Whisperino.app`, toggle it on, then quit/reopen the app once.
+- **Paste doesn't work** - confirm you ran `./install.sh`. Quit every running Whisperino copy, remove and re-add Whisperino in Accessibility, select `/Applications/Whisperino.app`, toggle it on, then quit/reopen the app once.
+- **Dictation says the model is missing** - open Settings → Dictation and download Parakeet (or Nemotron / Whisper). The first launch starts the Parakeet download in the background.
 - **App doesn't appear in Accessibility list** - launch it first (`open /Applications/Whisperino.app`), then check.
 
 ## Changelog

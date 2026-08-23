@@ -1,341 +1,463 @@
 import Foundation
-
-/// Thread-safe-by-convention buffer for piping stdout/stderr off the
-/// process's drain queues into the termination handler. The DispatchGroup
-/// around the reads establishes the happens-before ordering, so the
-/// `@unchecked Sendable` is sound; it just spares us a captured-`var` data
-/// race the strict-concurrency checker (correctly) can't prove safe.
-private final class PipeBuffers: @unchecked Sendable {
-    var out = Data()
-    var err = Data()
-}
+import TranscribeCpp
 
 enum TranscriberError: LocalizedError {
     case notInstalled
-    case processFailed(status: Int32)
+    case engineUnavailable(String)
     case noOutput
-    case serverError(String)
 
     var errorDescription: String? {
         switch self {
         case .notInstalled:
-            return "whisper.cpp not installed. Run setup.sh first."
-        case .processFailed(let status):
-            return "Whisper process exited with status \(status)"
+            return "Speech model is still downloading. Open Settings if it does not start."
+        case .engineUnavailable(let message):
+            return "Speech engine failed: \(message)"
         case .noOutput:
             return "No transcription output"
-        case .serverError(let message):
-            return "Whisper server error: \(message)"
         }
     }
 }
 
-/// Transcription backend. Prefers a persistent `whisper-server` child
-/// process - the model loads into memory once at warm-up instead of
-/// being re-read from disk (~1.6GB) on every single take,
-/// which is where almost all of the old per-transcription latency came
-/// from. Every request falls back to a one-shot `whisper-cli` run if
-/// the server is missing or misbehaving, so transcription keeps working
-/// even when the server binary isn't installed yet.
-class Transcriber {
-    private let baseDir: URL
-    private let whisperBinary: URL
-    private let serverBinary: URL
-
-    /// Resolved per use, not cached: large-v3-turbo (the default since v2)
-    /// may finish its background download mid-session, and the next
-    /// resolution should pick it up. Falls back to an already-downloaded
-    /// medium so pre-v2 installs keep transcribing during that download.
-    private var modelPath: URL {
-        let models = baseDir.appendingPathComponent("models")
-        let turbo = models.appendingPathComponent(ModelInstaller.defaultModel)
-        if FileManager.default.fileExists(atPath: turbo.path) { return turbo }
-        let medium = models.appendingPathComponent("ggml-medium.bin")
-        if FileManager.default.fileExists(atPath: medium.path) { return medium }
-        return turbo
+extension TranscribeError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .invalidArgument(let message),
+             .notImplemented(let message),
+             .modelFileNotFound(let message),
+             .modelLoad(let message),
+             .outOfMemory(let message),
+             .backend(let message),
+             .unsupported(let message),
+             .badStructSize(let message),
+             .inputTooLong(let message),
+             .versionMismatch(let message),
+             .busy(let message),
+             .other(_, let message):
+            return message
+        case .aborted(let message, _),
+             .outputTruncated(let message, _):
+            return message
+        }
     }
+}
 
-    /// Fixed local port for the persistent server. If it's taken the
-    /// server fails to bind, warm-up reports failure, and we fall back
-    /// to the CLI path - slower but functional.
-    private static let serverPort = 52731
-
-    private var serverProcess: Process?
-    /// Single in-flight warm-up shared by all callers. Created on first
-    /// demand; resolves true once the server answers HTTP.
-    private var warmUpTask: Task<Bool, Never>?
+/// In-process transcribe.cpp backend. The selected GGUF stays resident on
+/// Metal so the first take does not pay a disk-load, and Nemotron streams
+/// PCM as it arrives instead of waiting for a finished WAV.
+final class Transcriber {
+    private let downloader: ModelDownloader
+    private let engineQueue = DispatchQueue(label: "com.whisperino.asr", qos: .userInitiated)
     private let lock = NSLock()
 
-    init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        baseDir = home.appendingPathComponent(".whisperino")
-        whisperBinary = baseDir.appendingPathComponent("bin/whisper-cli")
-        serverBinary = baseDir.appendingPathComponent("bin/whisper-server")
+    private var model: Model?
+    private var session: Session?
+    private var stream: TranscribeCpp.Stream?
+    private var loadedModelID: ASRModelID?
+    private var loadedPath: String?
+    private var loadTask: Task<Void, Error>?
+    private var pcmBuffer: [Float] = []
+    /// Samples that arrived on the audio thread before the engine drained them.
+    private var pendingPCM: [Float] = []
+    /// Feed at least ~80 ms so Nemotron is not woken per 10 ms tap.
+    private let minFeedSamples = 1_280
+    private var onPartial: ((String) -> Void)?
+    private var lastPreview = ""
+    private var streamRunOptions = RunOptions()
+    /// Nemotron 3.5's cache-aware stream is trained on 1120 ms chunks with
+    /// up to 1040 ms of right context. R=13 is the setting that matches the
+    /// offline transcript; lower R commits earlier and drops the tail.
+    private var streamOptions = StreamOptions(
+        family: .parakeetStream(ParakeetStreamOptions(attContextRight: 13))
+    )
+    /// Chunk (1120 ms) + right context (1040 ms) of silence so the last
+    /// words have the future audio Nemotron needs before it will emit them.
+    private let finalizePadSamples = 36_000
+    /// Bumped at the start of each take so a late `startStream` cannot reopen
+    /// a stream that `finishStream` already finalized.
+    private var takeGeneration: UInt64 = 0
+    private var streamClosed = false
+
+    init(downloader: ModelDownloader = .shared) {
+        self.downloader = downloader
+        Transcribe.setLogHandler { level, message in
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            if level == .error || level == .warn {
+                print("[transcribe.cpp] \(trimmed)")
+            }
+        }
+    }
+
+    var selectedModel: ASRModelID {
+        SettingsStore.shared.settings.asrModel
+    }
+
+    var selectedDescriptor: ASRModelDescriptor {
+        ASRModelCatalog.descriptor(for: selectedModel)
     }
 
     var isAvailable: Bool {
-        FileManager.default.fileExists(atPath: whisperBinary.path) &&
-        FileManager.default.fileExists(atPath: modelPath.path)
+        downloader.isInstalled(selectedModel)
     }
 
-    private var threads: Int {
-        min(8, max(4, ProcessInfo.processInfo.activeProcessorCount - 2))
+    var supportsStreaming: Bool {
+        selectedDescriptor.supportsStreaming
     }
 
     // MARK: - Lifecycle
 
-    /// Kick off the server in the background so the model is resident
-    /// before the first dictation. Call once at app launch.
-    ///
-    /// Also fetches the current default model if this install predates it
-    /// (the in-app updater only swaps the app bundle, never the model dir).
-    /// Once the download lands, the warm server is still holding the old
-    /// model, so drop it and warm up again - the next resolution of
-    /// `modelPath` picks up the new file.
+    /// Download the selected model if needed, then load it onto Metal.
     func warmUp() {
-        Task.detached(priority: .utility) { [weak self] in
-            _ = await self?.ensureServer()
-        }
-        ModelInstaller.ensureDefaultModel { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            self.warmUpTask = nil
-            self.lock.unlock()
-            self.serverProcess?.terminate()
-            self.serverProcess = nil
-            Task.detached(priority: .utility) { [weak self] in
-                _ = await self?.ensureServer()
-            }
+        downloader.ensureSelected { [weak self] in
+            self?.requestLoad()
         }
     }
 
-    /// Terminate the child server. Call from applicationWillTerminate.
-    /// (Orphans from a crashed run are reaped by the pkill in
-    /// `startServer` on next launch.)
+    /// Drop the resident model (and any open stream) before process exit.
     func shutdown() {
-        serverProcess?.terminate()
-        serverProcess = nil
+        lock.lock()
+        stream = nil
+        session = nil
+        model = nil
+        loadedModelID = nil
+        loadedPath = nil
+        loadTask = nil
+        streamClosed = true
+        pcmBuffer.removeAll()
+        pendingPCM.removeAll()
+        lock.unlock()
     }
 
-    // MARK: - Transcription
+    /// Reload after the user picks a different model.
+    func select(_ id: ASRModelID) {
+        if SettingsStore.shared.settings.asrModel != id {
+            SettingsStore.shared.settings.asrModel = id
+        }
+        downloader.ensure(id) { [weak self] in
+            self?.requestLoad(force: true)
+        }
+    }
 
-    /// Transcribe one audio file. The caller owns the file - it is never
-    /// deleted here, so a failed run can't destroy the user's audio.
-    func transcribe(audioURL: URL, languages: [String] = []) async throws -> String {
-        guard isAvailable else { throw TranscriberError.notInstalled }
-        let recognition = TranscriptionLanguageCatalog.recognitionConfiguration(for: languages)
+    private func requestLoad(force: Bool = false) {
+        lock.lock()
+        if !force, loadTask != nil {
+            lock.unlock()
+            return
+        }
+        loadTask = Task { [weak self] in
+            try await self?.loadEngine()
+        }
+        lock.unlock()
+    }
 
-        if await ensureServer() {
-            do {
-                return try await transcribeViaServer(
-                    audioURL: audioURL,
-                    language: recognition.language,
-                    prompt: recognition.prompt
-                )
-            } catch {
-                print("[whisperino] server transcription failed (\(error.localizedDescription)) - falling back to whisper-cli")
+    private func loadEngine() async throws {
+        let id = selectedModel
+        guard downloader.isInstalled(id) else {
+            throw TranscriberError.notInstalled
+        }
+        let path = downloader.localURL(for: id).path
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            engineQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: TranscriberError.engineUnavailable("transcriber gone"))
+                    return
+                }
+                if self.loadedPath == path, self.model != nil, self.session != nil {
+                    continuation.resume()
+                    return
+                }
+                self.stream = nil
+                self.session = nil
+                self.model = nil
+                self.loadedModelID = nil
+                self.loadedPath = nil
+                do {
+                    try Transcribe.initBackends()
+                    let backend: Backend = Transcribe.backendAvailable(.metal) ? .metal : .auto
+                    print("[whisperino] loading \(ASRModelCatalog.descriptor(for: id).fileName) on \(backend == .metal ? "Metal" : "auto")")
+                    let loaded = try Model(path: path, options: ModelOptions(backend: backend))
+                    let newSession = try loaded.session()
+                    print("[whisperino] \(id.rawValue) ready (\(loaded.arch) \(loaded.variant), backend \(loaded.backend))")
+                    self.model = loaded
+                    self.session = newSession
+                    self.loadedModelID = id
+                    self.loadedPath = path
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
         }
-        return try await transcribeViaCLI(
-            audioURL: audioURL,
-            language: recognition.language,
-            prompt: recognition.prompt
+    }
+
+    private func ensureEngine() async throws {
+        if isAvailable == false { throw TranscriberError.notInstalled }
+        let wanted = selectedModel
+        let alreadyLoaded = withLock {
+            model != nil && session != nil && loadedModelID == wanted
+        }
+        if alreadyLoaded { return }
+        // A load started for a previous model must not satisfy this call.
+        if let task = withLock({ loadTask }) {
+            try? await task.value
+        }
+        let matches = withLock {
+            model != nil && session != nil && loadedModelID == wanted
+        }
+        if matches { return }
+        try await loadEngine()
+        let ready = withLock {
+            model != nil && session != nil && loadedModelID == selectedModel
+        }
+        if !ready { throw TranscriberError.engineUnavailable("model failed to load") }
+    }
+
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+
+    // MARK: - Offline transcription
+
+    func transcribe(audioURL: URL, languages: [String] = []) async throws -> String {
+        try await ensureEngine()
+        let pcm = try AudioPCM.loadMono16k(from: audioURL)
+        guard !pcm.isEmpty else { return "" }
+        let options = runOptions(languages: languages)
+        let transcript: Transcript = try await withCheckedThrowingContinuation { continuation in
+            engineQueue.async { [weak self] in
+                guard let self, let session = self.session else {
+                    continuation.resume(throwing: TranscriberError.engineUnavailable("session gone"))
+                    return
+                }
+                do {
+                    if self.stream != nil {
+                        _ = self.stream?.reset()
+                        self.stream = nil
+                    }
+                    continuation.resume(returning: try session.run(pcm, options: options))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+        return Self.cleanOutput(transcript.text)
+    }
+
+    // MARK: - Streaming (Nemotron)
+
+    /// Call before the mic tap starts so leftover stream state from the
+    /// previous take cannot collide with this one.
+    func prepareTake() {
+        withLock {
+            takeGeneration &+= 1
+            streamClosed = false
+            pendingPCM.removeAll(keepingCapacity: true)
+        }
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            _ = self.stream?.reset()
+            self.stream = nil
+            self.onPartial = nil
+            self.lastPreview = ""
+            self.pcmBuffer.removeAll(keepingCapacity: true)
+        }
+    }
+
+    func startStream(
+        languages: [String] = [],
+        onPartial: ((String) -> Void)? = nil
+    ) async throws {
+        try await ensureEngine()
+        let options = runOptions(languages: languages)
+        let generation = withLock { takeGeneration }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            engineQueue.async { [weak self] in
+                guard let self, let session = self.session else {
+                    continuation.resume(throwing: TranscriberError.engineUnavailable("session gone"))
+                    return
+                }
+                do {
+                    let stale = self.withLock {
+                        self.streamClosed || self.takeGeneration != generation
+                    }
+                    if stale {
+                        continuation.resume()
+                        return
+                    }
+                    self.streamRunOptions = options
+                    self.onPartial = onPartial
+                    self.lastPreview = ""
+                    if self.stream == nil {
+                        self.stream = try session.stream(options, self.streamOptions)
+                    }
+                    self.drainPendingPCM()
+                    self.flushPCMIfNeeded(force: false)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Append 16 kHz mono PCM. The samples are stored immediately so a
+    /// fast key-release cannot lose the last tap while `finishStream` runs.
+    func feedPCM(_ samples: [Float]) {
+        guard !samples.isEmpty else { return }
+        withLock {
+            pendingPCM.append(contentsOf: samples)
+        }
+        engineQueue.async { [weak self] in
+            guard let self, !self.withLock({ self.streamClosed }) else { return }
+            self.drainPendingPCM()
+            self.flushPCMIfNeeded(force: false)
+        }
+    }
+
+    private func drainPendingPCM() {
+        let incoming = withLock { () -> [Float] in
+            let copy = pendingPCM
+            pendingPCM.removeAll(keepingCapacity: true)
+            return copy
+        }
+        if !incoming.isEmpty {
+            pcmBuffer.append(contentsOf: incoming)
+        }
+    }
+
+    private func flushPCMIfNeeded(force: Bool) {
+        drainPendingPCM()
+        guard let stream else { return }
+        guard force || pcmBuffer.count >= minFeedSamples else { return }
+        let chunk = pcmBuffer
+        pcmBuffer.removeAll(keepingCapacity: true)
+        guard !chunk.isEmpty else { return }
+        do {
+            let update = try stream.feed(chunk)
+            if update.committedChanged || update.tentativeChanged || update.resultChanged {
+                publishPreview(Self.authoritativeText(stream.text))
+            }
+        } catch {
+            print("[whisperino] stream feed failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func publishPreview(_ raw: String) {
+        let text = Self.cleanOutput(raw)
+        guard text != lastPreview else { return }
+        lastPreview = text
+        onPartial?(text)
+    }
+
+    func finishStream() async throws -> String {
+        try await ensureEngine()
+        return try await withCheckedThrowingContinuation { continuation in
+            engineQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: TranscriberError.engineUnavailable("transcriber gone"))
+                    return
+                }
+                self.withLock { self.streamClosed = true }
+                do {
+                    self.drainPendingPCM()
+                    if self.stream == nil, let session = self.session, !self.pcmBuffer.isEmpty {
+                        self.stream = try session.stream(self.streamRunOptions, self.streamOptions)
+                    }
+                    guard let stream = self.stream else {
+                        continuation.resume(returning: "")
+                        return
+                    }
+                    self.flushPCMIfNeeded(force: true)
+                    // The last 1–2 s sit in the encoder's right-context
+                    // window until they have future audio. Key-up has none,
+                    // so pad a full chunk of silence and then finalize.
+                    let pad = [Float](repeating: 0, count: self.finalizePadSamples)
+                    _ = try stream.feed(pad)
+                    _ = try stream.finalize()
+                    let text = Self.authoritativeText(stream.text)
+                    self.stream = nil
+                    self.onPartial = nil
+                    continuation.resume(returning: text)
+                } catch {
+                    let partial = Self.authoritativeText(self.stream?.text)
+                    _ = self.stream?.reset()
+                    self.stream = nil
+                    self.onPartial = nil
+                    if !partial.isEmpty {
+                        continuation.resume(returning: partial)
+                    } else {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drain the live stream through its lookahead window and use that text.
+    /// The WAV is only a last resort if the stream never produced anything.
+    func finishTake(audioURL: URL, languages: [String] = []) async throws -> String {
+        do {
+            let streamed = try await finishStream()
+            if !streamed.isEmpty { return streamed }
+            print("[whisperino] stream empty after finalize - offline fallback")
+        } catch {
+            print("[whisperino] stream finalize failed (\(error.localizedDescription)) - offline fallback")
+        }
+        return try await transcribe(audioURL: audioURL, languages: languages)
+    }
+
+    func cancelStream() {
+        withLock {
+            streamClosed = true
+            pendingPCM.removeAll()
+        }
+        engineQueue.async { [weak self] in
+            _ = self?.stream?.reset()
+            self?.stream = nil
+            self?.onPartial = nil
+            self?.lastPreview = ""
+            self?.pcmBuffer.removeAll()
+        }
+    }
+
+    // MARK: - Options
+
+    private func runOptions(languages: [String]) -> RunOptions {
+        let id = selectedModel
+        let mapped = ASRModelCatalog.recognitionLanguage(for: id, selectedCodes: languages)
+        let family: RunExtension?
+        if ASRModelCatalog.descriptor(for: id).family == .whisper {
+            family = .whisper(WhisperRunOptions(
+                initialPrompt: mapped.prompt,
+                temperature: 0
+            ))
+        } else {
+            family = nil
+        }
+        let language = mapped.language.flatMap { $0 == "auto" ? nil : $0 }
+        return RunOptions(
+            timestamps: .none,
+            language: language,
+            family: family
         )
     }
 
-    // MARK: - Server path
-
-    private func ensureServer() async -> Bool {
-        lock.lock()
-        let task: Task<Bool, Never>
-        if let existing = warmUpTask {
-            task = existing
-        } else {
-            let newTask = Task { [weak self] in
-                await self?.startServer() ?? false
-            }
-            warmUpTask = newTask
-            task = newTask
-        }
-        lock.unlock()
-        return await task.value
+    /// `full` is the raw hypothesis. `display` (committed + tentative) can
+    /// lag by a whole encoder chunk after the model revises the tail.
+    static func authoritativeText(_ text: StreamText?) -> String {
+        guard let text else { return "" }
+        let full = cleanOutput(text.full)
+        let display = cleanOutput(text.display)
+        return full.count >= display.count ? full : display
     }
 
-    private func startServer() async -> Bool {
-        guard FileManager.default.fileExists(atPath: serverBinary.path),
-              FileManager.default.fileExists(atPath: modelPath.path) else {
-            print("[whisperino] whisper-server not installed - using whisper-cli per take (run setup.sh to speed this up)")
-            return false
-        }
-
-        // Reap any orphaned server from a crashed previous run before
-        // binding the port ourselves.
-        let pkill = Process()
-        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        pkill.arguments = ["-f", "\\.whisperino/bin/whisper-server"]
-        try? pkill.run()
-        pkill.waitUntilExit()
-
-        let process = Process()
-        process.executableURL = serverBinary
-        process.arguments = [
-            "--model", modelPath.path,
-            "--host", "127.0.0.1",
-            "--port", String(Self.serverPort),
-            "--threads", String(threads),
-            "--language", "auto",
-            // Greedy decoding - dictation doesn't need a 5-way beam
-            // search, and this cuts decode time by a large factor.
-            "--beam-size", "1",
-            "--best-of", "1",
-            "--no-timestamps",
-        ]
-        // Silence the server's logging.
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            print("[whisperino] failed to launch whisper-server: \(error)")
-            return false
-        }
-        serverProcess = process
-
-        // Poll until the HTTP endpoint answers - covers the model load.
-        let deadline = Date().addingTimeInterval(60)
-        var probe = URLRequest(url: URL(string: "http://127.0.0.1:\(Self.serverPort)/")!)
-        probe.timeoutInterval = 1
-        while Date() < deadline {
-            if !process.isRunning {
-                print("[whisperino] whisper-server exited during startup (port \(Self.serverPort) taken?)")
-                serverProcess = nil
-                return false
-            }
-            if let (_, response) = try? await URLSession.shared.data(for: probe),
-               response is HTTPURLResponse {
-                print("[whisperino] whisper-server warm on port \(Self.serverPort)")
-                return true
-            }
-            try? await Task.sleep(nanoseconds: 200_000_000)
-        }
-        print("[whisperino] whisper-server never became ready - using whisper-cli")
-        process.terminate()
-        serverProcess = nil
-        return false
-    }
-
-    private func transcribeViaServer(audioURL: URL, language: String, prompt: String?) async throws -> String {
-        let audioData = try Data(contentsOf: audioURL)
-
-        let boundary = "whisperino-\(UUID().uuidString)"
-        var body = Data()
-        func appendField(_ name: String, _ value: String) {
-            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
-        }
-        appendField("response_format", "text")
-        appendField("temperature", "0.0")
-        appendField("language", language)
-        if let prompt { appendField("prompt", prompt) }
-        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8))
-        body.append(audioData)
-        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
-
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(Self.serverPort)/inference")!)
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 300
-
-        let (data, response) = try await URLSession.shared.upload(for: request, from: body)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            let detail = String(data: data, encoding: .utf8) ?? "status \((response as? HTTPURLResponse)?.statusCode ?? -1)"
-            throw TranscriberError.serverError(String(detail.prefix(200)))
-        }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw TranscriberError.noOutput
-        }
-        return Self.cleanOutput(text)
-    }
-
-    // MARK: - CLI fallback path
-
-    private func transcribeViaCLI(audioURL: URL, language: String, prompt: String?) async throws -> String {
-        let threads = self.threads
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = whisperBinary
-            process.arguments = [
-                "--model", modelPath.path,
-                "--file", audioURL.path,
-                "--no-timestamps",
-                "--print-progress", "false",
-                "--print-special", "false",
-                "--language", language,
-                "--threads", String(threads),
-                // Greedy decoding - same speed rationale as the server.
-                "--beam-size", "1",
-                "--best-of", "1",
-            ]
-            if let prompt {
-                process.arguments?.append(contentsOf: ["--prompt", prompt])
-            }
-
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-
-            // Drain both pipes concurrently while the process runs. Reading
-            // only after termination deadlocks on long recordings: once the
-            // transcript exceeds the 64KB pipe buffer, whisper blocks on
-            // write and never exits, so the termination handler never fires.
-            let buffers = PipeBuffers()
-            let drainGroup = DispatchGroup()
-            drainGroup.enter()
-            DispatchQueue.global(qos: .userInitiated).async {
-                buffers.out = stdout.fileHandleForReading.readDataToEndOfFile()
-                drainGroup.leave()
-            }
-            drainGroup.enter()
-            DispatchQueue.global(qos: .userInitiated).async {
-                buffers.err = stderr.fileHandleForReading.readDataToEndOfFile()
-                drainGroup.leave()
-            }
-
-            process.terminationHandler = { _ in
-                // Pipes hit EOF when the process exits, so this returns fast.
-                drainGroup.wait()
-                let output = Self.cleanOutput(
-                    String(data: buffers.out, encoding: .utf8) ?? ""
-                )
-
-                if process.terminationStatus == 0 {
-                    continuation.resume(returning: output)
-                } else {
-                    if let err = String(data: buffers.err, encoding: .utf8), !err.isEmpty {
-                        print("[whisperino] whisper-cli stderr: \(err.suffix(500))")
-                    }
-                    continuation.resume(throwing: TranscriberError.processFailed(
-                        status: process.terminationStatus
-                    ))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-    }
-
-    /// Strip whisper special tokens and trim whitespace.
-    private static func cleanOutput(_ raw: String) -> String {
+    static func cleanOutput(_ raw: String) -> String {
         var output = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         for token in ["[EOT]", "[SOT]", "[BEG]", "[END]", "[BLANK_AUDIO]"] {
             output = output.replacingOccurrences(of: token, with: "")
         }
-        // Also strip bracket tokens like [_TT_123]
         output = output.replacingOccurrences(
             of: "\\[_[A-Z]+_\\d*\\]",
             with: "",

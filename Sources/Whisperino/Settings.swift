@@ -81,7 +81,7 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
 enum TranscriptionLanguageCatalog {
     static let automaticCode = "auto"
 
-    // whisper.cpp uses the same ISO-style language codes as Whisper. Keep the
+    // Whisper-family models use ISO-style language codes. Keep the
     // stored setting as a code so it is stable when the Mac's display language
     // changes; labels are localized at presentation time.
     static let supportedCodes = [
@@ -112,7 +112,7 @@ enum TranscriptionLanguageCatalog {
         guard validCodes.count != 1 else { return (validCodes[0], nil) }
         guard !validCodes.isEmpty else { return (automaticCode, nil) }
 
-        // whisper.cpp accepts one forced language or automatic detection, not
+        // Whisper accepts one forced language or automatic detection, not
         // a native language whitelist. With several preferences we retain
         // per-chunk detection and prime decoding with the chosen set. That
         // preserves natural language switching while strongly steering short
@@ -158,6 +158,8 @@ struct AppSettings: Codable, Equatable {
     /// water border, and a raft sailing while transcription runs. Pure
     /// paint; no behavior changes.
     var rafterinoModeEnabled: Bool = false
+    /// In-process transcribe.cpp GGUF. Defaults to Parakeet TDT 0.6B v3.
+    var asrModel: ASRModelID = ASRModelCatalog.default
     init() {}
 
     init(from decoder: Decoder) throws {
@@ -200,6 +202,8 @@ struct AppSettings: Codable, Equatable {
         }
         preferredInputDeviceUID = try container.decodeIfPresent(String.self, forKey: .preferredInputDeviceUID)
         rafterinoModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .rafterinoModeEnabled) ?? false
+        asrModel = (try? container.decode(ASRModelID.self, forKey: .asrModel))
+            ?? ASRModelCatalog.default
     }
 
     func encode(to encoder: Encoder) throws {
@@ -213,6 +217,7 @@ struct AppSettings: Codable, Equatable {
         try container.encode(transcriptionLanguageCodes, forKey: .transcriptionLanguageCodes)
         try container.encodeIfPresent(preferredInputDeviceUID, forKey: .preferredInputDeviceUID)
         try container.encode(rafterinoModeEnabled, forKey: .rafterinoModeEnabled)
+        try container.encode(asrModel, forKey: .asrModel)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -226,6 +231,7 @@ struct AppSettings: Codable, Equatable {
         case transcriptionLanguageCodes
         case preferredInputDeviceUID
         case rafterinoModeEnabled
+        case asrModel
     }
 }
 
