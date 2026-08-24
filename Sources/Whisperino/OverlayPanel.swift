@@ -38,9 +38,11 @@ class OverlayPanel {
     private static let baseHeight: CGFloat = 380
     private static let panelWidth: CGFloat = 420
     /// A centered virtual island competes with macOS's microphone privacy
-    /// indicator on crowded external-display menu bars. Keep every external
-    /// state on one slightly left-biased anchor so the system indicator has a
-    /// reliable clear lane without any movement between idle and recording.
+    /// indicator on crowded external-display menu bars. Active surfaces stay
+    /// on one slightly left-biased anchor so the system indicator has a clear
+    /// lane without any movement during a take. External displays deliberately
+    /// have no idle discovery island: unlike a physical notch, it would cover
+    /// real menu-bar content and its hover target would steal those clicks.
     private static let externalIslandHorizontalOffset: CGFloat = -28
 
     init(appState: AppState) {
@@ -201,33 +203,22 @@ class OverlayPanel {
         }
 
         let hasNotch = Self.hasPhysicalNotch(screen)
-        let isExternal = Self.isExternalDisplay(screen)
-        guard hasNotch || isExternal else {
+        guard hasNotch else {
             notchHotspotPanel.orderOut(nil)
+            hotspotDisplayID = nil
+            hotspotStyle = nil
+            hotspotFrame = nil
             return
         }
 
-        let style: NotchHoverTargetView.Style
-        let width: CGFloat
-        let height: CGFloat
-        if isExternal {
-            // A virtual, always-visible top-edge island. The panel is larger
-            // than the resting silhouette so the shell can grow on hover
-            // without moving or resizing the NSWindow hit target.
-            style = .externalTopEdge
-            width = 244
-            height = 36
-        } else {
-            style = .physicalNotch
-            let inset = max(screen.safeAreaInsets.top, 28)
-            let hardwareWidth = Self.physicalNotchWidth(on: screen)
-            // Hover is only a slight physical expansion of the real notch.
-            width = hardwareWidth + 36
-            height = inset + 16
-        }
+        let style = NotchHoverTargetView.Style.physicalNotch
+        let inset = max(screen.safeAreaInsets.top, 28)
+        let hardwareWidth = Self.physicalNotchWidth(on: screen)
+        // Hover is only a slight physical expansion of the real notch.
+        let width = hardwareWidth + 36
+        let height = inset + 16
         let frame = NSRect(
-            x: screen.frame.midX - width / 2
-                + (isExternal ? Self.externalIslandHorizontalOffset : 0),
+            x: screen.frame.midX - width / 2,
             y: screen.frame.maxY - height,
             width: width,
             height: height
