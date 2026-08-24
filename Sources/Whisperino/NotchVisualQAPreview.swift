@@ -65,6 +65,20 @@ enum NotchVisualQAPreview {
             previewState.liveTranscript = "What’s actually being transcribed right now."
         case "processing-compact":
             previewState.state = .transcribing
+        case "streaming-long", "streaming-picker":
+            previewState.state = .recording
+            previewState.liveTranscript = """
+            This is a deliberately long live transcription used to verify that the newest words stay visible without making the notch grow forever. Earlier sentences remain available when you scroll back, while each incoming revision stays anchored cleanly at the bottom of the transcript.
+            """
+            if mode == "streaming-picker" {
+                previewState.inputDevices = [
+                    AudioInputDevice(id: 1, name: "MacBook Pro Microphone", uid: "qa-built-in"),
+                    AudioInputDevice(id: 2, name: "Studio Display Microphone", uid: "qa-display"),
+                    AudioInputDevice(id: 3, name: "AirPods Pro", uid: "qa-airpods"),
+                ]
+                previewState.selectedInputDevice = previewState.inputDevices[0]
+                previewState.showingInputPicker = true
+            }
         case "error":
             previewState.state = .error(
                 message: "Mic error: The microphone did not respond. Reconnect it or choose another input"

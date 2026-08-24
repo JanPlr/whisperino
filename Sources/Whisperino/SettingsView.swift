@@ -1063,21 +1063,21 @@ private struct SpeechModelPicker: View {
     var body: some View {
         let _ = downloader.installedRevision
         SettingsCard(title: "Speech model") {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
                 ForEach(ASRModelCatalog.all) { model in
                     modelRow(model)
                 }
             }
-            CaptionText("Models download from Hugging Face into ~/.whisperino/models and stay on this Mac. Parakeet is the default. Pick Nemotron if you want a live transcript while you speak.")
         }
     }
 
     private func modelRow(_ model: ASRModelDescriptor) -> some View {
         let selected = store.settings.asrModel == model.id
         let installed = downloader.isInstalled(model.id)
-        let downloading: Bool = {
-            if case .downloading(let id, _, _) = downloader.status { return id == model.id }
-            return false
+        let progress: Double? = {
+            guard case .downloading(let id, _, _) = downloader.status,
+                  id == model.id else { return nil }
+            return downloader.status.fraction
         }()
         let failed: String? = {
             if case .failed(let id, let message) = downloader.status, id == model.id {
@@ -1085,51 +1085,203 @@ private struct SpeechModelPicker: View {
             }
             return nil
         }()
+        let anotherDownloadIsActive = downloader.status.isDownloading && progress == nil && !installed
 
-        return VStack(alignment: .leading, spacing: 6) {
-            ChoiceCard(
-                title: model.displayName,
-                detail: model.detail,
-                selected: selected
-            ) {
-                store.settings.asrModel = model.id
-                if !installed {
-                    downloader.ensure(model.id)
-                }
-            }
-
-            HStack(spacing: 8) {
-                if model.supportsStreaming {
-                    Text("Streaming")
-                        .font(Brand.mono(10, .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                if installed {
-                    Text("On disk")
-                        .font(Brand.mono(10, .semibold))
-                        .foregroundStyle(.secondary)
-                } else if downloading, let fraction = downloader.status.fraction {
-                    Text("Downloading \(Int(fraction * 100))%")
-                        .font(Brand.mono(10, .semibold))
-                        .foregroundStyle(.secondary)
-                    ProgressView(value: fraction)
-                        .progressViewStyle(.linear)
-                        .frame(maxWidth: 140)
-                } else {
-                    Button("Download") {
-                        downloader.ensure(model.id)
+        return SpeechModelRow(
+            model: model,
+            selected: selected,
+            installed: installed,
+            progress: progress,
+            failedMessage: failed,
+            disabled: anotherDownloadIsActive,
+            streamingEnabled: model.supportsStreaming && installed
+                ? Binding(
+                    get: {
+                        store.settings.asrModel == model.id
+                            && store.settings.streamingTranscriptionEnabled
+                    },
+                    set: { enabled in
+                        if enabled {
+                            store.settings.asrModel = model.id
+                        }
+                        store.settings.streamingTranscriptionEnabled = enabled
                     }
-                    .buttonStyle(SecondaryButtonStyle())
-                }
-                if let failed {
-                    Text(failed)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                }
-                Spacer(minLength: 0)
+                )
+                : nil
+        ) {
+            if installed {
+                store.settings.asrModel = model.id
+            } else if progress == nil {
+                // Selecting an unavailable model should be one action: mark it
+                // active now and download it. Once the file lands, the model
+                // observer loads it without requiring a second click.
+                store.settings.asrModel = model.id
+                downloader.ensure(model.id)
             }
-            .padding(.horizontal, 4)
         }
+    }
+}
+
+private struct SpeechModelRow: View {
+    let model: ASRModelDescriptor
+    let selected: Bool
+    let installed: Bool
+    let progress: Double?
+    let failedMessage: String?
+    let disabled: Bool
+    let streamingEnabled: Binding<Bool>?
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    selectionIndicator
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 7) {
+                            Text(model.displayName)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+
+                            if model.supportsStreaming {
+                                Text("LIVE STREAMING OF TEXT")
+                                    .font(Brand.mono(8, .semibold))
+                                    .foregroundStyle(Brand.ink)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2.5)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(Brand.ink.opacity(0.09))
+                                    )
+                            }
+                        }
+
+                        HStack(spacing: 5) {
+                            Text(model.detail)
+                            Text("·")
+                            Text(sizeLabel)
+                        }
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+
+                        if failedMessage != nil {
+                            Text("Download failed")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.red)
+                        }
+                    }
+
+                    Spacer(minLength: 12)
+                    trailingStatus
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .accessibilityLabel(model.displayName)
+            .accessibilityValue(accessibilityStatus)
+
+            if let streamingEnabled {
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        streamingEnabled.wrappedValue.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 7) {
+                        Text(streamingEnabled.wrappedValue ? "Streaming on" : "Streaming off")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        BrandSwitch(isOn: streamingEnabled.wrappedValue, disabled: false)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Stream live text while speaking")
+                .accessibilityLabel("Stream live text while speaking")
+                .accessibilityValue(streamingEnabled.wrappedValue ? "On" : "Off")
+                .accessibilityAddTraits(streamingEnabled.wrappedValue ? .isSelected : [])
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(selected ? Brand.selected : (hovering && !disabled ? Brand.hover : Brand.card))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(selected ? Brand.ink.opacity(0.30) : Brand.border, lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .opacity(disabled ? 0.48 : 1)
+        .onHover { isHovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                hovering = isHovering
+            }
+        }
+        .help(failedMessage ?? "")
+    }
+
+    private var selectionIndicator: some View {
+        ZStack {
+            Circle()
+                .fill(selected ? Brand.ink : Color.clear)
+            Circle()
+                .strokeBorder(selected ? Color.clear : Brand.border, lineWidth: 1.5)
+            if selected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(Brand.card)
+            }
+        }
+        .frame(width: 17, height: 17)
+    }
+
+    @ViewBuilder
+    private var trailingStatus: some View {
+        if let progress {
+            VStack(alignment: .trailing, spacing: 5) {
+                Text("\(Int(progress * 100))%")
+                    .font(Brand.mono(10, .semibold))
+                    .foregroundStyle(.secondary)
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .tint(Brand.ink)
+                    .frame(width: 96)
+            }
+        } else if !installed {
+            HStack(spacing: 5) {
+                Image(systemName: failedMessage == nil ? "arrow.down" : "arrow.clockwise")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(failedMessage == nil ? "Download" : "Retry")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Brand.canvas))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Brand.border, lineWidth: 1))
+        }
+    }
+
+    private var sizeLabel: String {
+        let mib = Double(model.expectedBytes) / 1_048_576
+        if mib >= 1024 {
+            return String(format: "%.2f GB", mib / 1024)
+        }
+        return "\(Int(mib.rounded())) MB"
+    }
+
+    private var accessibilityStatus: String {
+        if let progress { return "Downloading, \(Int(progress * 100)) percent" }
+        if selected { return "Selected" }
+        if installed { return "Downloaded" }
+        if failedMessage != nil { return "Download failed, retry" }
+        return "Not downloaded"
     }
 }
 

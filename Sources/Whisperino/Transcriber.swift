@@ -63,15 +63,15 @@ final class Transcriber {
     private var onPartial: ((String) -> Void)?
     private var lastPreview = ""
     private var streamRunOptions = RunOptions()
-    /// Nemotron 3.5's cache-aware stream is trained on 1120 ms chunks with
-    /// up to 1040 ms of right context. R=13 is the setting that matches the
-    /// offline transcript; lower R commits earlier and drops the tail.
+    /// Nemotron 3.5 is trained for R ∈ {0, 3, 6, 13}. R=3 processes a
+    /// 320 ms chunk (80 ms current frame + 240 ms right context), giving the
+    /// UI responsive live text while retaining much more context than R=0.
     private var streamOptions = StreamOptions(
-        family: .parakeetStream(ParakeetStreamOptions(attContextRight: 13))
+        family: .parakeetStream(ParakeetStreamOptions(attContextRight: 3))
     )
-    /// Chunk (1120 ms) + right context (1040 ms) of silence so the last
-    /// words have the future audio Nemotron needs before it will emit them.
-    private let finalizePadSamples = 36_000
+    /// One 320 ms chunk plus right context gives the final words enough future
+    /// audio to leave the model's tentative tail before finalization.
+    private let finalizePadSamples = 8_960
     /// Bumped at the start of each take so a late `startStream` cannot reopen
     /// a stream that `finishStream` already finalized.
     private var takeGeneration: UInt64 = 0
@@ -335,10 +335,11 @@ final class Transcriber {
         pcmBuffer.removeAll(keepingCapacity: true)
         guard !chunk.isEmpty else { return }
         do {
-            let update = try stream.feed(chunk)
-            if update.committedChanged || update.tentativeChanged || update.resultChanged {
-                publishPreview(Self.authoritativeText(stream.text))
-            }
+            _ = try stream.feed(chunk)
+            // The stream owns and may replace its text buffers on every feed.
+            // Snapshot after every successful feed; publishPreview performs
+            // the cheap deduplication for unchanged hypotheses.
+            publishPreview(Self.authoritativeText(stream.text))
         } catch {
             print("[whisperino] stream feed failed: \(error.localizedDescription)")
         }
@@ -370,9 +371,9 @@ final class Transcriber {
                         return
                     }
                     self.flushPCMIfNeeded(force: true)
-                    // The last 1–2 s sit in the encoder's right-context
+                    // The trailing frames sit in the encoder's right-context
                     // window until they have future audio. Key-up has none,
-                    // so pad a full chunk of silence and then finalize.
+                    // so pad through that lookahead and then finalize.
                     let pad = [Float](repeating: 0, count: self.finalizePadSamples)
                     _ = try stream.feed(pad)
                     _ = try stream.finalize()

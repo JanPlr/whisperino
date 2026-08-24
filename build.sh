@@ -74,6 +74,18 @@ ditto "$FRAMEWORK_SRC" "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
 install_name_tool -add_rpath "@executable_path/../Frameworks" \
     "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
+# Embed the MediaRemote adapter and its entitled-host script. SwiftPM builds
+# the dynamic product as a dylib (not an Xcode .framework), so copy it into the
+# rpath directly and give the app a stable resource path for the Perl helper.
+MEDIA_REMOTE_DYLIB_SRC=".build/release/libMediaRemoteAdapter.dylib"
+MEDIA_REMOTE_SCRIPT_SRC=".build/release/MediaRemoteAdapter_MediaRemoteAdapter.bundle/run.pl"
+if [ ! -f "$MEDIA_REMOTE_DYLIB_SRC" ] || [ ! -f "$MEDIA_REMOTE_SCRIPT_SRC" ]; then
+    echo "Error: MediaRemote adapter build products are missing" >&2
+    exit 1
+fi
+cp "$MEDIA_REMOTE_DYLIB_SRC" "$APP_BUNDLE/Contents/Frameworks/"
+cp "$MEDIA_REMOTE_SCRIPT_SRC" "$APP_BUNDLE/Contents/Resources/mediaremote-adapter.pl"
+
 # Copy Info.plist and icon, stamp the version
 cp Info.plist "$APP_BUNDLE/Contents/"
 /usr/libexec/PlistBuddy \
@@ -89,11 +101,13 @@ cp AppIcon.icns "$APP_BUNDLE/Contents/Resources/"
 SIGN_IDENTITY="Whisperino Self-Signed"
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
+    codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/libMediaRemoteAdapter.dylib"
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
     STABLE_SIGNED=true
     echo "==> Signed with stable identity ($SIGN_IDENTITY) - permissions persist across builds"
 else
     codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
+    codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/libMediaRemoteAdapter.dylib"
     codesign --force --sign - "$APP_BUNDLE"
     STABLE_SIGNED=false
     echo "==> Ad-hoc signed - run ./setup-signing.sh once so permissions stop resetting"

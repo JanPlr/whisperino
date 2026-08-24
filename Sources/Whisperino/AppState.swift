@@ -112,6 +112,11 @@ class AppState: ObservableObject {
     /// Camera-housing width measured from the display's auxiliary menu-bar
     /// regions. Compact notch UI grows outward from this exact width.
     @Published var overlayPhysicalNotchWidth: CGFloat = 210
+    /// Display chosen from the focused text caret/window when a take begins.
+    /// OverlayPanel uses this stable CG display id for the full take so the
+    /// notch appears beside the field being dictated into, regardless of
+    /// which display macOS considers "main" or whether an external exists.
+    @Published private(set) var overlayTargetDisplayID: CGDirectDisplayID?
     /// Explicit lifecycle for agent/edit sessions. Dictation keeps using the
     /// lightweight transcription state; every assistant callback must match
     /// this session id before it can mutate the surface.
@@ -133,6 +138,10 @@ class AppState: ObservableObject {
     /// Drives the live preview strip in the overlay and doubles as the
     /// partial result we can salvage if a later stage fails.
     @Published var liveTranscript: String = ""
+    /// True while streaming partials are being rendered directly in the text
+    /// element that was focused when the take began. When false, the overlay
+    /// owns the visual preview instead.
+    @Published private(set) var streamsTranscriptIntoFocusedField = false
     /// Chunk progress for the transcribing pill ("3/5"). Total counts
     /// every chunk submitted so far; done counts completed whisper runs.
     @Published var chunksDone: Int = 0
@@ -179,10 +188,9 @@ class AppState: ObservableObject {
     /// newer take.
     private var recordingToken: UUID?
 
-    /// True only when Whisperino paused an active media session for the
-    /// current take. This prevents us from starting media that the user had
-    /// already paused before dictating.
-    private var mediaWasPausedForRecording = false
+    /// Owns the confirmed pause/resume lease for the current take. Playback is
+    /// resumed only when this controller positively observed and paused it.
+    private let mediaPlaybackController = MediaPlaybackController()
 
     /// Language is snapshotted once per take so a Settings change cannot make
     /// later rolling chunks use a different recognizer language.
@@ -195,6 +203,24 @@ class AppState: ObservableObject {
     /// chat tile hasn't stolen focus yet). Defaults to true so we paste
     /// whenever the answer is unknown rather than withholding.
     private var recordingTargetEditable = true
+    /// Accessibility-backed provisional range used by streaming recognizers.
+    /// It survives recording stop so the final/refined text can replace the
+    /// partial hypothesis without a second paste.
+    private var liveTextInserter: LiveTextInserter?
+    /// Partial hypotheses can arrive every ~80 ms. Limit visible field edits
+    /// to a steady cadence and coalesce superseded tails so synthetic keyboard
+    /// events never pile up behind the recognizer.
+    private var pendingLiveTextInsertion: DispatchWorkItem?
+    private var lastLiveTextInsertionTime: TimeInterval = 0
+    private let liveTextInsertionInterval: TimeInterval = 0.12
+    /// Cross-process AX calls occasionally return a transient failure while a
+    /// browser applies the previous edit. Keep the owned field alive long
+    /// enough for the next complete hypothesis to retry it.
+    private var consecutiveLiveTextInsertionFailures = 0
+    /// A provisional range could not be restored after the target editor was
+    /// changed externally. The final result must use the rescue card instead
+    /// of risking a duplicate clipboard paste.
+    private var liveTextInsertionRequiresRescue = false
 
     // MARK: Rolling chunked transcription
 
@@ -204,6 +230,10 @@ class AppState: ObservableObject {
     /// True when this take feeds live PCM into a transcribe.cpp stream
     /// (Nemotron) instead of rotating WAV chunks.
     private var streamingTake = false
+    /// Snapshot of the user-visible streaming preference for this take. The
+    /// model can keep its streaming decoder internally while partial words are
+    /// hidden until finalization.
+    private var publishesStreamingPartialsForTake = false
     private var settingsObserver: AnyCancellable?
     /// Ticks once a second during recording to decide when to rotate the
     /// audio file into a new chunk.
@@ -370,6 +400,10 @@ class AppState: ObservableObject {
             return
         }
 
+        // Raw ASR partials belong in the target field only for plain
+        // dictation. Upgrading to AI mode restores the original selection;
+        // the spoken instruction will now stream in the overlay instead.
+        discardLiveTextInsertion(protectFinalDelivery: true)
         isInstructionMode = true
         // Same screen grab a fresh AI take does - the user just decided this
         // take is a question about what's on screen.
@@ -506,6 +540,7 @@ class AppState: ObservableObject {
     }
 
     private func startRecording(instruction: Bool) {
+        discardLiveTextInsertion()
         // A fresh take supersedes a lingering fallback card.
         fallbackResult = nil
         assistantCard = nil
@@ -567,14 +602,35 @@ class AppState: ObservableObject {
         // target is frontmost and its caret is live, which is the only moment
         // this can be read reliably.
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        recordingTargetEditable = Self.focusedElementIsEditable()
+        let focusedTarget = Self.focusedEditableTarget()
+        overlayTargetDisplayID = ScreenCapture.targetDisplayID(
+            focusedElement: focusedTarget.element,
+            pid: recordingTargetPID
+        )
+        recordingTargetEditable = focusedTarget.editable
+        publishesStreamingPartialsForTake = transcriber.supportsStreaming
+            && store.settings.streamingTranscriptionEnabled
+        if publishesStreamingPartialsForTake, !instruction {
+            if let element = focusedTarget.element,
+               let inserter = LiveTextInserter(element: element) {
+                liveTextInserter = inserter
+                consecutiveLiveTextInsertionFailures = 0
+                recordingTargetEditable = true
+                streamsTranscriptIntoFocusedField = true
+            } else if !AXIsProcessTrusted() {
+                NSLog("[whisperino] live field unavailable: Accessibility permission is not active")
+            } else {
+                NSLog("[whisperino] live field unavailable: focused element exposes no writable text range")
+            }
+        }
 
         // Pause before AVAudioEngine and the optional start sound become
         // active, otherwise our own audio session could make the output query
         // look busy and turn an idle Play/Pause toggle into accidental play.
         recordingLanguageCodes = store.settings.transcriptionLanguageCodes
-        mediaWasPausedForRecording = store.settings.pauseMediaOnRecordingStart
-            && MediaPlaybackController.pauseIfAudioIsPlaying()
+        if store.settings.pauseMediaOnRecordingStart {
+            mediaPlaybackController.pauseIfPlaying()
+        }
 
         // AI mode: silently grab the current screen as image context and flash
         // a frame around the window we captured, so the user can just talk to
@@ -632,6 +688,7 @@ class AppState: ObservableObject {
                     self.windowHighlighter.dismiss()
                     self.screenshotTask?.cancel()
                     self.screenshotTask = nil
+                    self.discardLiveTextInsertion()
                     self.recordingTargetPID = nil
                     self.resetInstructionMode()
                     if var session = self.assistantSession {
@@ -745,8 +802,12 @@ class AppState: ObservableObject {
                 do {
                     try await self.transcriber.startStream(languages: languages) { [weak self] text in
                         DispatchQueue.main.async {
-                            guard let self else { return }
-                            self.liveTranscript = text
+                            guard let self,
+                                  case .recording = self.state,
+                                  self.streamingTake else { return }
+                            if self.publishesStreamingPartialsForTake {
+                                self.handleStreamingPartial(text)
+                            }
                             if !text.isEmpty {
                                 let recovery = FileManager.default.homeDirectoryForCurrentUser
                                     .appendingPathComponent(".whisperino/recovery/last-raw-transcript.txt")
@@ -759,6 +820,8 @@ class AppState: ObservableObject {
                     await MainActor.run { [weak self] in
                         guard let self, case .recording = self.state else { return }
                         self.streamingTake = false
+                        self.publishesStreamingPartialsForTake = false
+                        self.discardLiveTextInsertion(protectFinalDelivery: true)
                         self.beginChunkedSession()
                     }
                 }
@@ -786,6 +849,55 @@ class AppState: ObservableObject {
             self.chunksTotal = max(self.chunksTotal, progress.chunksTotal)
         }
         transcriptionSession = session
+    }
+
+    /// Publish every revised streaming hypothesis to exactly one visual
+    /// destination: the focused text range when AX editing is available, or
+    /// the overlay when it is not. `liveTranscript` is always retained for
+    /// recovery and finalization regardless of destination.
+    private func handleStreamingPartial(_ text: String) {
+        liveTranscript = text
+        guard let inserter = liveTextInserter else { return }
+        // Do not erase an existing selection for an initial empty hypothesis.
+        guard !text.isEmpty || inserter.hasInsertedText else { return }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let wait = liveTextInsertionInterval - (now - lastLiveTextInsertionTime)
+        pendingLiveTextInsertion?.cancel()
+        pendingLiveTextInsertion = nil
+        if wait <= 0 {
+            applyStreamingPartial(text, to: inserter)
+            return
+        }
+
+        let work = DispatchWorkItem { [weak self, weak inserter] in
+            guard let self, let inserter,
+                  self.liveTextInserter === inserter else { return }
+            self.pendingLiveTextInsertion = nil
+            self.applyStreamingPartial(text, to: inserter)
+        }
+        pendingLiveTextInsertion = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
+    }
+
+    private func applyStreamingPartial(_ text: String, to inserter: LiveTextInserter) {
+        guard liveTextInserter === inserter else { return }
+        lastLiveTextInsertionTime = ProcessInfo.processInfo.systemUptime
+        if inserter.replace(with: text) {
+            consecutiveLiveTextInsertionFailures = 0
+            return
+        }
+
+        consecutiveLiveTextInsertionFailures += 1
+        guard consecutiveLiveTextInsertionFailures >= 3 else { return }
+
+        // Three explicit AX errors in a row means the field genuinely
+        // detached. A single stale/transient browser response no longer sends
+        // all remaining speech to the notch.
+        inserter.rollback()
+        liveTextInsertionRequiresRescue = inserter.hasInsertedText
+        liveTextInserter = nil
+        streamsTranscriptIntoFocusedField = false
     }
 
     private func chunkTimerTick() {
@@ -851,6 +963,8 @@ class AppState: ObservableObject {
         transcriptionSession = nil
         transcriber.cancelStream()
         streamingTake = false
+        publishesStreamingPartialsForTake = false
+        discardLiveTextInsertion()
         liveTranscript = ""
         chunksDone = 0
         chunksTotal = 0
@@ -860,9 +974,7 @@ class AppState: ObservableObject {
     /// command is idempotent, unlike a Play/Pause toggle, so a player that has
     /// already resumed itself remains playing.
     private func resumeMediaAfterRecordingIfNeeded() {
-        guard mediaWasPausedForRecording else { return }
-        mediaWasPausedForRecording = false
-        MediaPlaybackController.resumePlayback()
+        mediaPlaybackController.resumeIfWePaused()
     }
 
     private func stopRecording() {
@@ -960,6 +1072,7 @@ class AppState: ObservableObject {
 
                 guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     await MainActor.run {
+                        self.discardLiveTextInsertion()
                         self.state = .error(message: "No speech detected")
                         if let assistantSessionID {
                             _ = self.updateAssistantSession(
@@ -1164,6 +1277,7 @@ class AppState: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    self.discardLiveTextInsertion()
                     self.resetInstructionMode()
                     if let assistantSessionID,
                        !(error is CancellationError) {
@@ -1496,6 +1610,21 @@ class AppState: ObservableObject {
 
     // MARK: - Paste
 
+    /// Remove provisional live text and restore whatever was selected before
+    /// dictation. Safe to call repeatedly across every teardown path.
+    private func discardLiveTextInsertion(protectFinalDelivery: Bool = false) {
+        pendingLiveTextInsertion?.cancel()
+        pendingLiveTextInsertion = nil
+        lastLiveTextInsertionTime = 0
+        let inserter = liveTextInserter
+        inserter?.rollback()
+        liveTextInserter = nil
+        consecutiveLiveTextInsertionFailures = 0
+        liveTextInsertionRequiresRescue = protectFinalDelivery
+            && (inserter?.hasInsertedText ?? false)
+        streamsTranscriptIntoFocusedField = false
+    }
+
     /// Paste the finished take into the app that was frontmost when
     /// recording began. Returns false only when we positively determined -
     /// at record start, the one reliable moment - that there was no editable
@@ -1504,12 +1633,27 @@ class AppState: ObservableObject {
     /// so a real text field never gets withheld.
     @discardableResult
     private func insertResult(_ text: String) -> Bool {
+        pendingLiveTextInsertion?.cancel()
+        pendingLiveTextInsertion = nil
+        lastLiveTextInsertionTime = 0
         let targetPID = recordingTargetPID
         let editable = recordingTargetEditable
+        let liveInserter = liveTextInserter
+        let requiresRescue = liveTextInsertionRequiresRescue
+        liveTextInserter = nil
+        consecutiveLiveTextInsertionFailures = 0
+        liveTextInsertionRequiresRescue = false
         recordingTargetPID = nil
         resetInstructionMode()
 
-        guard editable else { return false }
+        guard editable else {
+            streamsTranscriptIntoFocusedField = false
+            return false
+        }
+        guard !requiresRescue else {
+            streamsTranscriptIntoFocusedField = false
+            return false
+        }
 
         // TCC grants are tied to the exact signed app bundle. A rebuild or a
         // signing-identity transition can leave the row in System Settings
@@ -1520,9 +1664,34 @@ class AppState: ObservableObject {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
             AXIsProcessTrustedWithOptions(options)
             NSLog("[whisperino] paste withheld: Accessibility is not trusted for \(Bundle.main.bundleURL.path)")
+            streamsTranscriptIntoFocusedField = false
             return false
         }
 
+        // A streaming take already owns a provisional range in this editor.
+        // Replace that range with the finalized (and possibly LLM-refined)
+        // result instead of pasting a duplicate after it.
+        if let liveInserter {
+            let hadPartialText = liveInserter.hasInsertedText
+            if liveInserter.replace(with: text) {
+                if shouldAutoSubmit(pid: targetPID) {
+                    deliverAutoSubmit(reactivating: targetPID)
+                }
+                return true
+            }
+
+            liveInserter.rollback()
+            // If provisional text had already landed, a blind full paste could
+            // duplicate or overwrite a user edit. Preserve the final text in
+            // the rescue card instead. Before the first partial, the ordinary
+            // clipboard path remains safe as a compatibility fallback.
+            if hadPartialText {
+                streamsTranscriptIntoFocusedField = false
+                return false
+            }
+        }
+
+        streamsTranscriptIntoFocusedField = false
         deliverPaste(text, reactivating: targetPID, submitAfter: shouldAutoSubmit(pid: targetPID))
         return true
     }
@@ -1544,8 +1713,8 @@ class AppState: ObservableObject {
     /// paste. We only return false when the API positively tells us either
     /// that nothing is focused or that the focused thing has no text
     /// behaviour at all.
-    private static func focusedElementIsEditable() -> Bool {
-        guard AXIsProcessTrusted() else { return true }
+    private static func focusedEditableTarget() -> (editable: Bool, element: AXUIElement?) {
+        guard AXIsProcessTrusted() else { return (true, nil) }
 
         // System-wide focused element = the focused element of the frontmost
         // app. This is the robust query (the per-app variant returns stale /
@@ -1558,10 +1727,10 @@ class AppState: ObservableObject {
         )
         // Couldn't read focus at all (AX disabled for the app, opaque
         // Electron, transient error) → assume editable and paste.
-        guard err == .success else { return true }
+        guard err == .success else { return (true, nil) }
         // Attribute present but empty → genuinely nothing focused.
         guard let focused = focusedRef, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
-            return false
+            return (false, nil)
         }
         let element = focused as! AXUIElement
 
@@ -1576,7 +1745,20 @@ class AppState: ObservableObject {
         var settable = DarwinBoolean(false)
         let valueSettable = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
 
-        return classifyEditable(role: role, subrole: subrole, valueSettable: valueSettable, element: element)
+        let editable = classifyEditable(
+            role: role,
+            subrole: subrole,
+            valueSettable: valueSettable,
+            element: element
+        )
+        // Password fields remain valid final-paste targets, but never expose a
+        // live provisional transcript through Accessibility.
+        // Even if role classification says this is a container, pass the
+        // focused element to LiveTextInserter. Web chat composers often put
+        // the writable text range on an ancestor or descendant; the inserter
+        // performs its own bounded, non-destructive capability probe.
+        let supportsLiveInsertion = subrole != "AXSecureTextField"
+        return (editable, supportsLiveInsertion ? element : nil)
     }
 
     /// Decide editability from role first. Real text-input roles/subroles
@@ -1678,6 +1860,23 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Auto-submit after a live AX insertion. This mirrors the activation
+    /// discipline of clipboard paste without touching the pasteboard again.
+    private func deliverAutoSubmit(reactivating pid: pid_t?) {
+        let fire: () -> Void = {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                self.pressReturn()
+            }
+        }
+
+        if let pid, let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate()
+            waitUntilFrontmost(pid: pid, attemptsRemaining: 8, completion: fire)
+        } else {
+            fire()
+        }
+    }
+
     /// App activation is asynchronous and can take substantially longer than
     /// a fixed delay on a fresh login or while switching Spaces. Wait up to
     /// 400ms for the intended target before sending the paste event.
@@ -1738,6 +1937,7 @@ class AppState: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
                 guard case .dismissing = self?.state else { return }
                 self?.state = .idle
+                self?.streamsTranscriptIntoFocusedField = false
             }
         }
     }

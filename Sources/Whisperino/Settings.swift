@@ -160,6 +160,9 @@ struct AppSettings: Codable, Equatable {
     var rafterinoModeEnabled: Bool = false
     /// In-process transcribe.cpp GGUF. Defaults to Parakeet TDT 0.6B v3.
     var asrModel: ASRModelID = ASRModelCatalog.default
+    /// Show partial hypotheses while recording when the selected model can
+    /// produce them. Defaults on for existing installs.
+    var streamingTranscriptionEnabled: Bool = true
     init() {}
 
     init(from decoder: Decoder) throws {
@@ -204,6 +207,10 @@ struct AppSettings: Codable, Equatable {
         rafterinoModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .rafterinoModeEnabled) ?? false
         asrModel = (try? container.decode(ASRModelID.self, forKey: .asrModel))
             ?? ASRModelCatalog.default
+        streamingTranscriptionEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .streamingTranscriptionEnabled
+        ) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -218,6 +225,7 @@ struct AppSettings: Codable, Equatable {
         try container.encodeIfPresent(preferredInputDeviceUID, forKey: .preferredInputDeviceUID)
         try container.encode(rafterinoModeEnabled, forKey: .rafterinoModeEnabled)
         try container.encode(asrModel, forKey: .asrModel)
+        try container.encode(streamingTranscriptionEnabled, forKey: .streamingTranscriptionEnabled)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -232,6 +240,7 @@ struct AppSettings: Codable, Equatable {
         case preferredInputDeviceUID
         case rafterinoModeEnabled
         case asrModel
+        case streamingTranscriptionEnabled
     }
 }
 

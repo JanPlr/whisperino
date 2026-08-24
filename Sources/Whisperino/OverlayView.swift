@@ -27,6 +27,15 @@ struct OverlayView: View {
         }
     }
 
+    /// Streaming text has one visible destination. If Accessibility cannot
+    /// safely own the focused editor range (or this is an AI instruction),
+    /// show the live hypothesis in Whisperino's surface while recording.
+    private var showsLiveTranscriptInWidget: Bool {
+        guard case .recording = appState.state else { return false }
+        return !appState.streamsTranscriptIntoFocusedField
+            && !appState.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// A deliberately small set of visual phases for the physical-notch shell.
     /// The shell itself never gets replaced while a take is active; only this
     /// phase changes, which lets SwiftUI interpolate one top-anchored shape
@@ -36,8 +45,12 @@ struct OverlayView: View {
         if appState.fallbackResult != nil { return "fallback" }
         if appState.showingInputPicker,
            case .recording = appState.state {
-            return "inputPicker"
+            // Keep the live transcript mounted while the source chooser
+            // opens. Replacing one with the other made the notch collapse
+            // sideways, crossfade, and then grow again.
+            return showsLiveTranscriptInWidget ? "transcriptPicker" : "inputPicker"
         }
+        if showsLiveTranscriptInWidget { return "transcript" }
         if let phase = appState.assistantSession?.phase {
             switch phase {
             case .planning, .executing:
@@ -47,6 +60,7 @@ struct OverlayView: View {
             }
         }
         if isProcessingState,
+           !appState.streamsTranscriptIntoFocusedField,
            !appState.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "transcript"
         }
@@ -641,7 +655,8 @@ struct OverlayView: View {
 
     private var notchSurfaceWidth: CGFloat {
         switch notchPresentation {
-        case "assistant", "fallback", "toolWorking", "transcript": return 360
+        case "assistant", "fallback", "toolWorking", "transcript", "transcriptPicker":
+            return 360
         // Never shrink horizontally when opening on a wide hardware notch.
         // The selector grows outward from the compact recording width.
         // Keep the selector content at the compact recording width. Only the
@@ -673,7 +688,9 @@ struct OverlayView: View {
         // Opening the microphone picker must be a vertical-only operation.
         // Keeping the recording shoulder radius constant prevents the shell's
         // total width from changing by 22pt while a selected row dismisses.
-        if case .recording = appState.state { return 10 }
+        if case .recording = appState.state,
+           notchPresentation != "transcript",
+           notchPresentation != "transcriptPicker" { return 10 }
         return notchIsExpanded ? 21 : 10
     }
 
@@ -686,6 +703,7 @@ struct OverlayView: View {
             || notchPresentation == "fallback"
             || notchPresentation == "toolWorking"
             || notchPresentation == "transcript"
+            || notchPresentation == "transcriptPicker"
             || notchPresentation == "inputPicker"
             || notchPresentation == "error"
     }
@@ -714,7 +732,9 @@ struct OverlayView: View {
 
             ZStack(alignment: .top) {
                 Group {
-                    if case .recording = appState.state {
+                    if case .recording = appState.state,
+                       notchPresentation != "transcript",
+                       notchPresentation != "transcriptPicker" {
                         recordingNotchBody
                     } else if notchIsExpanded {
                         VStack(spacing: 0) {
@@ -722,7 +742,15 @@ struct OverlayView: View {
                                 .frame(height: max(appState.overlayNotchInset, 28))
 
                             notchAttachedContent
-                                .id(notchPresentation)
+                                // Transcript and transcript+picker are one
+                                // persistent surface. Giving them the same
+                                // identity prevents live text from blinking
+                                // out when the chooser is revealed below it.
+                                .id(
+                                    notchPresentation == "transcriptPicker"
+                                        ? "transcript"
+                                        : notchPresentation
+                                )
                                 .transition(
                                     .opacity.combined(
                                         with: .scale(scale: 0.985, anchor: .top)
@@ -899,6 +927,9 @@ struct OverlayView: View {
             case .recording, .cancelled:
                 if notchPresentation == "inputPicker" {
                     physicalNotchInputPicker
+                } else if notchPresentation == "transcript"
+                            || notchPresentation == "transcriptPicker" {
+                    recordingTranscriptSurface
                 } else {
                     EmptyView()
                 }
@@ -1181,12 +1212,7 @@ struct OverlayView: View {
     }
 
     private var liveTranscriptPreview: some View {
-        Text(appState.liveTranscript)
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(.white.opacity(0.88))
-            .lineSpacing(4)
-            .lineLimit(4)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        autoScrollingTranscript(fontSize: 13, lineSpacing: 4, height: 92)
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 16)
@@ -1196,6 +1222,61 @@ struct OverlayView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
             )
+    }
+
+    /// One stable recording surface for fallback streaming. The transcript
+    /// remains visible and scrollable while the microphone chooser is added
+    /// below it, so changing an input never replaces or reanimates the words.
+    private var recordingTranscriptSurface: some View {
+        VStack(spacing: 0) {
+            liveTranscriptPreview
+
+            if appState.showingInputPicker {
+                Rectangle()
+                    .fill(Color.white.opacity(0.09))
+                    .frame(height: 1)
+                    .padding(.horizontal, 18)
+
+                physicalNotchInputPicker
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: appState.showingInputPicker)
+    }
+
+    /// Keep the latest words visible while still allowing the user to scroll
+    /// back through a long take. The bottom marker avoids recreating the text
+    /// view or forcing a four-line truncation on every streaming revision.
+    private func autoScrollingTranscript(
+        fontSize: CGFloat,
+        lineSpacing: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(appState.liveTranscript)
+                        .font(.system(size: fontSize, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.90))
+                        .lineSpacing(lineSpacing)
+                        .textSelection(.disabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id("live-transcript-bottom")
+                }
+            }
+            .frame(height: height)
+            .onAppear {
+                proxy.scrollTo("live-transcript-bottom", anchor: .bottom)
+            }
+            .onChange(of: appState.liveTranscript) { _, _ in
+                // Streaming arrives several times per second. A non-animated
+                // scroll keeps the baseline steady instead of making it bob.
+                proxy.scrollTo("live-transcript-bottom", anchor: .bottom)
+            }
+        }
     }
 
     /*
@@ -1233,6 +1314,19 @@ struct OverlayView: View {
             // The bottom pill: the live waveform, or the typing flow while
             // transcription / AI generation runs.
             VStack(spacing: 0) {
+                if showsLiveTranscriptInWidget {
+                    autoScrollingTranscript(fontSize: 12.5, lineSpacing: 3, height: 84)
+                        .frame(width: 328)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 12)
+                        .padding(.bottom, 10)
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.10))
+                        .frame(height: 1)
+                        .padding(.horizontal, 12)
+                }
+
                 HStack(spacing: 10) {
                     if processing {
                         // Same pill, new content: the typing flow takes the
@@ -1339,6 +1433,7 @@ struct OverlayView: View {
             // flow - springy so the pill visibly *grows* into the
             // transcribing state rather than snapping.
             .animation(.spring(response: 0.3, dampingFraction: 0.72), value: processing)
+            .animation(.smooth(duration: 0.24), value: showsLiveTranscriptInWidget)
             }
             // Input device picker for latched takes - anchored to the mic
             // satellite, popping out like a menu.

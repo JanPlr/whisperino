@@ -14,6 +14,17 @@ class OverlayPanel {
     private var dismissGeneration = 0
     private var cancellables = Set<AnyCancellable>()
     private var trackTimer: Timer?
+    /// The idle discovery island follows whichever display owns the focused
+    /// window. This also catches switching between two windows of the same app,
+    /// which NSWorkspace activation notifications do not report.
+    private var hotspotTrackTimer: Timer?
+    private var hotspotDisplayID: CGDirectDisplayID?
+    private var hotspotStyle: NotchHoverTargetView.Style?
+    private var hotspotFrame: NSRect?
+    /// AX can briefly lose the focused window during an app/Space transition.
+    /// Hold the last good display for a few tracker ticks instead of bouncing
+    /// to the mouse fallback and immediately back again.
+    private var idleFocusedWindowMisses = 0
     /// The origin we last asked the panel to move to. Compared against (rather
     /// than the live frame) so the 60fps tracker doesn't restart an in-flight
     /// slide every tick - during an animator move `panel.frame.origin` reports
@@ -93,6 +104,7 @@ class OverlayPanel {
 
     deinit {
         trackTimer?.invalidate()
+        hotspotTrackTimer?.invalidate()
         for observer in screenChangeObservers {
             NotificationCenter.default.removeObserver(observer)
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
@@ -133,9 +145,17 @@ class OverlayPanel {
                 return false
             }
             .removeDuplicates()
-            .sink { [weak hoverView] enabled in
+            .sink { [weak self, weak hoverView] enabled in
                 hoverView?.setInteractionEnabled(enabled)
+                self?.positionNotchHotspot()
             }
+            .store(in: &cancellables)
+
+        // Re-anchor when a take snapshots its text-field display, even before
+        // the state publisher has propagated through every observer.
+        appState.$overlayTargetDisplayID
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.positionNotchHotspot() }
             .store(in: &cancellables)
 
         positionNotchHotspot()
@@ -151,6 +171,20 @@ class OverlayPanel {
                 queue: .main
             ) { [weak self] _ in self?.positionNotchHotspot() }
         )
+        screenChangeObservers.append(
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in self?.positionNotchHotspot() }
+        )
+
+        let hotspotTimer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self, !self.isVisible else { return }
+            self.positionNotchHotspot()
+        }
+        RunLoop.main.add(hotspotTimer, forMode: .common)
+        hotspotTrackTimer = hotspotTimer
         screenChangeObservers.append(
             NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.activeSpaceDidChangeNotification,
@@ -173,34 +207,59 @@ class OverlayPanel {
             return
         }
 
+        let style: NotchHoverTargetView.Style
         let width: CGFloat
         let height: CGFloat
         if isExternal {
             // A virtual, always-visible top-edge island. The panel is larger
             // than the resting silhouette so the shell can grow on hover
             // without moving or resizing the NSWindow hit target.
-            notchHoverView?.setStyle(.externalTopEdge)
+            style = .externalTopEdge
             width = 244
             height = 36
         } else {
-            notchHoverView?.setStyle(.physicalNotch)
+            style = .physicalNotch
             let inset = max(screen.safeAreaInsets.top, 28)
             let hardwareWidth = Self.physicalNotchWidth(on: screen)
             // Hover is only a slight physical expansion of the real notch.
             width = hardwareWidth + 36
             height = inset + 16
         }
-        notchHotspotPanel.setFrame(
-            NSRect(
-                x: screen.frame.midX - width / 2
-                    + (isExternal ? Self.externalIslandHorizontalOffset : 0),
-                y: screen.frame.maxY - height,
-                width: width,
-                height: height
-            ),
-            display: true
+        let frame = NSRect(
+            x: screen.frame.midX - width / 2
+                + (isExternal ? Self.externalIslandHorizontalOffset : 0),
+            y: screen.frame.maxY - height,
+            width: width,
+            height: height
         )
+        let displayID = Self.displayID(of: screen)
+        let frameChanged = hotspotFrame.map { !Self.framesMatch($0, frame) } ?? true
+        let placementChanged = hotspotDisplayID != displayID
+            || hotspotStyle != style
+            || frameChanged
+
+        guard placementChanged else {
+            if !notchHotspotPanel.isVisible { notchHotspotPanel.orderFront(nil) }
+            return
+        }
+
+        // Never expose the external-notch style at the old display's frame.
+        // Move the nonactivating window while ordered out, then reveal the
+        // fully configured result in one compositor transaction.
+        notchHotspotPanel.orderOut(nil)
+        notchHotspotPanel.setFrame(frame, display: false)
+        notchHoverView?.setStyle(style)
+        hotspotDisplayID = displayID
+        hotspotStyle = style
+        hotspotFrame = frame
         notchHotspotPanel.orderFront(nil)
+    }
+
+    private static func framesMatch(_ lhs: NSRect, _ rhs: NSRect) -> Bool {
+        abs(lhs.minX - rhs.minX) < 0.5
+            && abs(lhs.minY - rhs.minY) < 0.5
+            && abs(lhs.width - rhs.width) < 0.5
+            && abs(lhs.height - rhs.height) < 0.5
     }
 
     /// The pill rides a `.canJoinAllSpaces` panel, so it follows the user
@@ -362,10 +421,9 @@ class OverlayPanel {
         }
     }
 
-    /// A connected external display owns Whisperino's single overlay. This
-    /// keeps the live surface beside the work being dictated and avoids a
-    /// duplicate island on the MacBook display. Without an external display,
-    /// the physical MacBook notch remains the preferred anchor.
+    /// The display containing the focused text caret/window owns Whisperino's
+    /// single overlay for the take. A MacBook display gets its physical-notch
+    /// surface; any external display gets the matching virtual top-edge notch.
     private func computeTargetOrigin() -> NSPoint? {
         let panelSize = panel.frame.size
         guard let screen = preferredOverlayScreen() else { return nil }
@@ -407,44 +465,55 @@ class OverlayPanel {
 
     private func preferredOverlayScreen() -> NSScreen? {
         let screens = NSScreen.screens
-        let activeScreen: NSScreen? = {
-            let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            let window = ScreenCapture.focusedWindowFrame(pid: pid)
-            if let window,
-               let hit = screens.first(where: {
-                   $0.frame.contains(CGPoint(x: window.midX, y: window.midY))
-               }) {
-                return hit
-            }
-            return NSScreen.main ?? screens.first
-        }()
 
-        let externalScreens = screens.filter(Self.isExternalDisplay)
-        if !externalScreens.isEmpty {
-            if let activeScreen,
-               externalScreens.contains(where: { $0 === activeScreen }) {
-                return activeScreen
-            }
-            if let main = NSScreen.main, Self.isExternalDisplay(main) {
-                return main
-            }
-            return externalScreens.first
+        // During a take, use the display snapshotted from the selected input.
+        // CGDirectDisplayID survives NSScreen object recreation and screen
+        // re-enumeration; if that display disappears, fall through safely.
+        if case .idle = appState.state {
+            // Idle discovery follows the currently active window below.
+        } else if let targetID = appState.overlayTargetDisplayID,
+                  let target = screens.first(where: { Self.displayID(of: $0) == targetID }) {
+            return target
         }
 
-        return screens.first(where: Self.hasPhysicalNotch) ?? activeScreen
+        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if let focusedID = ScreenCapture.focusedWindowDisplayID(pid: pid),
+           let focused = screens.first(where: { Self.displayID(of: $0) == focusedID }) {
+            idleFocusedWindowMisses = 0
+            return focused
+        }
+
+        idleFocusedWindowMisses += 1
+        if idleFocusedWindowMisses <= 3,
+           let hotspotDisplayID,
+           let stable = screens.first(where: { Self.displayID(of: $0) == hotspotDisplayID }) {
+            return stable
+        }
+
+        if let activeID = ScreenCapture.targetDisplayID(
+            focusedElement: nil,
+            pid: pid
+        ), let active = screens.first(where: { Self.displayID(of: $0) == activeID }) {
+            idleFocusedWindowMisses = 0
+            return active
+        }
+        return NSScreen.main ?? screens.first
+    }
+
+    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        return (screen.deviceDescription[key] as? NSNumber)?.uint32Value
     }
 
     private static func isExternalDisplay(_ screen: NSScreen) -> Bool {
-        let key = NSDeviceDescriptionKey("NSScreenNumber")
-        guard let displayID = (screen.deviceDescription[key] as? NSNumber)?.uint32Value else {
+        guard let displayID = displayID(of: screen) else {
             return false
         }
         return CGDisplayIsBuiltin(displayID) == 0
     }
 
     private static func hasPhysicalNotch(_ screen: NSScreen) -> Bool {
-        let key = NSDeviceDescriptionKey("NSScreenNumber")
-        guard let displayID = (screen.deviceDescription[key] as? NSNumber)?.uint32Value,
+        guard let displayID = displayID(of: screen),
               CGDisplayIsBuiltin(displayID) != 0 else { return false }
         return screen.safeAreaInsets.top > 0
             || screen.auxiliaryTopLeftArea != nil

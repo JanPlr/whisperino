@@ -42,7 +42,7 @@ enum ASRModelCatalog {
             family: .parakeet,
             displayName: "Parakeet TDT 0.6B v3",
             shortLabel: "Parakeet",
-            detail: "25 European languages, fastest offline. The default — about 705 MB.",
+            detail: "Fastest · 25 languages",
             fileName: "parakeet-tdt-0.6b-v3-Q8_0.gguf",
             downloadURL: URL(string:
                 "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf"
@@ -56,7 +56,7 @@ enum ASRModelCatalog {
             family: .nemotron,
             displayName: "Nemotron 3.5 ASR",
             shortLabel: "Nemotron 3.5",
-            detail: "Streaming live transcript, 32 locales. About 716 MB.",
+            detail: "Live transcription · 32 languages",
             fileName: "nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf",
             downloadURL: URL(string:
                 "https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf"
@@ -70,7 +70,7 @@ enum ASRModelCatalog {
             family: .whisper,
             displayName: "Whisper large-v3-turbo",
             shortLabel: "Whisper turbo",
-            detail: "100 languages, faster Whisper. About 845 MB.",
+            detail: "Fast · 100 languages",
             fileName: "whisper-large-v3-turbo-Q8_0.gguf",
             downloadURL: URL(string:
                 "https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q8_0.gguf"
@@ -84,7 +84,7 @@ enum ASRModelCatalog {
             family: .whisper,
             displayName: "Whisper large-v3",
             shortLabel: "Whisper large-v3",
-            detail: "100 languages, highest Whisper accuracy. About 1.55 GB.",
+            detail: "Most accurate · 100 languages",
             fileName: "whisper-large-v3-Q8_0.gguf",
             downloadURL: URL(string:
                 "https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q8_0.gguf"

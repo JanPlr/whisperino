@@ -76,9 +76,19 @@ final class ASRModelTests: XCTestCase {
         """.utf8)
         let settings = try JSONDecoder().decode(AppSettings.self, from: json)
         XCTAssertEqual(settings.asrModel, .whisperTurbo)
+        XCTAssertTrue(settings.streamingTranscriptionEnabled)
 
         let legacy = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         XCTAssertEqual(legacy.asrModel, .parakeetV3)
+        XCTAssertTrue(legacy.streamingTranscriptionEnabled)
+
+        let disabled = try JSONDecoder().decode(
+            AppSettings.self,
+            from: Data("""
+            {"asrModel":"nemotron35","streamingTranscriptionEnabled":false}
+            """.utf8)
+        )
+        XCTAssertFalse(disabled.streamingTranscriptionEnabled)
     }
 
     func testLocalModelPathLivesUnderWhisperinoModels() {

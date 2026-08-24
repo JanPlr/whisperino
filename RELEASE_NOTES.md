@@ -1,18 +1,17 @@
-# Whisperino 3.1.0 — Faster, In-Process Transcription
+# Whisperino 3.2.0 — Live Dictation Where You Type
 
-This release replaces the external whisper.cpp process with transcribe.cpp running directly inside Whisperino on Metal.
+This release makes Nemotron's live transcript appear directly in the text field you are using, with a cleaner fallback in Whisperino's top widget.
 
 ## What changed
 
-- Added Parakeet TDT 0.6B v3 as the new default model for fast, accurate local dictation in 25 European languages.
-- Added one-click model selection and downloads in **Settings → Dictation**.
-- Added Nemotron 3.5 ASR with a live streaming transcript while you speak.
-- Kept Whisper large-v3-turbo and large-v3 available for broad language support.
-- Removed the Homebrew and separate whisper.cpp setup requirement; the transcription engine is now bundled with the app.
-- Kept all speech recognition fully on-device with Metal acceleration.
+- Streams partial text into the focused editable field while you speak, including browser-based inputs such as search bars and chat boxes.
+- Falls back to the top widget when no writable field is focused, without briefly flashing the final transcript there after successful field insertion.
+- Preserves existing text, selections, and clipboard contents while live partials are updated and finalized.
+- Moves the widget to the display containing the focused field and smooths transitions between displays.
+- Makes long fallback transcripts scroll cleanly inside the widget.
+- Pauses media only when it was actually playing before dictation, then resumes that same playback afterward.
+- Simplifies **Settings → Dictation**: Nemotron has one “Live streaming of text” badge and its streaming switch lives directly in the downloaded model tile.
 
 ## Upgrade note
 
-On first launch, Whisperino starts downloading the default Parakeet model (about 705 MB). Dictation becomes available when that download finishes. You can choose a different model or follow download progress in **Settings → Dictation**.
-
-Thanks to Hendrik Hofstadt for this major transcription-engine upgrade.
+Live field insertion requires Accessibility access. Select the downloaded Nemotron 3.5 model and leave its tile switch enabled. If macOS asks again after replacing an ad-hoc signed development build, re-enable Whisperino in **System Settings → Privacy & Security → Accessibility**.

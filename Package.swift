@@ -7,6 +7,15 @@ let package = Package(
     products: [
         .executable(name: "Whisperino", targets: ["Whisperino"]),
     ],
+    dependencies: [
+        // Direct MediaRemote access is blocked for ordinary applications on
+        // current macOS releases. This adapter uses an entitled system helper
+        // to read and control the real Now Playing session reliably.
+        .package(
+            url: "https://github.com/ejbills/mediaremote-adapter.git",
+            revision: "b4ae765bbfa111f1e8fad240a8ea74f01e91d325"
+        ),
+    ],
     targets: [
         // Official transcribe.cpp 0.2.1 xcframework (Metal + CPU on macOS arm64).
         .binaryTarget(
@@ -30,7 +39,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "Whisperino",
-            dependencies: ["TranscribeCpp"],
+            dependencies: [
+                "TranscribeCpp",
+                .product(name: "MediaRemoteAdapter", package: "mediaremote-adapter"),
+            ],
             path: "Sources/Whisperino"
         ),
         .testTarget(

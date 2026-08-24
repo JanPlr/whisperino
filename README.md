@@ -70,7 +70,7 @@ writes data or opens another app waits for explicit confirmation.
 
 ## Long recordings
 
-There's no practical length limit. Parakeet and Whisper rotate the recording into ~40s chunks (cut at silence) and transcribe finished chunks in the background — when you stop, only the last chunk still needs processing. Nemotron streams on Metal as you speak, so the pill shows a live transcript instead.
+There's no practical length limit. Parakeet and Whisper rotate the recording into ~40s chunks (cut at silence) and transcribe finished chunks in the background — when you stop, only the last chunk still needs processing. Nemotron streams on Metal as you speak: its live transcript appears directly in the focused text field, or in Whisperino's top widget when no editable field is selected.
 
 Nothing gets lost:
 
@@ -122,6 +122,7 @@ The committed `Info.plist` version is the source of truth, kept in lockstep with
 - **Fn key doesn't trigger anything** - System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D.
 - **Paste doesn't work** - confirm you ran `./install.sh`. Quit every running Whisperino copy, remove and re-add Whisperino in Accessibility, select `/Applications/Whisperino.app`, toggle it on, then quit/reopen the app once.
 - **Dictation says the model is missing** - open Settings → Dictation and download Parakeet (or Nemotron / Whisper). The first launch starts the Parakeet download in the background.
+- **No live text while speaking** - download and select Nemotron 3.5 in Settings → Dictation, then enable the switch in its model tile. Parakeet and Whisper are offline models. Accessibility is required to stream into the focused field; without a writable field, the partial transcript stays in Whisperino's top widget.
 - **App doesn't appear in Accessibility list** - launch it first (`open /Applications/Whisperino.app`), then check.
 
 ## Changelog
