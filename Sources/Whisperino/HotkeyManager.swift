@@ -5,20 +5,18 @@ import Foundation
 /// Hotkey behaviour:
 ///
 /// 1. **Hold trigger** (push-to-talk) - press to record, release to submit.
-/// 2. **Double-tap trigger** (toggle) - quickly tap twice to enter a latched
-///    recording, then a single tap stops and submits. Useful for hands-free
-///    long dictation.
+///    Double-tap latches for hands-free dictation.
+/// 2. **Tap trigger** (optional) - a single press starts a latched recording;
+///    the same shortcut again stops and submits. No need to hold.
 /// 3. **Trigger + Shift** - instruction (AI) mode. Either press them together,
-///    or start with the trigger alone and add Shift at any point during the
-///    recording - the mode upgrades and the recording becomes latched
-///    (release won't auto-submit; tap trigger again or press Enter to submit).
+///    or add Shift during a recording - the mode upgrades and the recording
+///    becomes latched.
 /// 4. **Esc / Return** - cancel / submit while recording.
 ///
 /// The trigger is configurable in Settings. Two flavours:
 /// - **Modifier-only** (Fn) - driven by `flagsChanged`.
-/// - **Modifier + key combo** (⌥D) - driven by a `CGEventTap` that
-///   intercepts the keystroke so the underlying character (e.g. "∂" for
-///   ⌥D) isn't typed into the focused app.
+/// - **Modifier + key combo** (fn + space, ⌥D) - driven by a `CGEventTap`
+///   that intercepts the keystroke so it isn't typed into the focused app.
 class HotkeyManager {
     static let shared = HotkeyManager()
 
@@ -83,8 +81,25 @@ class HotkeyManager {
 
     /// Currently configured trigger key. Read live from settings on every
     /// event so user changes take effect without re-registering monitors.
-    private var triggerKey: TriggerKey {
+    private var triggerKey: TriggerShortcut {
         SettingsStore.shared.settings.triggerKey
+    }
+
+    private var isTapActivation: Bool {
+        SettingsStore.shared.settings.recordingActivation == .tap
+    }
+
+    /// Ignore trigger input while Settings is capturing a new shortcut, so
+    /// the combo being recorded doesn't also start a dictation take.
+    private var isSuspended = false
+
+    func suspend() {
+        isSuspended = true
+        resetTriggerState()
+    }
+
+    func resume() {
+        isSuspended = false
     }
 
     func register(
@@ -164,6 +179,7 @@ class HotkeyManager {
 
     @discardableResult
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        guard !isSuspended else { return false }
         // Listen to Esc/Enter while *either* a recording is in flight
         // or an interactive overlay is up (the fallback rescue card).
         let recording = isRecordingCheck?() == true
@@ -195,6 +211,7 @@ class HotkeyManager {
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
+        guard !isSuspended else { return }
         let trigger = triggerKey
         let shiftDown = event.modifierFlags.contains(.shift)
         let hasBlockedModifiers = !event.modifierFlags.intersection(trigger.blockedFlags).isEmpty
@@ -221,13 +238,14 @@ class HotkeyManager {
             }
         }
 
-        // Shift added while we're already holding the trigger and recording
-        // in dictation mode → upgrade to instruction (AI) mode.
-        // The session also becomes latched: release won't auto-submit, so the
-        // user can finish their spoken question and then explicitly submit.
-        if triggerIsDown && shiftDown && !shiftWasDown
+        // Shift added while recording → upgrade to instruction (AI) mode.
+        // Latched takes (tap activation, double-tap, or already upgraded)
+        // don't require the trigger to still be held, so you can add Shift
+        // after a tap-to-start.
+        if shiftDown && !shiftWasDown
             && !hasBlockedModifiers
-            && isRecordingCheck?() == true {
+            && isRecordingCheck?() == true
+            && (triggerIsDown || isLatched) {
             setLatched(true)
             DispatchQueue.main.async { [weak self] in
                 self?.onUpgradeToInstruction?()
@@ -248,6 +266,11 @@ class HotkeyManager {
         //   never "start a double-tap". -
         if isCurrentlyRecording && isLatched {
             stopPending = true
+            return
+        }
+
+        if isTapActivation {
+            beginTapRecording()
             return
         }
 
@@ -302,7 +325,46 @@ class HotkeyManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + modeDecisionDelay, execute: task)
     }
 
+    /// Single tap starts a latched take. Release must not cancel the pending
+    /// start — a real tap is shorter than the hold-mode mode-decision delay.
+    private func beginTapRecording() {
+        lastPressTime = nil
+        latchTimeoutTask?.cancel()
+        latchTimeoutTask = nil
+        modeDecisionTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            let flags = NSEvent.modifierFlags
+            let trigger = self.triggerKey
+            let blockedNow = !flags.intersection(trigger.blockedFlags).isEmpty
+            guard !blockedNow else { return }
+            self.modeDecisionTask = nil
+            self.stopPending = false
+            self.setLatched(true)
+            if flags.contains(.shift) {
+                self.onInstructionToggle?()
+            } else {
+                self.onToggle?()
+            }
+        }
+        modeDecisionTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + modeDecisionDelay, execute: task)
+    }
+
     private func handleTriggerRelease() {
+        if isTapActivation {
+            // A tap's key-up often arrives before the delayed start. Keep the
+            // pending start; only a later press (stopPending) submits.
+            if modeDecisionTask != nil { return }
+            guard isRecordingCheck?() == true else { return }
+            if isLatched && stopPending {
+                setLatched(false)
+                stopPending = false
+                DispatchQueue.main.async { [weak self] in self?.onToggle?() }
+            }
+            return
+        }
+
         // - Released before the mode-decision fired: recording never started.
         //   Discard the pending start, but KEEP `lastPressTime` so a fast
         //   follow-up press is still recognised as a double-tap (and starts
@@ -406,6 +468,10 @@ class HotkeyManager {
         // if that happens. Other event types we don't care about.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+
+        if isSuspended {
             return Unmanaged.passUnretained(event)
         }
 

@@ -4,9 +4,9 @@ Local voice transcription for macOS. Lives in your menu bar, runs fully on-devic
 
 ## TL;DR
 
-**Hold Fn → speak → release.** Your words are transcribed and pasted into whatever text field is focused.
+**Hold the recording shortcut → speak → release.** Hold defaults to Fn; Tap defaults to **fn + space**. Record any combo in Settings → Dictation. Your words are transcribed and pasted into whatever text field is focused.
 
-**Want the LLM to answer instead of just transcribe?** Add Shift any time while you're holding Fn - the pill turns rainbow, AI mode is on, and the recording becomes latched. Cmd+C any text or images you want as context (no clicks needed). Tap Fn (or press Enter) to submit. Esc to cancel.
+**Want the LLM to answer instead of just transcribe?** Add Shift any time while you're holding the shortcut - the pill turns rainbow, AI mode is on, and the recording becomes latched. Cmd+C any text or images you want as context (no clicks needed). Tap the shortcut (or press Enter) to submit. Esc to cancel.
 
 ## Install
 
@@ -33,14 +33,17 @@ After install, grant two permissions:
 
 ## Shortcuts
 
+The recording shortcut is customizable in **Settings → Dictation**. Defaults below use Fn; substitute whatever combo you recorded.
+
 | Shortcut | What it does |
 |----------|-------------|
-| **Hold Fn** | Dictate while held, submit on release |
-| **Double-tap Fn** | Latched dictation - single tap stops & submits |
-| **Add Shift** *(while holding Fn)* | Upgrade to AI mode (latched) |
-| **Fn + Shift** *(held together)* | Start in AI mode |
+| **Hold shortcut** | Dictate while held, submit on release *(Hold mode)* |
+| **Double-tap shortcut** | Latched dictation - single tap stops & submits *(Hold mode)* |
+| **Tap shortcut** | Start; tap again to stop and send *(Tap mode)* |
+| **Add Shift** *(while holding the shortcut)* | Upgrade to AI mode (latched) |
+| **Shortcut + Shift** *(held together)* | Start in AI mode |
 | **Cmd+C** *(in AI mode)* | Auto-attach the copied text/image as context |
-| **Tap Fn or Return** *(in AI mode)* | Submit |
+| **Tap shortcut or Return** *(in AI mode)* | Submit |
 | **Esc** | Cancel - recording is discarded |
 | Click menu bar icon | Toggle / Copy last / Settings / Updates / Quit |
 
