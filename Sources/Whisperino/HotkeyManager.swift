@@ -261,10 +261,15 @@ class HotkeyManager {
 
         let isCurrentlyRecording = isRecordingCheck?() ?? false
 
-        // - Press during latched recording: prepare to stop on release.
-        //   Checked first so a tap on a latched take always means "stop",
-        //   never "start a double-tap". -
+        // A tap-to-toggle recording stops on the second press. Hold mode
+        // keeps its existing release-to-stop behavior for latched takes.
         if isCurrentlyRecording && isLatched {
+            if isTapActivation {
+                setLatched(false)
+                stopPending = false
+                DispatchQueue.main.async { [weak self] in self?.onToggle?() }
+                return
+            }
             stopPending = true
             return
         }
@@ -325,43 +330,28 @@ class HotkeyManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + modeDecisionDelay, execute: task)
     }
 
-    /// Single tap starts a latched take. Release must not cancel the pending
-    /// start — a real tap is shorter than the hold-mode mode-decision delay.
+    /// Single tap starts a latched take immediately. Delaying this until after
+    /// key-up made fast modifier-only taps and some combo taps disappear.
     private func beginTapRecording() {
         lastPressTime = nil
         latchTimeoutTask?.cancel()
         latchTimeoutTask = nil
         modeDecisionTask?.cancel()
-        let task = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            let flags = NSEvent.modifierFlags
-            let trigger = self.triggerKey
-            let blockedNow = !flags.intersection(trigger.blockedFlags).isEmpty
-            guard !blockedNow else { return }
-            self.modeDecisionTask = nil
-            self.stopPending = false
-            self.setLatched(true)
-            if flags.contains(.shift) {
-                self.onInstructionToggle?()
-            } else {
-                self.onToggle?()
-            }
+        modeDecisionTask = nil
+        stopPending = false
+        setLatched(true)
+
+        if NSEvent.modifierFlags.contains(.shift) {
+            onInstructionToggle?()
+        } else {
+            onToggle?()
         }
-        modeDecisionTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + modeDecisionDelay, execute: task)
     }
 
     private func handleTriggerRelease() {
         if isTapActivation {
-            // A tap's key-up often arrives before the delayed start. Keep the
-            // pending start; only a later press (stopPending) submits.
-            if modeDecisionTask != nil { return }
-            guard isRecordingCheck?() == true else { return }
-            if isLatched && stopPending {
-                setLatched(false)
-                stopPending = false
-                DispatchQueue.main.async { [weak self] in self?.onToggle?() }
-            }
+            // Tap mode acts on key-down: first press starts, second press
+            // stops. Key-up is deliberately inert.
             return
         }
 

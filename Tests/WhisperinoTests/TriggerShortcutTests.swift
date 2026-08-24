@@ -71,13 +71,13 @@ final class TriggerShortcutTests: XCTestCase {
         XCTAssertEqual(settings.triggerKey, .fn)
     }
 
-    func testSelectActivationSwapsModeDefaultsOnly() {
+    func testSelectActivationNeverChangesShortcut() {
         var settings = AppSettings()
         XCTAssertEqual(settings.triggerKey, .fn)
 
         settings.selectActivation(.tap)
         XCTAssertEqual(settings.recordingActivation, .tap)
-        XCTAssertEqual(settings.triggerKey, .fnSpace)
+        XCTAssertEqual(settings.triggerKey, .fn)
 
         settings.selectActivation(.hold)
         XCTAssertEqual(settings.triggerKey, .fn)

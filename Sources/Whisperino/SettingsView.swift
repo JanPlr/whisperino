@@ -968,8 +968,6 @@ private struct DictationSettingsPage: View {
     @ObservedObject private var store = SettingsStore.shared
 
     var body: some View {
-        let triggerLabel = store.settings.triggerKey.shortLabel
-
         PageScaffold(
             title: "Dictation",
             subtitle: "Choose how recording starts, which languages to expect, and where text goes."
@@ -980,39 +978,35 @@ private struct DictationSettingsPage: View {
                 LanguageMultiSelector(selection: $store.settings.transcriptionLanguageCodes)
             }
 
-            SettingsCard(title: "Recording shortcut") {
+            SettingsCard(title: "Recording") {
+                SectionLabel("Shortcut")
+
+                ShortcutRecorder(
+                    shortcut: $store.settings.triggerKey,
+                    defaultShortcut: .fn
+                )
+
+                Divider().padding(.vertical, 4)
+
+                SectionLabel("How it works")
+
                 HStack(alignment: .top, spacing: 10) {
                     ChoiceCard(
-                        title: "Hold",
-                        detail: "Dictate (release to send).",
+                        title: "Hold to record",
+                        detail: "Release to send",
                         selected: store.settings.recordingActivation == .hold
                     ) {
                         store.settings.selectActivation(.hold)
                     }
                     ChoiceCard(
-                        title: "Tap",
-                        detail: "Dictate (tap to stop).",
+                        title: "Tap to start",
+                        detail: "Tap again to send",
                         selected: store.settings.recordingActivation == .tap
                     ) {
                         store.settings.selectActivation(.tap)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
-
-                ShortcutRecorder(
-                    shortcut: $store.settings.triggerKey,
-                    defaultShortcut: store.settings.recordingActivation.defaultShortcut
-                )
-
-                CaptionText("Click Record, then press the shortcut you want. Hold defaults to Fn; Tap defaults to fn + space. Reset restores that mode’s default. Shift is reserved for Talk to your screen. Combos that include a key need Accessibility permission so the original keystroke isn’t typed.")
-
-                Divider().padding(.vertical, 4)
-
-                ShortcutRow(keys: "hold \(triggerLabel)", label: "Dictate (release to send)")
-                ShortcutRow(keys: "tap \(triggerLabel)", label: "Dictate (tap to stop)")
-                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Talk to your screen - hold both, get an answer")
-                ShortcutRow(keys: "↩", label: "Submit any recording")
-                ShortcutRow(keys: "esc", label: "Cancel")
             }
 
             SettingsCard(title: "Delivery") {
@@ -1814,7 +1808,7 @@ private struct ShortcutRecorder: View {
                             KeyCap(label: shortcut.shortLabel, size: 12)
                         }
                         Spacer(minLength: 8)
-                        Text(capture.isRecording ? "Esc to cancel" : "Record")
+                        Text(capture.isRecording ? "Esc to cancel" : "Change")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                     }

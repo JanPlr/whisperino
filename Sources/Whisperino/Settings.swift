@@ -171,10 +171,7 @@ enum RecordingActivation: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var defaultShortcut: TriggerShortcut {
-        switch self {
-        case .hold: return .fn
-        case .tap: return .fnSpace
-        }
+        .fn
     }
 
     func idleHint(for trigger: String) -> String {
@@ -287,13 +284,9 @@ struct AppSettings: Codable, Equatable {
     var streamingTranscriptionEnabled: Bool = true
     init() {}
 
-    /// Switch Hold/Tap. If the shortcut is still the previous mode's default,
-    /// move to the new mode's default (Fn vs fn + space). A recorded custom
-    /// shortcut is left alone.
+    /// Change how the current shortcut behaves without silently changing the
+    /// shortcut itself.
     mutating func selectActivation(_ mode: RecordingActivation) {
-        if triggerKey == recordingActivation.defaultShortcut {
-            triggerKey = mode.defaultShortcut
-        }
         recordingActivation = mode
     }
 

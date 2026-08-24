@@ -4,7 +4,7 @@ Local voice transcription for macOS. Lives in your menu bar, runs fully on-devic
 
 ## TL;DR
 
-**Hold the recording shortcut → speak → release.** Hold defaults to Fn; Tap defaults to **fn + space**. Record any combo in Settings → Dictation. Your words are transcribed and pasted into whatever text field is focused.
+**Hold the recording shortcut → speak → release.** The shortcut defaults to Fn and can be changed in Settings → Dictation. Choose **Hold to record** or **Tap to start** without changing the shortcut itself. Your words are transcribed and pasted into whatever text field is focused.
 
 **Want the LLM to answer instead of just transcribe?** Add Shift any time while you're holding the shortcut - the pill turns rainbow, AI mode is on, and the recording becomes latched. Cmd+C any text or images you want as context (no clicks needed). Tap the shortcut (or press Enter) to submit. Esc to cancel.
 
@@ -20,17 +20,15 @@ Requirements: macOS 14+, Apple Silicon, Xcode CLT (`xcode-select --install`).
 Homebrew is not required. SwiftPM downloads the pinned Metal
 `CTranscribe.framework`, and Whisperino downloads speech models itself.
 
-This is the canonical source installation. The script creates a stable local
-code-signing identity once, builds the self-contained app with the in-process
-transcribe.cpp engine, and installs exactly one copy at
+This is the canonical source installation. The script builds the self-contained
+app with the in-process transcribe.cpp engine and installs exactly one copy at
 `/Applications/Whisperino.app`. Speech models download from Hugging Face in the
-app — Parakeet TDT 0.6B v3 (~705 MB) starts automatically.
+app — Parakeet TDT 0.6B v3 (~705 MB) starts automatically. It does not add a
+certificate or private key to your Keychain.
 
-> The first install may ask for your Mac password once to trust Whisperino's
-> local signing identity. Grant Accessibility to the exact
-> `/Applications/Whisperino.app` installed by the script, then quit and reopen
-> it once. Future source updates keep the same permission identity. Developers
-> on Nix can `nix-shell`; Swift still comes from Xcode CLT.
+> Grant Accessibility to the exact `/Applications/Whisperino.app` installed by
+> the script, then quit and reopen it once. Developers on Nix can `nix-shell`;
+> Swift still comes from Xcode CLT.
 
 ### Permissions
 
@@ -110,8 +108,8 @@ Click the menu bar icon → **Settings**.
 
 Whisperino checks GitHub for new releases on launch and once a day. When an update is available, the menu bar menu shows **Update to vX.Y.Z…** - click it and the app downloads, installs, and relaunches itself. You can also check manually via menu → **Check for Updates…**.
 
-Source installations keep their Accessibility grant across rebuilds because
-`install.sh` uses the same local signing identity each time.
+Source builds are ad-hoc signed. macOS may ask you to grant Accessibility again
+after rebuilding if the app's code identity changed.
 
 Updating from source still works too:
 
@@ -131,7 +129,8 @@ The committed `Info.plist` version is the source of truth, kept in lockstep with
 
 ## Troubleshooting
 
-- **Fn key doesn't trigger anything** - System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D.
+- **A v3.2.3 source install created `Whisperino Self-Signed` in Keychain** - click Deny on any `codesign` password prompt. Remove `Whisperino Self-Signed` from the login keychain in Keychain Access; current installs no longer create or use it.
+- **Fn key doesn't trigger anything** - System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), record a different shortcut in **Settings → Dictation**.
 - **Paste doesn't work** - update with `git pull && ./install.sh`. Quit every running Whisperino copy, remove the existing Whisperino row from Accessibility, add `/Applications/Whisperino.app`, toggle it on, then quit/reopen the app once. Do not launch a copy from `build/`, Downloads, or another clone.
 - **Dictation says the model is missing** - open Settings → Dictation and download Parakeet (or Nemotron / Whisper). The first launch starts the Parakeet download in the background.
 - **No live text while speaking** - download and select Nemotron 3.5 in Settings → Dictation, then enable the switch in its model tile. Parakeet and Whisper are offline models. Accessibility is required to stream into the focused field; without a writable field, the partial transcript stays in Whisperino's top widget.

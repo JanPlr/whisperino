@@ -94,31 +94,30 @@ cp Info.plist "$APP_BUNDLE/Contents/"
     "$APP_BUNDLE/Contents/Info.plist"
 cp AppIcon.icns "$APP_BUNDLE/Contents/Resources/"
 
-# Code sign. Prefer a stable self-signed identity so TCC grants (Accessibility,
-# Screen Recording) survive rebuilds - ad-hoc signing changes the CDHash every
-# build, so macOS treats each build as a new app and drops the grants. Create
-# the identity once with ./setup-signing.sh; until then we fall back to ad-hoc.
-SIGN_IDENTITY="Whisperino Self-Signed"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+# Code sign ad-hoc for local/source builds. Never select a keychain identity
+# implicitly: doing that can display a surprising password prompt during a
+# normal install. Maintainers can opt in to an existing identity explicitly,
+# for example WHISPERINO_SIGN_IDENTITY="Developer ID Application: ...".
+SIGN_IDENTITY="${WHISPERINO_SIGN_IDENTITY:--}"
+if [ "$SIGN_IDENTITY" != "-" ]; then
+    if ! security find-identity -v -p codesigning 2>/dev/null | grep -Fq "$SIGN_IDENTITY"; then
+        echo "Error: Requested code-signing identity was not found: $SIGN_IDENTITY" >&2
+        exit 1
+    fi
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/libMediaRemoteAdapter.dylib"
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
-    STABLE_SIGNED=true
-    echo "==> Signed with stable identity ($SIGN_IDENTITY) - permissions persist across builds"
+    echo "==> Signed with requested identity ($SIGN_IDENTITY)"
 else
     codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
     codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/libMediaRemoteAdapter.dylib"
     codesign --force --sign - "$APP_BUNDLE"
-    STABLE_SIGNED=false
-    echo "==> Ad-hoc signed - run ./setup-signing.sh once so permissions stop resetting"
+    echo "==> Ad-hoc signed"
 fi
 
 # TCC keys privacy grants to the app's designated requirement (DR), not just
-# its bundle identifier or the row displayed in System Settings. In particular,
-# the first build after setup-signing.sh switches from an ad-hoc, CDHash-based
-# DR to the certificate-backed DR. The old flow saw STABLE_SIGNED=true and
-# skipped the reset, leaving an apparently enabled Accessibility row that did
-# not authorize the newly signed process.
+# its bundle identifier or the row displayed in System Settings. If the actual
+# identity changes, reset the stale row so macOS can grant the new build.
 designated_requirement() {
     codesign -dr - "$1" 2>&1 \
         | sed -n 's/^.*designated => //p' \

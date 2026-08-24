@@ -11,7 +11,7 @@ echo ""
 
 # Check for Xcode Command Line Tools
 if ! xcode-select -p &>/dev/null; then
-    echo "[1/3] Installing Xcode Command Line Tools..."
+    echo "[1/2] Installing Xcode Command Line Tools..."
     xcode-select --install
     echo ""
     echo "  Please re-run this script after installation completes."
@@ -31,21 +31,16 @@ if [ -z "$SWIFT_VER" ] || [ "$SWIFT_MAJOR" -lt 5 ] || { [ "$SWIFT_MAJOR" -eq 5 ]
     echo ""
     exit 1
 fi
-echo "[1/3] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
-
-# Create the stable local signing identity before the first build. Without it,
-# every source rebuild gets a new ad-hoc identity and macOS silently invalidates
-# the Accessibility grant even though its old row can still look enabled.
-echo "[2/3] Preparing stable app identity..."
-./setup-signing.sh
+echo "[1/2] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
 
 # Build the app + install to /Applications. build.sh owns the single launch and
-# permission-pane flow. Speech models download in-app from Hugging Face.
-echo "[3/3] Building and installing Whisperino.app..."
+# permission-pane flow. Speech models download in-app from Hugging Face. Normal
+# installs use ad-hoc signing and never add certificates or keys to Keychain.
+echo "[2/2] Building and installing Whisperino.app..."
 ./build.sh
 
 echo ""
-echo "  ✓ Whisperino installed with a stable local identity!"
+echo "  ✓ Whisperino installed!"
 echo ""
 echo "  ─────────────────────────────────────────"
 echo "  IMPORTANT - two permissions required:"
@@ -61,6 +56,5 @@ echo "     in Privacy & Security → Accessibility."
 echo "     After enabling it, quit and reopen Whisperino"
 echo "     once so the running process picks up the grant."
 echo ""
-echo "  The first install may ask for your Mac password once while creating"
-echo "  the signing identity. Future git pulls keep Accessibility working."
+echo "  Whisperino does not add certificates or keys to your Keychain."
 echo ""
