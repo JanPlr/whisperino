@@ -1,4 +1,4 @@
-# Whisperino 3.2.2 — Reliable Permissions and Playback
+# Whisperino 3.2.3 — Reliable Updates, Permissions, and Playback
 
 This patch makes source installation predictable and fixes two disruptive
 macOS integration issues. It also includes customizable recording shortcuts
@@ -17,6 +17,10 @@ and Hold or Tap activation from the recently merged contribution.
   Accessibility permissions survive future source rebuilds.
 - Removes duplicate app launches and duplicate Accessibility settings windows
   from the installer.
+- Waits until GitHub has actually uploaded a release ZIP before offering an
+  update, and validates the downloaded archive before installation.
+- Replaces opaque `ditto exited with status 1` alerts with actionable update
+  errors.
 
 ## Upgrade note
 

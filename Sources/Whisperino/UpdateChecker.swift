@@ -37,6 +37,8 @@ final class UpdateChecker {
         case invalidResponse
         case httpStatus(Int)
         case invalidReleaseFeed
+        case assetUnavailable
+        case invalidArchive
 
         var errorDescription: String? {
             switch self {
@@ -46,6 +48,10 @@ final class UpdateChecker {
                 return "GitHub returned HTTP \(status) while checking for updates."
             case .invalidReleaseFeed:
                 return "GitHub's release feed did not contain an installable Whisperino version."
+            case .assetUnavailable:
+                return "This Whisperino release is still publishing. Try again in a minute."
+            case .invalidArchive:
+                return "GitHub did not return a valid Whisperino update archive."
             }
         }
     }
@@ -148,12 +154,53 @@ final class UpdateChecker {
                     return
                 }
                 if Self.isNewer(release.version, than: Self.currentVersion) {
-                    self.status = .available(release)
-                    completion?(.success(release))
+                    // A pushed tag appears in the Atom feed before GitHub
+                    // Actions has necessarily uploaded its ZIP. Do not expose
+                    // an Update button during that publication window.
+                    self.verifyAssetAvailability(release) { result in
+                        switch result {
+                        case .success:
+                            self.status = .available(release)
+                            completion?(.success(release))
+                        case .failure(let error):
+                            self.status = .idle
+                            completion?(.failure(error))
+                        }
+                    }
                 } else {
                     self.status = .idle
                     completion?(.success(nil))
                 }
+            }
+        }.resume()
+    }
+
+    private func verifyAssetAvailability(
+        _ release: Release,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        var request = URLRequest(
+            url: release.assetURL,
+            cachePolicy: .reloadIgnoringLocalCacheData
+        )
+        request.httpMethod = "HEAD"
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            DispatchQueue.main.async {
+                if let error {
+                    completion(.failure(error))
+                    return
+                }
+                guard let http = response as? HTTPURLResponse else {
+                    completion(.failure(UpdateError.invalidResponse))
+                    return
+                }
+                guard (200..<300).contains(http.statusCode) else {
+                    completion(.failure(UpdateError.assetUnavailable))
+                    return
+                }
+                completion(.success(()))
             }
         }.resume()
     }
@@ -228,12 +275,21 @@ final class UpdateChecker {
         if case .downloading = status { return }
         status = .downloading
 
-        URLSession.shared.downloadTask(with: release.assetURL) { [weak self] tempURL, _, error in
+        URLSession.shared.downloadTask(with: release.assetURL) { [weak self] tempURL, response, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 do {
+                    guard let http = response as? HTTPURLResponse else {
+                        throw error ?? UpdateError.invalidResponse
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        throw UpdateError.assetUnavailable
+                    }
                     guard let tempURL else {
                         throw error ?? NSError(domain: "Updater", code: 1, userInfo: [NSLocalizedDescriptionKey: "Download failed."])
+                    }
+                    guard Self.isZIPArchive(tempURL) else {
+                        throw UpdateError.invalidArchive
                     }
                     try self.swapAndRelaunch(zipAt: tempURL, version: release.version)
                 } catch {
@@ -242,6 +298,24 @@ final class UpdateChecker {
                 }
             }
         }.resume()
+    }
+
+    static func hasZIPMagic(_ data: Data) -> Bool {
+        guard data.count >= 4 else { return false }
+        let bytes = Array(data.prefix(4))
+        return bytes == [0x50, 0x4b, 0x03, 0x04]
+            || bytes == [0x50, 0x4b, 0x05, 0x06]
+            || bytes == [0x50, 0x4b, 0x07, 0x08]
+    }
+
+    private static func isZIPArchive(_ url: URL) -> Bool {
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            return hasZIPMagic(try handle.read(upToCount: 4) ?? Data())
+        } catch {
+            return false
+        }
     }
 
     /// Unzip → validate → move current bundle aside → move new one in →
@@ -311,13 +385,21 @@ final class UpdateChecker {
 
     private func run(_ launchPath: String, _ args: String...) throws {
         let p = Process()
+        let errorPipe = Pipe()
         p.executableURL = URL(fileURLWithPath: launchPath)
         p.arguments = args
+        p.standardError = errorPipe
         try p.run()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         guard p.terminationStatus == 0 else {
+            let details = String(data: errorData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let message = details.isEmpty
+                ? "\((launchPath as NSString).lastPathComponent) exited with status \(p.terminationStatus)"
+                : details
             throw NSError(domain: "Updater", code: Int(p.terminationStatus), userInfo: [
-                NSLocalizedDescriptionKey: "\((launchPath as NSString).lastPathComponent) exited with status \(p.terminationStatus)"
+                NSLocalizedDescriptionKey: message
             ])
         }
     }

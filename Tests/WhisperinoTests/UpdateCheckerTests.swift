@@ -31,4 +31,14 @@ final class UpdateCheckerTests: XCTestCase {
     func testEmptyFeedIsRejected() {
         XCTAssertNil(UpdateChecker.parseLatestReleaseFeed(Data("<feed/>".utf8)))
     }
+
+    func testZIPMagicAcceptsStandardArchives() {
+        XCTAssertTrue(UpdateChecker.hasZIPMagic(Data([0x50, 0x4b, 0x03, 0x04])))
+        XCTAssertTrue(UpdateChecker.hasZIPMagic(Data([0x50, 0x4b, 0x05, 0x06])))
+        XCTAssertTrue(UpdateChecker.hasZIPMagic(Data([0x50, 0x4b, 0x07, 0x08])))
+    }
+
+    func testZIPMagicRejectsGitHubErrorPage() {
+        XCTAssertFalse(UpdateChecker.hasZIPMagic(Data("<!DOCTYPE html>".utf8)))
+    }
 }
