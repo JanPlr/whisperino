@@ -1,8 +1,7 @@
 name: Release
 
-# Push a tag like v1.2.0 and this builds the app, zips it, and publishes
-# a GitHub Release. The in-app updater (UpdateChecker.swift) picks it up
-# from the releases API.
+# Push a tag like v1.2.0 and this builds the app, packages a DMG for fresh
+# installs plus a ZIP for the in-app updater, and publishes a GitHub Release.
 
 on:
   push:
@@ -23,11 +22,15 @@ jobs:
       - name: Zip app
         run: ditto -c -k --keepParent build/Whisperino.app "Whisperino-${GITHUB_REF_NAME}.zip"
 
+      - name: Create fresh-install DMG
+        run: VERSION="${GITHUB_REF_NAME#v}" ./make-dmg.sh --from-bundle
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
+            "dist/Whisperino-${GITHUB_REF_NAME}.dmg" \
             "Whisperino-${GITHUB_REF_NAME}.zip" \
             --title "Whisperino ${GITHUB_REF_NAME}" \
             --notes-file RELEASE_NOTES.md

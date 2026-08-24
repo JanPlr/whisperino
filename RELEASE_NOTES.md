@@ -1,31 +1,29 @@
-# Whisperino 3.2.5 — Safer Dictation and a Smoother First Run
+# Whisperino 3.2.6 — Reliable Pasting on Fresh Installs
 
-This patch keeps dictation bound to the text field where it started, tightens
-memory use during long sessions, and makes clean installation more dependable.
+This hotfix restores automatic pasting for newly installed copies while
+preserving the exact-field safety introduced in 3.2.5.
 
 ## What changed
 
-- Prevents streaming transcription, rollback, paste, and auto-submit events
-  from reaching another app, browser tab, window, button, or text field.
-- Pauses field updates while you work elsewhere, then safely resumes in the
-  exact original input when you return and finishes the transcript there.
-- Keeps Parakeet and Whisper results out of the notch when a valid input owns
-  the take; the notch remains the fallback only when no safe input is available.
-- Clears the previous transcript before a new recording begins, removing the
-  brief stale-text flash between takes.
-- Coalesces live PCM work so long streaming sessions cannot build an unbounded
-  queue, cleans up interrupted model downloads, and bounds screenshot memory.
-- Improves first-run guidance with a clear Overview, visible model-download
-  progress, and ordered Microphone and Accessibility permission prompts.
-- Makes source installation rollback-safe: the new app is staged and verified
-  before it replaces the working installation.
-- Keeps DMG creation from performing an unintended local installation.
+- Fixes the fresh-permission state where macOS showed Accessibility as enabled,
+  but 3.2.5 could not capture the exact text field and left the result in the
+  notch instead of pasting it.
+- Prevents recording from starting before Accessibility is genuinely active.
+- Automatically relaunches Whisperino once a newly granted Accessibility
+  permission becomes usable, giving the next take a clean AX session.
+- Keeps the existing per-update permission setup for ad-hoc signed releases.
+- Prevents browser downloads and App Translocation copies from onboarding or
+  requesting permissions before Whisperino is installed in Applications.
+- Adds a drag-to-Applications DMG as the primary artifact for fresh installs;
+  the ZIP remains available for Whisperino's in-app updater.
+- Retains the 3.2.5 safety boundary: dictation can only affect the exact field
+  where the take began and never another app, tab, window, or control.
 
 ## Upgrade note
 
-Existing users can install this release with Whisperino's Update button; the
-old app does not need to be deleted.
+Existing users can install this release with Whisperino's Update button. macOS
+will ask them to enable Accessibility for the new build as before; Whisperino
+relaunches automatically after the grant becomes active.
 
-GitHub release artifacts are currently ad-hoc signed, so macOS may require
-Accessibility to be enabled again after the update, followed by one quit and
-reopen.
+For a fresh install, download the DMG, drag Whisperino to Applications, and
+launch the Applications copy.

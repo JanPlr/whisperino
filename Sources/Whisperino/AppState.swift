@@ -545,6 +545,17 @@ class AppState: ObservableObject {
     }
 
     private func startRecording(instruction: Bool) {
+        // v3.2.5 could begin a take in the brief half-authorized state after a
+        // fresh Accessibility toggle. With no exact AX element captured, its
+        // safety gate correctly withheld the final paste. Do not record until
+        // the grant is active in a freshly relaunched process.
+        guard AXIsProcessTrusted() else {
+            DispatchQueue.main.async {
+                AccessibilityPermissionController.shared.requestIfNeeded()
+            }
+            return
+        }
+
         // Clear presentation data before `discardLiveTextInsertion()` flips
         // the destination flag. Otherwise SwiftUI can briefly render the
         // previous take in the notch while microphone setup is starting.
@@ -1980,13 +1991,10 @@ class AppState: ObservableObject {
 
     // MARK: - Accessibility
 
-    private static var didRequestAccessibilityThisLaunch = false
-
     static func ensureAccessibility() {
-        guard !AXIsProcessTrusted(), !didRequestAccessibilityThisLaunch else { return }
-        didRequestAccessibilityThisLaunch = true
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-        AXIsProcessTrustedWithOptions(options)
+        DispatchQueue.main.async {
+            AccessibilityPermissionController.shared.requestIfNeeded()
+        }
     }
 
     private func pasteClipboard() {

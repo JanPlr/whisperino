@@ -1,26 +1,46 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 APP_NAME="Whisperino"
-DMG_NAME="Whisperino-Installer"
 DMG_DIR="dist"
 STAGING="$DMG_DIR/staging"
+USE_EXISTING_BUNDLE=false
+
+if [ "${1:-}" = "--from-bundle" ]; then
+    USE_EXISTING_BUNDLE=true
+elif [ "$#" -gt 0 ]; then
+    echo "Usage: $0 [--from-bundle]" >&2
+    exit 2
+fi
 
 echo "==> Building $APP_NAME DMG installer"
 echo ""
 
-# Build the app
-echo "==> Step 1/2: Building $APP_NAME.app..."
-./build.sh --bundle-only
+# Build the app unless the release workflow already produced and verified the
+# signed bundle. Rebuilding here would silently replace it with another build.
+if [ "$USE_EXISTING_BUNDLE" = false ]; then
+    echo "==> Step 1/2: Building $APP_NAME.app..."
+    ./build.sh --bundle-only
+else
+    echo "==> Step 1/2: Using existing signed $APP_NAME.app..."
+fi
+
+if [ ! -d "build/$APP_NAME.app" ]; then
+    echo "Missing build/$APP_NAME.app" >&2
+    exit 1
+fi
+
+APP_VERSION="${VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "build/$APP_NAME.app/Contents/Info.plist")}"
+DMG_NAME="$APP_NAME-v$APP_VERSION"
 
 # Create DMG
 echo ""
 echo "==> Step 2/2: Creating DMG..."
-rm -rf "$DMG_DIR"
-mkdir -p "$STAGING"
+rm -rf "$STAGING"
+mkdir -p "$STAGING" "$DMG_DIR"
 
 # Copy app to staging
-cp -R "build/$APP_NAME.app" "$STAGING/"
+ditto "build/$APP_NAME.app" "$STAGING/$APP_NAME.app"
 
 # Create a symlink to /Applications for drag-and-drop install
 ln -s /Applications "$STAGING/Applications"

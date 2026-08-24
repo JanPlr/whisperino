@@ -12,6 +12,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private static let didShowWelcomeKey = "didShowWelcome"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A browser-downloaded app may be launched from a randomized read-only
+        // App Translocation path. Never create TCC grants or onboarding state
+        // there; install/relaunch the stable Applications copy first.
+        guard !ApplicationInstaller.handleUnstableLaunchIfNeeded() else { return }
+
         Self.seedLaunchAtLogin()
         // After a self-update the Accessibility grant is gone (ad-hoc CDHash
         // changed) - jump straight to the settings pane alongside the prompt.
@@ -56,6 +61,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        AccessibilityPermissionController.shared.stop()
         appState.shutdownTranscriber()
     }
 

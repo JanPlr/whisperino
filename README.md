@@ -10,6 +10,14 @@ Local voice transcription for macOS. Lives in your menu bar, runs fully on-devic
 
 ## Install
 
+For a normal fresh install, download the DMG from the
+[latest release](https://github.com/JanPlr/whisperino/releases/latest), open it,
+and drag **Whisperino** to **Applications** before launching it. Whisperino does
+not request microphone or Accessibility access from Downloads or a temporary
+App Translocation path.
+
+To build from source instead:
+
 ```bash
 git clone https://github.com/JanPlr/whisperino.git
 cd whisperino && ./install.sh
@@ -20,7 +28,7 @@ Requirements: macOS 14+, Apple Silicon, Xcode CLT (`xcode-select --install`).
 Homebrew is not required. SwiftPM downloads the pinned Metal
 `CTranscribe.framework`, and Whisperino downloads speech models itself.
 
-This is the canonical source installation. The script builds the self-contained
+The script builds the self-contained
 app with the in-process transcribe.cpp engine and installs exactly one copy at
 `/Applications/Whisperino.app`. Speech models download from Hugging Face in the
 app — Parakeet TDT 0.6B v3 (~705 MB) starts automatically. It does not add a
@@ -127,7 +135,7 @@ cd whisperino && git pull && ./install.sh
 ./release.sh 1.2.0
 ```
 
-That's it. [release.sh](release.sh) bumps the version in `Info.plist`, commits, tags `v1.2.0`, and pushes. The pushed tag triggers GitHub Actions ([release.yml](.github/workflows/release.yml)), which builds the app (version stamped from the tag), zips it, and publishes a GitHub Release using the curated notes in [RELEASE_NOTES.md](RELEASE_NOTES.md). Installed apps pick it up on their next check.
+That's it. [release.sh](release.sh) bumps the version in `Info.plist`, commits, tags `v1.2.0`, and pushes. The pushed tag triggers GitHub Actions ([release.yml](.github/workflows/release.yml)), which builds the app (version stamped from the tag), publishes a drag-to-Applications DMG for fresh installs, and publishes a ZIP for the in-app updater using the curated notes in [RELEASE_NOTES.md](RELEASE_NOTES.md). Installed apps pick it up on their next check.
 
 The committed `Info.plist` version is the source of truth, kept in lockstep with the tag — so a `git clone`, a worktree, or even a "Download ZIP" build all report the correct version, not `0.0.0`.
 

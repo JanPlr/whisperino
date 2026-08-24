@@ -5,8 +5,8 @@
 #
 # This is the ONLY thing a maintainer runs to ship. Pushing the tag triggers
 # .github/workflows/release.yml, which builds the app (stamped from the tag),
-# zips it, and publishes a GitHub Release. Installed apps pick it up on their
-# next update check.
+# publishes a fresh-install DMG plus the updater ZIP. Installed apps pick it up
+# on their next update check.
 #
 # We bump the committed Info.plist *and* tag the same commit, so the two
 # sources build.sh reads from (git describe + Info.plist) always agree — a
