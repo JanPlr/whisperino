@@ -17,12 +17,20 @@ cd whisperino && ./install.sh
 
 Requirements: macOS 14+, Apple Silicon, Xcode CLT (`xcode-select --install`).
 
-The script builds the app (transcribe.cpp is linked in) and installs to `/Applications`. Speech models download from Hugging Face the first time you use them — Parakeet TDT 0.6B v3 (~705 MB) starts automatically.
+Homebrew is not required. SwiftPM downloads the pinned Metal
+`CTranscribe.framework`, and Whisperino downloads speech models itself.
 
-> Run `install.sh` for a new laptop. Accessibility must be granted to the exact
-> `/Applications/Whisperino.app` installed by `install.sh`, followed by one
-> quit/reopen. Developers on Nix can `nix-shell` for git/cmake/curl; Swift
-> still comes from Xcode CLT.
+This is the canonical source installation. The script creates a stable local
+code-signing identity once, builds the self-contained app with the in-process
+transcribe.cpp engine, and installs exactly one copy at
+`/Applications/Whisperino.app`. Speech models download from Hugging Face in the
+app — Parakeet TDT 0.6B v3 (~705 MB) starts automatically.
+
+> The first install may ask for your Mac password once to trust Whisperino's
+> local signing identity. Grant Accessibility to the exact
+> `/Applications/Whisperino.app` installed by the script, then quit and reopen
+> it once. Future source updates keep the same permission identity. Developers
+> on Nix can `nix-shell`; Swift still comes from Xcode CLT.
 
 ### Permissions
 
@@ -102,12 +110,13 @@ Click the menu bar icon → **Settings**.
 
 Whisperino checks GitHub for new releases on launch and once a day. When an update is available, the menu bar menu shows **Update to vX.Y.Z…** - click it and the app downloads, installs, and relaunches itself. You can also check manually via menu → **Check for Updates…**.
 
-After an update, re-toggle Accessibility (off → on) when prompted - the code signature changes with each release, so macOS revokes the grant. The app takes you straight to the right Settings pane.
+Source installations keep their Accessibility grant across rebuilds because
+`install.sh` uses the same local signing identity each time.
 
 Updating from source still works too:
 
 ```bash
-cd whisperino && git pull && ./build.sh
+cd whisperino && git pull && ./install.sh
 ```
 
 ## Releasing (maintainers)
@@ -123,7 +132,7 @@ The committed `Info.plist` version is the source of truth, kept in lockstep with
 ## Troubleshooting
 
 - **Fn key doesn't trigger anything** - System Settings → Keyboard → "Press 🌐 key to…" should be set to **Do Nothing** or "Show Emoji & Symbols". If it's remapped (or you need Fn for something else), open Whisperino's **Settings → General** and switch the trigger to ⌥D.
-- **Paste doesn't work** - confirm you ran `./install.sh`. Quit every running Whisperino copy, remove and re-add Whisperino in Accessibility, select `/Applications/Whisperino.app`, toggle it on, then quit/reopen the app once.
+- **Paste doesn't work** - update with `git pull && ./install.sh`. Quit every running Whisperino copy, remove the existing Whisperino row from Accessibility, add `/Applications/Whisperino.app`, toggle it on, then quit/reopen the app once. Do not launch a copy from `build/`, Downloads, or another clone.
 - **Dictation says the model is missing** - open Settings → Dictation and download Parakeet (or Nemotron / Whisper). The first launch starts the Parakeet download in the background.
 - **No live text while speaking** - download and select Nemotron 3.5 in Settings → Dictation, then enable the switch in its model tile. Parakeet and Whisper are offline models. Accessibility is required to stream into the focused field; without a writable field, the partial transcript stays in Whisperino's top widget.
 - **App doesn't appear in Accessibility list** - launch it first (`open /Applications/Whisperino.app`), then check.

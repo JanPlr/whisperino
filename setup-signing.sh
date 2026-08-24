@@ -42,12 +42,12 @@ keyUsage = critical,digitalSignature
 extendedKeyUsage = critical,codeSigning
 CFG
 
-openssl req -x509 -newkey rsa:2048 -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
+/usr/bin/openssl req -x509 -newkey rsa:2048 -keyout "$TMP/key.pem" -out "$TMP/cert.pem" \
     -days 3650 -nodes -config "$TMP/cfg" >/dev/null 2>&1
 # Legacy PBE algorithms + a non-empty password: modern PKCS12 defaults
 # (and empty passwords) make `security import` fail with "MAC verification
 # failed during PKCS12 import (wrong password?)" on recent macOS.
-openssl pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
+/usr/bin/openssl pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
     -out "$TMP/id.p12" -passout pass:whisperino-tmp -name "$IDENTITY" \
     -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 >/dev/null 2>&1
 

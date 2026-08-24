@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MediaRemoteAdapter
 import os
@@ -10,6 +11,7 @@ private let mediaPlaybackLogger = Logger(
 private struct MediaPlaybackSnapshot: Equatable {
     let isPlaying: Bool?
     let playbackRate: Double?
+    let processIdentifier: pid_t?
     let bundleIdentifier: String?
     let trackIdentifier: String?
 
@@ -17,6 +19,7 @@ private struct MediaPlaybackSnapshot: Equatable {
         let payload = trackInfo.payload
         isPlaying = payload.isPlaying
         playbackRate = payload.playbackRate
+        processIdentifier = payload.PID
         bundleIdentifier = payload.bundleIdentifier
 
         let parts = [payload.title, payload.artist, payload.album].map {
@@ -28,12 +31,43 @@ private struct MediaPlaybackSnapshot: Equatable {
     }
 
     var isActivelyPlaying: Bool {
-        (isPlaying ?? false) || ((playbackRate ?? 0) > 0)
+        switch (isPlaying, playbackRate) {
+        case let (isPlaying?, playbackRate?):
+            return isPlaying && playbackRate > 0
+        case let (isPlaying?, nil):
+            return isPlaying
+        case let (nil, playbackRate?):
+            return playbackRate > 0
+        case (nil, nil):
+            return false
+        }
+    }
+
+    /// MediaRemote can retain stale Now Playing metadata after the player has
+    /// quit. Never treat that cached entry as a resumable media session.
+    var hasLiveApplication: Bool {
+        guard let processIdentifier,
+              processIdentifier > 0,
+              let application = NSRunningApplication(processIdentifier: processIdentifier),
+              !application.isTerminated else {
+            return false
+        }
+
+        guard let bundleIdentifier else { return true }
+        return application.bundleIdentifier == bundleIdentifier
     }
 
     func matchesMediaContext(of other: MediaPlaybackSnapshot) -> Bool {
-        bundleIdentifier == other.bundleIdentifier
-            && trackIdentifier == other.trackIdentifier
+        guard let processIdentifier,
+              let otherProcessIdentifier = other.processIdentifier,
+              processIdentifier == otherProcessIdentifier,
+              let bundleIdentifier,
+              bundleIdentifier == other.bundleIdentifier,
+              let trackIdentifier,
+              trackIdentifier == other.trackIdentifier else {
+            return false
+        }
+        return true
     }
 }
 
@@ -60,6 +94,7 @@ final class MediaPlaybackController {
             guard let self,
                   generation == self.requestGeneration,
                   let initialSnapshot,
+                  initialSnapshot.hasLiveApplication,
                   initialSnapshot.isActivelyPlaying else {
                 return
             }
@@ -76,6 +111,7 @@ final class MediaPlaybackController {
                           generation == self.requestGeneration,
                           !self.didPause,
                           let confirmedSnapshot,
+                          confirmedSnapshot.hasLiveApplication,
                           confirmedSnapshot.isActivelyPlaying,
                           confirmedSnapshot.matchesMediaContext(of: initialSnapshot) else {
                         return
@@ -104,12 +140,28 @@ final class MediaPlaybackController {
         DispatchQueue.main.asyncAfter(deadline: .now() + resumeDelay) { [weak self] in
             guard let self,
                   generation == self.resumeGeneration,
-                  self.didPause else { return }
+                  self.didPause,
+                  let pausedSnapshot = self.pausedSnapshot else { return }
 
-            self.adapter.send("play")
-            self.didPause = false
-            self.pausedSnapshot = nil
-            mediaPlaybackLogger.info("Resumed media session paused by Whisperino")
+            // Re-read Now Playing immediately before resuming. A bare system
+            // Play command with no surviving session can launch Apple Music.
+            self.getSnapshot { [weak self] currentSnapshot in
+                guard let self,
+                      generation == self.resumeGeneration,
+                      self.didPause else { return }
+
+                defer { self.clearPauseLease() }
+                guard let currentSnapshot,
+                      currentSnapshot.hasLiveApplication,
+                      currentSnapshot.matchesMediaContext(of: pausedSnapshot),
+                      !currentSnapshot.isActivelyPlaying else {
+                    mediaPlaybackLogger.info("Skipped resume because the paused media session is no longer current")
+                    return
+                }
+
+                self.adapter.send("play")
+                mediaPlaybackLogger.info("Resumed media session paused by Whisperino")
+            }
         }
     }
 
@@ -123,6 +175,11 @@ final class MediaPlaybackController {
 
     private func cancelPendingResume() {
         resumeGeneration += 1
+    }
+
+    private func clearPauseLease() {
+        didPause = false
+        pausedSnapshot = nil
     }
 }
 

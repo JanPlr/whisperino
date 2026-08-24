@@ -1661,8 +1661,6 @@ class AppState: ObservableObject {
         // Preserve the text in the rescue card instead of silently firing an
         // event macOS will discard.
         guard AXIsProcessTrusted() else {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-            AXIsProcessTrustedWithOptions(options)
             NSLog("[whisperino] paste withheld: Accessibility is not trusted for \(Bundle.main.bundleURL.path)")
             streamsTranscriptIntoFocusedField = false
             return false
@@ -1944,11 +1942,13 @@ class AppState: ObservableObject {
 
     // MARK: - Accessibility
 
+    private static var didRequestAccessibilityThisLaunch = false
+
     static func ensureAccessibility() {
-        if !AXIsProcessTrusted() {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-            AXIsProcessTrustedWithOptions(options)
-        }
+        guard !AXIsProcessTrusted(), !didRequestAccessibilityThisLaunch else { return }
+        didRequestAccessibilityThisLaunch = true
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+        AXIsProcessTrustedWithOptions(options)
     }
 
     private func pasteClipboard() {

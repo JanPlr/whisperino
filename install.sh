@@ -11,7 +11,7 @@ echo ""
 
 # Check for Xcode Command Line Tools
 if ! xcode-select -p &>/dev/null; then
-    echo "[1/2] Installing Xcode Command Line Tools..."
+    echo "[1/3] Installing Xcode Command Line Tools..."
     xcode-select --install
     echo ""
     echo "  Please re-run this script after installation completes."
@@ -31,15 +31,21 @@ if [ -z "$SWIFT_VER" ] || [ "$SWIFT_MAJOR" -lt 5 ] || { [ "$SWIFT_MAJOR" -eq 5 ]
     echo ""
     exit 1
 fi
-echo "[1/2] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
+echo "[1/3] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
 
-# Build the app + install to /Applications. Speech models download
-# in-app from Hugging Face the first time you use them.
-echo "[2/2] Building and installing Whisperino.app..."
+# Create the stable local signing identity before the first build. Without it,
+# every source rebuild gets a new ad-hoc identity and macOS silently invalidates
+# the Accessibility grant even though its old row can still look enabled.
+echo "[2/3] Preparing stable app identity..."
+./setup-signing.sh
+
+# Build the app + install to /Applications. build.sh owns the single launch and
+# permission-pane flow. Speech models download in-app from Hugging Face.
+echo "[3/3] Building and installing Whisperino.app..."
 ./build.sh
 
 echo ""
-echo "  ✓ Whisperino installed!"
+echo "  ✓ Whisperino installed with a stable local identity!"
 echo ""
 echo "  ─────────────────────────────────────────"
 echo "  IMPORTANT - two permissions required:"
@@ -55,39 +61,6 @@ echo "     in Privacy & Security → Accessibility."
 echo "     After enabling it, quit and reopen Whisperino"
 echo "     once so the running process picks up the grant."
 echo ""
-echo "  Speech models (Parakeet by default) download"
-echo "  automatically from Hugging Face into"
-echo "  ~/.whisperino/models. Pick Nemotron or Whisper"
-echo "  later in Settings → Dictation."
-echo ""
-echo "  ─────────────────────────────────────────"
-echo ""
-echo "  Launching Whisperino now..."
-echo ""
-
-open /Applications/Whisperino.app
-
-sleep 2
-
-# Open System Settings directly to Accessibility so they can grant permission
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-
-echo "  Look for Whisperino in the Accessibility list and toggle it ON."
-echo "  Then quit and reopen /Applications/Whisperino.app once."
-echo ""
-echo "  ─────────────────────────────────────────"
-echo "  HOW TO USE"
-echo "  ─────────────────────────────────────────"
-echo ""
-echo "  Dictation:"
-echo "    • Hold Fn → speak → release   (auto-submits)"
-echo "    • Double-tap Fn               (hands-free, tap Fn again to stop)"
-echo ""
-echo "  AI mode (LLM responds inline):"
-echo "    • While holding Fn, also press Shift"
-echo "    • Border turns rainbow → AI mode is active and latched"
-echo "    • Cmd+C any text/images to attach them as context"
-echo "    • Tap Fn or press Return to submit"
-echo ""
-echo "  Esc cancels at any time. Click the menu bar icon for Settings."
+echo "  The first install may ask for your Mac password once while creating"
+echo "  the signing identity. Future git pulls keep Accessibility working."
 echo ""
