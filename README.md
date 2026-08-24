@@ -4,7 +4,7 @@ Local voice transcription for macOS. Lives in your menu bar, runs fully on-devic
 
 ## TL;DR
 
-**Hold the recording shortcut → speak → release.** The shortcut defaults to Fn and can be changed in Settings → Dictation. Choose **Hold to record** or **Tap to start** without changing the shortcut itself. Your words are transcribed and pasted into whatever text field is focused.
+**Hold the recording shortcut → speak → release.** The shortcut defaults to Fn and can be changed in Settings → Dictation. Choose **Hold to record** or **Tap to start** without changing the shortcut itself. Your words are transcribed into the field where the take began. You can switch elsewhere while recording; Whisperino pauses field updates and safely resumes when that exact input regains focus.
 
 **Want the LLM to answer instead of just transcribe?** Add Shift any time while you're holding the shortcut - the pill turns rainbow, AI mode is on, and the recording becomes latched. Cmd+C any text or images you want as context (no clicks needed). Tap the shortcut (or press Enter) to submit. Esc to cancel.
 
@@ -34,8 +34,12 @@ certificate or private key to your Keychain.
 
 After install, grant two permissions:
 
-- **Microphone** - allow on first record prompt.
-- **Accessibility** - needed for auto-paste. System Settings opens automatically after install; find Whisperino and toggle it ON.
+- **Microphone** - allow the first-launch prompt.
+- **Accessibility** - needed for auto-paste. Its prompt follows the microphone prompt so macOS dialogs do not overlap; open System Settings from it and toggle Whisperino ON.
+
+On the first launch Whisperino opens its Overview once, shows speech-model
+setup progress, and then lives in the menu bar. The default Parakeet download
+continues in the background.
 
 ## Shortcuts
 
@@ -79,7 +83,7 @@ writes data or opens another app waits for explicit confirmation.
 
 ## Long recordings
 
-There's no practical length limit. Parakeet and Whisper rotate the recording into ~40s chunks (cut at silence) and transcribe finished chunks in the background — when you stop, only the last chunk still needs processing. Nemotron streams on Metal as you speak: its live transcript appears directly in the focused text field, or in Whisperino's top widget when no editable field is selected.
+There's no practical length limit. Parakeet and Whisper rotate the recording into ~40s chunks (cut at silence) and transcribe finished chunks in the background — when you stop, only the last chunk still needs processing. Nemotron streams on Metal as you speak: its live transcript appears directly in the input where recording began. If you switch away, updates pause and move to Whisperino's top widget without touching the new app; returning to the original input resumes there.
 
 Nothing gets lost:
 

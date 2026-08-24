@@ -181,6 +181,10 @@ class AppState: ObservableObject {
 
     /// PID of the app that was frontmost when recording started
     private var recordingTargetPID: pid_t?
+    /// Exact Accessibility focus object captured alongside the PID. A PID is
+    /// not a sufficient boundary for browsers, whose tabs, windows, address
+    /// bar, page controls, and editors all live in the same process.
+    private var recordingTargetElement: AXUIElement?
 
     /// Identifies both microphone setup and the live take it produces. Audio
     /// startup is asynchronous because CoreAudio can block after device churn;
@@ -474,6 +478,7 @@ class AppState: ObservableObject {
         audioLevel = 0
         recordingStartTime = nil
         recordingTargetPID = nil
+        recordingTargetElement = nil
         resetInstructionMode()
         state = finalState
     }
@@ -540,6 +545,12 @@ class AppState: ObservableObject {
     }
 
     private func startRecording(instruction: Bool) {
+        // Clear presentation data before `discardLiveTextInsertion()` flips
+        // the destination flag. Otherwise SwiftUI can briefly render the
+        // previous take in the notch while microphone setup is starting.
+        liveTranscript = ""
+        chunksDone = 0
+        chunksTotal = 0
         discardLiveTextInsertion()
         // A fresh take supersedes a lingering fallback card.
         fallbackResult = nil
@@ -597,29 +608,40 @@ class AppState: ObservableObject {
             assistantSession = AssistantSessionState(phase: .listening)
         }
 
-        // Capture the frontmost app so we can re-activate it before pasting,
-        // and whether it has a focused editable field *right now* - while the
+        // Capture the frontmost app and exact focused control, plus whether it
+        // has a focused editable field *right now* - while the
         // target is frontmost and its caret is live, which is the only moment
         // this can be read reliably.
         recordingTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let focusedTarget = Self.focusedEditableTarget()
+        recordingTargetElement = focusedTarget.element
         overlayTargetDisplayID = ScreenCapture.targetDisplayID(
             focusedElement: focusedTarget.element,
             pid: recordingTargetPID
         )
         recordingTargetEditable = focusedTarget.editable
+        // Offline models do not publish partials into the field, but a valid
+        // bound target still owns the eventual result. Keep the notch compact
+        // throughout that take instead of suddenly expanding when a rolling
+        // chunk completes or immediately before the final paste.
+        streamsTranscriptIntoFocusedField = !instruction
+            && focusedTarget.editable
+            && focusedTarget.element != nil
         publishesStreamingPartialsForTake = transcriber.supportsStreaming
             && store.settings.streamingTranscriptionEnabled
         if publishesStreamingPartialsForTake, !instruction {
-            if let element = focusedTarget.element,
+            if focusedTarget.supportsLiveInsertion,
+               let element = focusedTarget.element,
                let inserter = LiveTextInserter(element: element) {
                 liveTextInserter = inserter
                 consecutiveLiveTextInsertionFailures = 0
                 recordingTargetEditable = true
                 streamsTranscriptIntoFocusedField = true
             } else if !AXIsProcessTrusted() {
+                streamsTranscriptIntoFocusedField = false
                 NSLog("[whisperino] live field unavailable: Accessibility permission is not active")
             } else {
+                streamsTranscriptIntoFocusedField = false
                 NSLog("[whisperino] live field unavailable: focused element exposes no writable text range")
             }
         }
@@ -690,6 +712,7 @@ class AppState: ObservableObject {
                     self.screenshotTask = nil
                     self.discardLiveTextInsertion()
                     self.recordingTargetPID = nil
+                    self.recordingTargetElement = nil
                     self.resetInstructionMode()
                     if var session = self.assistantSession {
                         session.transition(
@@ -733,6 +756,7 @@ class AppState: ObservableObject {
         audioLevel = 0
         recordingStartTime = nil
         recordingTargetPID = nil
+        recordingTargetElement = nil
         isLatchedRecording = false
         showingInputPicker = false
         resetInstructionMode()
@@ -883,21 +907,32 @@ class AppState: ObservableObject {
     private func applyStreamingPartial(_ text: String, to inserter: LiveTextInserter) {
         guard liveTextInserter === inserter else { return }
         lastLiveTextInsertionTime = ProcessInfo.processInfo.systemUptime
+        // Losing this exact control pauses delivery. In particular, another
+        // browser tab shares the same PID but must never receive the old tab's
+        // Delete/typing events.
+        guard inserter.isTargetStillFocused() else {
+            // Pause delivery without abandoning ownership. If the user comes
+            // back to this exact input before stopping, the next hypothesis
+            // (or the final result) safely replaces the provisional range.
+            // While away, progress moves to the notch and no key event fires.
+            inserter.pauseForFocusLoss()
+            streamsTranscriptIntoFocusedField = false
+            return
+        }
+        streamsTranscriptIntoFocusedField = true
         if inserter.replace(with: text) {
             consecutiveLiveTextInsertionFailures = 0
             return
         }
 
         consecutiveLiveTextInsertionFailures += 1
-        guard consecutiveLiveTextInsertionFailures >= 3 else { return }
-
-        // Three explicit AX errors in a row means the field genuinely
-        // detached. A single stale/transient browser response no longer sends
-        // all remaining speech to the notch.
-        inserter.rollback()
-        liveTextInsertionRequiresRescue = inserter.hasInsertedText
-        liveTextInserter = nil
-        streamsTranscriptIntoFocusedField = false
+        if consecutiveLiveTextInsertionFailures == 3 {
+            // Keep the target reservation while the exact original control is
+            // still focused. Chromium can report several transient AX errors
+            // while its renderer catches up; expanding the notch mid-take and
+            // then pasting successfully at the end looks like a broken state.
+            NSLog("[whisperino] live field is temporarily rejecting updates; final delivery remains bound")
+        }
     }
 
     private func chunkTimerTick() {
@@ -1456,6 +1491,7 @@ class AppState: ObservableObject {
                         label: plan.summary
                     ) else { return false }
                     self.recordingTargetPID = nil
+                    self.recordingTargetElement = nil
                     self.resetInstructionMode()
                     self.store.addTranscript(transcript, isInstruction: true)
                     self.presentAssistantConfirmation(invocation)
@@ -1490,6 +1526,7 @@ class AppState: ObservableObject {
                 label: "Tool completed"
             ) else { return }
             self.recordingTargetPID = nil
+            self.recordingTargetElement = nil
             self.resetInstructionMode()
             self.store.addTranscript(transcript, isInstruction: true)
             self.presentAssistantToolResult(result)
@@ -1625,18 +1662,16 @@ class AppState: ObservableObject {
         streamsTranscriptIntoFocusedField = false
     }
 
-    /// Paste the finished take into the app that was frontmost when
-    /// recording began. Returns false only when we positively determined -
-    /// at record start, the one reliable moment - that there was no editable
-    /// field focused; the caller then shows the rescue card instead. In
-    /// every other case (a field was focused, OR we couldn't tell) we paste,
-    /// so a real text field never gets withheld.
+    /// Insert the finished take only while the exact control focused at record
+    /// start still owns focus. If focus moved or could not be identified, the
+    /// caller shows the rescue card instead of risking another UI surface.
     @discardableResult
     private func insertResult(_ text: String) -> Bool {
         pendingLiveTextInsertion?.cancel()
         pendingLiveTextInsertion = nil
         lastLiveTextInsertionTime = 0
         let targetPID = recordingTargetPID
+        let targetElement = recordingTargetElement
         let editable = recordingTargetEditable
         let liveInserter = liveTextInserter
         let requiresRescue = liveTextInsertionRequiresRescue
@@ -1644,6 +1679,7 @@ class AppState: ObservableObject {
         consecutiveLiveTextInsertionFailures = 0
         liveTextInsertionRequiresRescue = false
         recordingTargetPID = nil
+        recordingTargetElement = nil
         resetInstructionMode()
 
         guard editable else {
@@ -1651,6 +1687,11 @@ class AppState: ObservableObject {
             return false
         }
         guard !requiresRescue else {
+            streamsTranscriptIntoFocusedField = false
+            return false
+        }
+        guard Self.isTargetStillFocused(pid: targetPID, element: targetElement) else {
+            NSLog("[whisperino] insertion withheld: the original control no longer has focus")
             streamsTranscriptIntoFocusedField = false
             return false
         }
@@ -1672,8 +1713,9 @@ class AppState: ObservableObject {
         if let liveInserter {
             let hadPartialText = liveInserter.hasInsertedText
             if liveInserter.replace(with: text) {
+                streamsTranscriptIntoFocusedField = true
                 if shouldAutoSubmit(pid: targetPID) {
-                    deliverAutoSubmit(reactivating: targetPID)
+                    deliverAutoSubmit(to: targetPID, element: targetElement)
                 }
                 return true
             }
@@ -1689,9 +1731,16 @@ class AppState: ObservableObject {
             }
         }
 
-        streamsTranscriptIntoFocusedField = false
-        deliverPaste(text, reactivating: targetPID, submitAfter: shouldAutoSubmit(pid: targetPID))
-        return true
+        let delivered = deliverPaste(
+            text,
+            to: targetPID,
+            element: targetElement,
+            submitAfter: shouldAutoSubmit(pid: targetPID)
+        )
+        if !delivered {
+            streamsTranscriptIntoFocusedField = false
+        }
+        return delivered
     }
 
     /// Whether the app that was frontmost at record start is on the
@@ -1706,13 +1755,14 @@ class AppState: ObservableObject {
     /// surface. Read at record start, when the target app is frontmost and
     /// its caret is live - the only point this is dependable.
     ///
-    /// Biases hard toward "yes": no Accessibility grant, an app that doesn't
-    /// speak AX, or any failed query all return true so we never withhold a
-    /// paste. We only return false when the API positively tells us either
-    /// that nothing is focused or that the focused thing has no text
-    /// behaviour at all.
-    private static func focusedEditableTarget() -> (editable: Bool, element: AXUIElement?) {
-        guard AXIsProcessTrusted() else { return (true, nil) }
+    /// Unknown editability remains permissive for UI messaging, but an absent
+    /// element cannot pass the exact-focus gate at final delivery.
+    private static func focusedEditableTarget() -> (
+        editable: Bool,
+        element: AXUIElement?,
+        supportsLiveInsertion: Bool
+    ) {
+        guard AXIsProcessTrusted() else { return (true, nil, false) }
 
         // System-wide focused element = the focused element of the frontmost
         // app. This is the robust query (the per-app variant returns stale /
@@ -1725,10 +1775,10 @@ class AppState: ObservableObject {
         )
         // Couldn't read focus at all (AX disabled for the app, opaque
         // Electron, transient error) → assume editable and paste.
-        guard err == .success else { return (true, nil) }
+        guard err == .success else { return (true, nil, false) }
         // Attribute present but empty → genuinely nothing focused.
         guard let focused = focusedRef, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
-            return (false, nil)
+            return (false, nil, false)
         }
         let element = focused as! AXUIElement
 
@@ -1756,7 +1806,29 @@ class AppState: ObservableObject {
         // the writable text range on an ancestor or descendant; the inserter
         // performs its own bounded, non-destructive capability probe.
         let supportsLiveInsertion = subrole != "AXSecureTextField"
-        return (editable, supportsLiveInsertion ? element : nil)
+        return (editable, element, supportsLiveInsertion)
+    }
+
+    private static func isTargetStillFocused(
+        pid: pid_t?,
+        element: AXUIElement?
+    ) -> Bool {
+        guard let pid,
+              let element,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            return false
+        }
+
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedRef
+        ) == .success,
+              let focusedRef,
+              CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return false }
+        return CFEqual(focusedRef, element)
     }
 
     /// Decide editability from role first. Real text-input roles/subroles
@@ -1791,9 +1863,21 @@ class AppState: ObservableObject {
         return valueSettable
     }
 
-    /// The single paste path: stash the clipboard, bring the target app
-    /// forward, synthesize Cmd+V, then restore the clipboard.
-    private func deliverPaste(_ text: String, reactivating pid: pid_t?, submitAfter: Bool = false) {
+    /// The single paste path: stash the clipboard, verify that the original
+    /// control still owns focus, synthesize Cmd+V, then restore the clipboard.
+    /// It intentionally never activates an app: switching away is a user
+    /// cancellation of automatic delivery, not an invitation to steal focus.
+    @discardableResult
+    private func deliverPaste(
+        _ text: String,
+        to pid: pid_t?,
+        element: AXUIElement?,
+        submitAfter: Bool = false
+    ) -> Bool {
+        guard Self.isTargetStillFocused(pid: pid, element: element) else {
+            return false
+        }
+
         // Snapshot the clipboard so we can put it back afterwards.
         let savedItems = NSPasteboard.general.pasteboardItems?.compactMap { item -> [String: Data]? in
             var dict = [String: Data]()
@@ -1805,96 +1889,50 @@ class AppState: ObservableObject {
             return dict.isEmpty ? nil : dict
         } ?? []
 
-        // Bring the target app forward. It's usually still frontmost (our
-        // overlay is a non-activating panel), but re-assert it and give the OS
-        // a beat to make the app key before the keystroke lands, otherwise
-        // Cmd+V is delivered to the wrong place.
-        let reactivatedPID: pid_t?
-        if let pid, let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate()
-            reactivatedPID = pid
-        } else {
-            reactivatedPID = nil
-        }
-
-        let fire: () -> Void = {
+        func restoreClipboard(ifUnchanged changeCount: Int) {
+            guard NSPasteboard.general.changeCount == changeCount else { return }
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-            let injectedChangeCount = NSPasteboard.general.changeCount
-            self.pasteClipboard()
-
-            // Auto-submit: press Return after the paste lands so the message
-            // is sent (or queued, for a busy coding agent - Codex, Claude
-            // Code, and Cursor all queue on Return). Sits between paste and
-            // clipboard restore - Return touches no pasteboard, so ordering
-            // is safe.
-            if submitAfter {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    self.pressReturn()
+            for itemDict in savedItems {
+                let item = NSPasteboardItem()
+                for (type, data) in itemDict {
+                    item.setData(data, forType: NSPasteboard.PasteboardType(type))
                 }
-            }
-
-            // Electron/web editors can consume the synthetic paste later than
-            // native fields on a newly booted Mac. Leave the value available
-            // for a full beat, and restore only if the user has not copied
-            // something new in the meantime.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-                guard NSPasteboard.general.changeCount == injectedChangeCount else { return }
-                NSPasteboard.general.clearContents()
-                for itemDict in savedItems {
-                    let item = NSPasteboardItem()
-                    for (type, data) in itemDict {
-                        item.setData(data, forType: NSPasteboard.PasteboardType(type))
-                    }
-                    NSPasteboard.general.writeObjects([item])
-                }
+                NSPasteboard.general.writeObjects([item])
             }
         }
 
-        if let reactivatedPID {
-            waitUntilFrontmost(pid: reactivatedPID, attemptsRemaining: 8, completion: fire)
-        } else {
-            fire()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        let injectedChangeCount = NSPasteboard.general.changeCount
+
+        // Recheck after touching the pasteboard and immediately before the
+        // global event. Even a same-browser tab switch invalidates delivery.
+        guard Self.isTargetStillFocused(pid: pid, element: element) else {
+            restoreClipboard(ifUnchanged: injectedChangeCount)
+            return false
         }
+        pasteClipboard()
+
+        if submitAfter {
+            deliverAutoSubmit(to: pid, element: element)
+        }
+
+        // Electron/web editors can consume the synthetic paste later than
+        // native fields. Leave the value available for a full beat, and
+        // restore only if the user has not copied something in the meantime.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            restoreClipboard(ifUnchanged: injectedChangeCount)
+        }
+        return true
     }
 
-    /// Auto-submit after a live AX insertion. This mirrors the activation
-    /// discipline of clipboard paste without touching the pasteboard again.
-    private func deliverAutoSubmit(reactivating pid: pid_t?) {
-        let fire: () -> Void = {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                self.pressReturn()
-            }
-        }
-
-        if let pid, let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate()
-            waitUntilFrontmost(pid: pid, attemptsRemaining: 8, completion: fire)
-        } else {
-            fire()
-        }
-    }
-
-    /// App activation is asynchronous and can take substantially longer than
-    /// a fixed delay on a fresh login or while switching Spaces. Wait up to
-    /// 400ms for the intended target before sending the paste event.
-    private func waitUntilFrontmost(
-        pid: pid_t,
-        attemptsRemaining: Int,
-        completion: @escaping () -> Void
-    ) {
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
-            || attemptsRemaining <= 0 {
-            completion()
-            return
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.waitUntilFrontmost(
-                pid: pid,
-                attemptsRemaining: attemptsRemaining - 1,
-                completion: completion
-            )
+    /// Delayed Return is independently guarded because focus can change after
+    /// the final text lands but before auto-submit fires.
+    private func deliverAutoSubmit(to pid: pid_t?, element: AXUIElement?) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self,
+                  Self.isTargetStillFocused(pid: pid, element: element) else { return }
+            self.pressReturn()
         }
     }
 

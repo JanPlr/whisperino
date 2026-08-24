@@ -42,10 +42,14 @@ enum ScreenCapture {
             let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
 
             let config = SCStreamConfiguration()
-            // Point resolution (1x) - plenty for the model to read the screen
-            // and keeps the upload small versus a full retina capture.
-            config.width = display.width
-            config.height = display.height
+            // A full 5K/6K frame can consume hundreds of MB while AppKit makes
+            // TIFF, PNG, and base64 representations for the request. Capture at
+            // a model-readable size up front instead of allocating the huge
+            // source frame and downscaling it later.
+            let longestSide = max(display.width, display.height)
+            let captureScale = min(1, 2_048.0 / Double(max(longestSide, 1)))
+            config.width = max(1, Int(Double(display.width) * captureScale))
+            config.height = max(1, Int(Double(display.height) * captureScale))
             config.showsCursor = false
             config.ignoreShadowsDisplay = true
 

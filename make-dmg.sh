@@ -11,7 +11,7 @@ echo ""
 
 # Build the app
 echo "==> Step 1/2: Building $APP_NAME.app..."
-./build.sh
+./build.sh --bundle-only
 
 # Create DMG
 echo ""

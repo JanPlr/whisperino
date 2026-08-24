@@ -58,6 +58,11 @@ final class Transcriber {
     private var pcmBuffer: [Float] = []
     /// Samples that arrived on the audio thread before the engine drained them.
     private var pendingPCM: [Float] = []
+    /// At most one PCM drain is queued at a time. AVAudioEngine can deliver
+    /// roughly 90 buffers per second while inference is slower than realtime;
+    /// enqueueing one closure per buffer makes the serial queue (and its
+    /// captured arrays) grow without bound during a long take.
+    private var pcmDrainScheduled = false
     /// Feed at least ~80 ms so Nemotron is not woken per 10 ms tap.
     private let minFeedSamples = 1_280
     private var onPartial: ((String) -> Void)?
@@ -254,6 +259,7 @@ final class Transcriber {
             takeGeneration &+= 1
             streamClosed = false
             pendingPCM.removeAll(keepingCapacity: true)
+            pcmDrainScheduled = false
         }
         engineQueue.async { [weak self] in
             guard let self else { return }
@@ -306,13 +312,58 @@ final class Transcriber {
     /// fast key-release cannot lose the last tap while `finishStream` runs.
     func feedPCM(_ samples: [Float]) {
         guard !samples.isEmpty else { return }
-        withLock {
+        let scheduling = withLock { () -> (shouldSchedule: Bool, generation: UInt64) in
+            guard !streamClosed else { return (false, takeGeneration) }
             pendingPCM.append(contentsOf: samples)
+            guard !pcmDrainScheduled else { return (false, takeGeneration) }
+            pcmDrainScheduled = true
+            return (true, takeGeneration)
         }
+        guard scheduling.shouldSchedule else { return }
         engineQueue.async { [weak self] in
-            guard let self, !self.withLock({ self.streamClosed }) else { return }
-            self.drainPendingPCM()
-            self.flushPCMIfNeeded(force: false)
+            self?.drainScheduledPCM(generation: scheduling.generation)
+        }
+    }
+
+    /// Drain one coalesced batch, then yield the serial queue before any next
+    /// batch. Yielding lets finish/cancel work already in the queue run even if
+    /// the audio producer is continuously faster than the recognizer.
+    private func drainScheduledPCM(generation: UInt64) {
+        let state = withLock { (takeGeneration, streamClosed) }
+        // A previous take's queued drain must never consume a new take's PCM.
+        // prepareTake deliberately resets the scheduling flag for the new
+        // generation, so the stale closure has nothing left to clean up.
+        guard state.0 == generation else { return }
+        if state.1 {
+            withLock {
+                pendingPCM.removeAll()
+                pcmDrainScheduled = false
+            }
+            return
+        }
+
+        drainPendingPCM()
+        flushPCMIfNeeded(force: false)
+
+        let needsAnotherDrain = withLock { () -> Bool in
+            if takeGeneration != generation {
+                return false
+            }
+            if streamClosed {
+                pendingPCM.removeAll()
+                pcmDrainScheduled = false
+                return false
+            }
+            if pendingPCM.isEmpty {
+                pcmDrainScheduled = false
+                return false
+            }
+            return true
+        }
+        if needsAnotherDrain {
+            engineQueue.async { [weak self] in
+                self?.drainScheduledPCM(generation: generation)
+            }
         }
     }
 
@@ -413,6 +464,7 @@ final class Transcriber {
         withLock {
             streamClosed = true
             pendingPCM.removeAll()
+            pcmDrainScheduled = false
         }
         engineQueue.async { [weak self] in
             _ = self?.stream?.reset()

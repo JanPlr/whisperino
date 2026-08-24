@@ -8,7 +8,7 @@ class SettingsWindowController {
 
     private init() {}
 
-    func show() {
+    func show(startOnHome: Bool = false) {
         if let existing = window, existing.isVisible {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -28,7 +28,7 @@ class SettingsWindowController {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.center()
-        window.contentView = NSHostingView(rootView: SettingsView())
+        window.contentView = NSHostingView(rootView: SettingsView(startOnHome: startOnHome))
         window.isReleasedWhenClosed = false
         self.window = window
 

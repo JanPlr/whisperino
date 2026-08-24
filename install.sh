@@ -33,8 +33,8 @@ if [ -z "$SWIFT_VER" ] || [ "$SWIFT_MAJOR" -lt 5 ] || { [ "$SWIFT_MAJOR" -eq 5 ]
 fi
 echo "[1/2] Xcode Command Line Tools: OK (Swift $SWIFT_VER)"
 
-# Build the app + install to /Applications. build.sh owns the single launch and
-# permission-pane flow. Speech models download in-app from Hugging Face. Normal
+# Build the app + install to /Applications. build.sh owns the single launch;
+# the app sequences its permission prompts. Speech models download in-app. Normal
 # installs use ad-hoc signing and never add certificates or keys to Keychain.
 echo "[2/2] Building and installing Whisperino.app..."
 ./build.sh
@@ -46,13 +46,13 @@ echo "  ────────────────────────
 echo "  IMPORTANT - two permissions required:"
 echo "  ─────────────────────────────────────────"
 echo ""
-echo "  1. MICROPHONE - macOS will ask on first"
-echo "     recording. Click Allow."
+echo "  1. MICROPHONE - macOS asks after launch."
+echo "     Click Allow."
 echo ""
 echo "  2. ACCESSIBILITY - required for auto-paste."
-echo "     When the app launches, a System Settings"
-echo "     window will open. Toggle Whisperino ON"
-echo "     in Privacy & Security → Accessibility."
+echo "     This prompt follows the microphone prompt."
+echo "     Open System Settings from it, then toggle"
+echo "     Whisperino ON under Accessibility."
 echo "     After enabling it, quit and reopen Whisperino"
 echo "     once so the running process picks up the grant."
 echo ""

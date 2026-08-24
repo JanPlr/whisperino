@@ -1,29 +1,30 @@
-# Whisperino 3.2.4 — Cleaner Recording and Safer Installation
+# Whisperino 3.2.5 — Safer Dictation and a Smoother First Run
 
-This patch makes Tap recording reliable, simplifies its settings, and removes
-an intrusive source-install signing step.
+This patch keeps dictation bound to the text field where it started, tightens
+memory use during long sessions, and makes clean installation more dependable.
 
 ## What changed
 
-- Fixes Tap mode so the first press starts recording and the second press
-  stops and sends it, including quick Fn and custom-shortcut taps.
-- Keeps the chosen shortcut unchanged when switching between Hold and Tap.
-- Replaces the verbose recording section with a compact shortcut control and
-  clearly labelled **Hold to record** and **Tap to start** choices.
-- Stops `install.sh` from creating a self-signed certificate or private key in
-  the login Keychain.
-- Makes source builds use ad-hoc signing by default, even if an old Whisperino
-  identity remains in Keychain. Maintainer signing is now explicitly opt-in.
-- Removes the obsolete self-signing setup helper.
+- Prevents streaming transcription, rollback, paste, and auto-submit events
+  from reaching another app, browser tab, window, button, or text field.
+- Pauses field updates while you work elsewhere, then safely resumes in the
+  exact original input when you return and finishes the transcript there.
+- Keeps Parakeet and Whisper results out of the notch when a valid input owns
+  the take; the notch remains the fallback only when no safe input is available.
+- Clears the previous transcript before a new recording begins, removing the
+  brief stale-text flash between takes.
+- Coalesces live PCM work so long streaming sessions cannot build an unbounded
+  queue, cleans up interrupted model downloads, and bounds screenshot memory.
+- Improves first-run guidance with a clear Overview, visible model-download
+  progress, and ordered Microphone and Accessibility permission prompts.
+- Makes source installation rollback-safe: the new app is staged and verified
+  before it replaces the working installation.
+- Keeps DMG creation from performing an unintended local installation.
 
 ## Upgrade note
 
 Existing users can install this release with Whisperino's Update button; the
 old app does not need to be deleted.
-
-If the v3.2.3 source installer created **Whisperino Self-Signed** in Keychain,
-deny any `codesign` password prompt and remove that identity from the login
-keychain in Keychain Access. Whisperino 3.2.4 no longer creates or uses it.
 
 GitHub release artifacts are currently ad-hoc signed, so macOS may require
 Accessibility to be enabled again after the update, followed by one quit and

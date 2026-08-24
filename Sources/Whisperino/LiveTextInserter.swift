@@ -27,6 +27,10 @@ final class LiveTextInserter {
         case focusedSession
     }
 
+    /// The exact system-wide focus object present when dictation began. The
+    /// writable range can live on one of its ancestors or descendants, so it
+    /// is deliberately kept separately from `element`.
+    private let focusedElement: AXUIElement
     private let element: AXUIElement
     private let targetPID: pid_t
     private let usesKeyboardInsertion: Bool
@@ -36,6 +40,10 @@ final class LiveTextInserter {
     private var ownedRange: CFRange
     private(set) var renderedText = ""
     private(set) var hasInsertedText = false
+    /// Focus can leave the target during a take. No events are sent while it
+    /// is away; when the exact field returns, restore the caret to our owned
+    /// suffix before resuming incremental keyboard edits.
+    private var needsCaretRestore = false
 
     init?(element: AXUIElement) {
         // Chromium/WebKit chat composers sometimes focus a container while
@@ -51,6 +59,7 @@ final class LiveTextInserter {
             return nil
         }
 
+        focusedElement = element
         self.element = target.element
         var pid: pid_t = 0
         AXUIElementGetPid(target.element, &pid)
@@ -82,12 +91,11 @@ final class LiveTextInserter {
     func replace(with text: String) -> Bool {
         if hasInsertedText, text == renderedText { return true }
 
-        // Never keep writing into a field after the user has switched apps.
-        // The overlay is non-activating, so the original app remains frontmost
-        // during an ordinary dictation take.
-        guard targetPID == 0
-                || NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
-            liveTextLogger.info("Live field detached because the target app lost focus")
+        // A browser uses one process for many tabs, windows, and controls.
+        // Checking only its PID lets global keyboard events land on whatever
+        // the user focused next (including buttons and browser chrome).
+        guard isTargetStillFocused() else {
+            liveTextLogger.info("Live field detached because the original control lost focus")
             return false
         }
 
@@ -128,6 +136,7 @@ final class LiveTextInserter {
         ownedRange = nextRange
         renderedText = text
         hasInsertedText = true
+        needsCaretRestore = false
 
         if !usesKeyboardInsertion {
             // Native AX mutation does not advance the selection consistently.
@@ -141,13 +150,21 @@ final class LiveTextInserter {
     /// cancellation and failures so provisional speech never becomes residue.
     func rollback() {
         guard hasInsertedText else { return }
+        // Rollback can synthesize Delete and typing in web editors. If focus
+        // moved, leaving provisional text behind is safer than mutating the
+        // newly focused app, tab, window, or control.
+        guard isTargetStillFocused() else {
+            liveTextLogger.info("Live rollback withheld because the original control lost focus")
+            return
+        }
         if usesKeyboardInsertion {
             guard replaceUsingKeyboard(with: originalText) else { return }
             if originalRange.length > 0 {
                 // Keyboard events are delivered asynchronously. Restore the
                 // user's original selection after the replacement has landed.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [element, originalRange] in
-                    _ = Self.setRange(originalRange, on: element)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                    guard let self, self.isTargetStillFocused() else { return }
+                    _ = Self.setRange(self.originalRange, on: self.element)
                 }
             }
         } else {
@@ -165,12 +182,41 @@ final class LiveTextInserter {
         ownedRange = originalRange
     }
 
+    func pauseForFocusLoss() {
+        needsCaretRestore = true
+    }
+
+    /// Whether the same app *and exact focused Accessibility object* still
+    /// own keyboard input. This distinguishes fields across browser tabs and
+    /// windows even though they all share one process identifier.
+    func isTargetStillFocused() -> Bool {
+        guard targetPID == 0
+                || NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID,
+              let current = Self.currentFocusedElement() else { return false }
+        return CFEqual(current, focusedElement)
+    }
+
     /// Browser and Electron editors need real DOM keyboard input, but a full
     /// selection + Cmd+V for every hypothesis visibly flashes selection,
     /// mutates the clipboard, and can trigger shortcut UI. Keep the caret at
     /// the end of our owned text and rewrite only the changed suffix using
     /// real, keyboard-layout-aware key presses instead.
     private func replaceUsingKeyboard(with text: String) -> Bool {
+        if hasInsertedText, needsCaretRestore {
+            let caret = CFRange(
+                location: ownedRange.location + ownedRange.length,
+                length: 0
+            )
+            let status = Self.setRangeStatus(caret, on: element)
+            guard status == .success else {
+                liveTextLogger.warning(
+                    "Could not restore the resumed live caret (AX error \(status.rawValue))"
+                )
+                return false
+            }
+            needsCaretRestore = false
+        }
+
         if !hasInsertedText {
             let selectionStatus = Self.setRangeStatus(originalRange, on: element)
             guard selectionStatus == .success else {
@@ -276,6 +322,19 @@ final class LiveTextInserter {
     private static func elementAttribute(_ attribute: String, on element: AXUIElement) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
+    }
+
+    private static func currentFocusedElement() -> AXUIElement? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &value
+        ) == .success,
               let value,
               CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return (value as! AXUIElement)

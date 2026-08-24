@@ -137,28 +137,45 @@ class AudioRecorder {
             let inputChannels = bufferList.reduce(0) { $0 + Int($1.mNumberChannels) }
             guard inputChannels > 0 else { return nil }
 
-            // Get device name
-            var nameAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceNameCFString,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var name: CFString = "" as CFString
-            var nameSize = UInt32(MemoryLayout<CFString>.size)
-            AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name)
+            guard let name = stringProperty(
+                deviceID: deviceID,
+                selector: kAudioDevicePropertyDeviceNameCFString
+            ), let uid = stringProperty(
+                deviceID: deviceID,
+                selector: kAudioDevicePropertyDeviceUID
+            ) else { return nil }
 
-            // Get device UID
-            var uidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uid: CFString = "" as CFString
-            var uidSize = UInt32(MemoryLayout<CFString>.size)
-            AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid)
-
-            return AudioInputDevice(id: deviceID, name: name as String, uid: uid as String)
+            return AudioInputDevice(id: deviceID, name: name, uid: uid)
         }
+    }
+
+    /// Keep the returned CFString in a Swift strong-reference slot so ARC
+    /// releases CoreAudio's value after bridging it. The explicit pointer scope
+    /// matches Apple's Core Audio sample and avoids exposing the reference as a
+    /// free-form raw pointer.
+    private static func stringProperty(
+        deviceID: AudioDeviceID,
+        selector: AudioObjectPropertySelector
+    ) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(
+                deviceID,
+                &address,
+                0,
+                nil,
+                &size,
+                pointer
+            )
+        }
+        guard status == noErr else { return nil }
+        return value as String
     }
 
     /// Get the system default input device ID

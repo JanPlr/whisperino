@@ -9,17 +9,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Launch at login is on by default, but only registered once - a user who
     // turns it off in Settings stays off across restarts.
     private static let didSeedLaunchAtLoginKey = "didSeedLaunchAtLogin"
+    private static let didShowWelcomeKey = "didShowWelcome"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.seedLaunchAtLogin()
         // After a self-update the Accessibility grant is gone (ad-hoc CDHash
         // changed) - jump straight to the settings pane alongside the prompt.
         UpdateChecker.handlePostUpdateLaunch()
-        AppState.ensureAccessibility()
         UpdateChecker.shared.startAutomaticChecks()
-        // Pre-request microphone permission so the first recording attempt isn't
-        // interrupted by the macOS permission dialog mid-press
-        AVCaptureDevice.requestAccess(for: .audio) { _ in }
         // Screen Recording (AI mode's screenshot) is requested lazily: the first
         // AI-mode capture attempt drives the macOS prompt. Requesting it at
         // launch proved unreliable for an accessory app.
@@ -54,10 +51,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.appState.fallbackResult != nil || self?.appState.assistantCard != nil
             }
         )
+        showWelcomeIfNeeded()
+        requestInitialPermissions()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         appState.shutdownTranscriber()
+    }
+
+    /// Never stack the microphone and Accessibility prompts on first launch.
+    /// Once the microphone decision is complete, move to Accessibility; on
+    /// subsequent launches only the still-missing permission is requested.
+    private func requestInitialPermissions() {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else {
+            AppState.ensureAccessibility()
+            return
+        }
+        AVCaptureDevice.requestAccess(for: .audio) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                AppState.ensureAccessibility()
+            }
+        }
+    }
+
+    /// A menu-bar-only app otherwise appears to do nothing after launch. Show
+    /// the existing overview once so setup progress and the trigger gesture
+    /// have a visible home behind the sequenced permission prompts.
+    private func showWelcomeIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.didShowWelcomeKey) else { return }
+        UserDefaults.standard.set(true, forKey: Self.didShowWelcomeKey)
+        SettingsWindowController.shared.show(startOnHome: true)
     }
 
     private static func seedLaunchAtLogin() {

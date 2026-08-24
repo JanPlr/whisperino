@@ -95,6 +95,9 @@ final class ModelDownloader: NSObject, ObservableObject {
             forKeys: [.volumeAvailableCapacityForImportantUsageKey]
         ))?.volumeAvailableCapacityForImportantUsage,
            free < descriptor.expectedBytes + 500_000_000 {
+            lock.lock()
+            pendingCompletions.removeValue(forKey: id)
+            lock.unlock()
             let message = "Not enough free disk for \(descriptor.displayName)"
             print("[whisperino] \(message)")
             DispatchQueue.main.async { self.status = .failed(id: id, message: message) }
@@ -120,6 +123,10 @@ final class ModelDownloader: NSObject, ObservableObject {
     }
 
     private func finishDownload(tempURL: URL, response: URLResponse?) {
+        // URLSession's delegate location is ephemeral, so didFinish parks the
+        // download first. Every exit path must remove that parked copy: a
+        // truncated model can otherwise leak hundreds of megabytes in /tmp.
+        defer { try? FileManager.default.removeItem(at: tempURL) }
         let id: ASRModelID
         lock.lock()
         guard let current = activeID else {

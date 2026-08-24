@@ -130,7 +130,27 @@ if [ -z "$NEW_DESIGNATED_REQUIREMENT" ]; then
     exit 1
 fi
 
+if [ "$BUNDLE_ONLY" = true ]; then
+    echo "==> Bundle ready: $APP_BUNDLE (v$VERSION)"
+    exit 0
+fi
+
 INSTALLED_APP="/Applications/$APP_NAME.app"
+INSTALL_STAGING="/Applications/.$APP_NAME.app.installing"
+INSTALL_BACKUP="/Applications/.$APP_NAME.app.previous"
+
+# Recover a previous interrupted activation before evaluating identity. If a
+# healthy installed bundle already exists, the hidden backup is stale.
+rm -rf "$INSTALL_STAGING"
+if [ -d "$INSTALL_BACKUP" ]; then
+    if [ -d "$INSTALLED_APP" ]; then
+        rm -rf "$INSTALL_BACKUP"
+    else
+        echo "==> Recovering previous Whisperino installation"
+        mv "$INSTALL_BACKUP" "$INSTALLED_APP"
+    fi
+fi
+
 OLD_DESIGNATED_REQUIREMENT=""
 if [ -d "$INSTALLED_APP" ]; then
     OLD_DESIGNATED_REQUIREMENT=$(designated_requirement "$INSTALLED_APP")
@@ -141,27 +161,55 @@ if [ "$OLD_DESIGNATED_REQUIREMENT" != "$NEW_DESIGNATED_REQUIREMENT" ]; then
     TCC_RESET_REQUIRED=true
 fi
 
-if [ "$BUNDLE_ONLY" = true ]; then
-    echo "==> Bundle ready: $APP_BUNDLE (v$VERSION)"
-    exit 0
-fi
-
 # Install to /Applications
 echo "==> Installing to /Applications..."
 pkill Whisperino 2>/dev/null || true
 sleep 0.5
-rm -rf "/Applications/$APP_NAME.app"
-cp -R "$APP_BUNDLE" /Applications/
+
+# Copy and verify under a hidden staging name before touching the working app.
+# If the final rename fails, restore the previous bundle so an interrupted
+# update never leaves the user with no runnable Whisperino installation.
+if ! ditto "$APP_BUNDLE" "$INSTALL_STAGING"; then
+    rm -rf "$INSTALL_STAGING"
+    echo "Error: Could not stage the new app; the existing install was not changed" >&2
+    exit 1
+fi
 
 # Fail before launch if copying changed or invalidated the signature. This also
 # makes it impossible to grant TCC access to a bundle different from the one we
 # just inspected above.
-codesign --verify --strict --verbose=2 "$INSTALLED_APP"
-INSTALLED_DESIGNATED_REQUIREMENT=$(designated_requirement "$INSTALLED_APP")
+if ! codesign --verify --strict --verbose=2 "$INSTALL_STAGING"; then
+    rm -rf "$INSTALL_STAGING"
+    echo "Error: Staged app failed code-signature verification; the existing install was not changed" >&2
+    exit 1
+fi
+INSTALLED_DESIGNATED_REQUIREMENT=$(designated_requirement "$INSTALL_STAGING")
 if [ "$INSTALLED_DESIGNATED_REQUIREMENT" != "$NEW_DESIGNATED_REQUIREMENT" ]; then
+    rm -rf "$INSTALL_STAGING"
     echo "Error: Installed app's code identity differs from the built app" >&2
     exit 1
 fi
+
+if [ -d "$INSTALLED_APP" ]; then
+    if ! mv "$INSTALLED_APP" "$INSTALL_BACKUP"; then
+        rm -rf "$INSTALL_STAGING"
+        echo "Error: Could not back up the existing app; it was not changed" >&2
+        exit 1
+    fi
+fi
+if ! mv "$INSTALL_STAGING" "$INSTALLED_APP"; then
+    if [ -d "$INSTALL_BACKUP" ]; then
+        if mv "$INSTALL_BACKUP" "$INSTALLED_APP"; then
+            echo "Error: Could not activate the new app; the previous install was restored" >&2
+        else
+            echo "Error: Could not activate or restore the app; the previous bundle remains at $INSTALL_BACKUP" >&2
+        fi
+    else
+        echo "Error: Could not activate the new app" >&2
+    fi
+    exit 1
+fi
+rm -rf "$INSTALL_BACKUP"
 
 # Remove the local bundle copy - it's fully installed now, and leaving a
 # second Whisperino.app on disk creates duplicate Spotlight/Launchpad entries
@@ -203,9 +251,5 @@ echo "  (Screen Recording is requested on-demand the first time you start"
 echo "   Talk to your screen - no need to grant it here.)"
 echo ""
 
-# Open Accessibility only after an identity transition. On stable rebuilds the
-# permission remains valid, so forcing this pane open is both noisy and invites
-# the user to toggle a grant that did not need changing.
-if [ "$TCC_RESET_REQUIRED" = true ]; then
-    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-fi
+# The app sequences its own microphone and Accessibility prompts. Opening
+# System Settings here used to race those prompts on a fresh install.

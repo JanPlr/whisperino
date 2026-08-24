@@ -227,7 +227,11 @@ enum FlowPage: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     // A window opened from “Settings…” should land on an actual preference
     // category, never an overview that asks the user to find Settings again.
-    @State private var page: FlowPage = .general
+    @State private var page: FlowPage
+
+    init(startOnHome: Bool = false) {
+        _page = State(initialValue: startOnHome ? .home : .general)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -545,6 +549,7 @@ private struct EmptyListCard: View {
 private struct HomePage: View {
     @Binding var page: FlowPage
     @ObservedObject private var store = SettingsStore.shared
+    @ObservedObject private var downloader = ModelDownloader.shared
 
     private var firstName: String {
         let name = NSFullUserName().components(separatedBy: " ").first ?? ""
@@ -571,6 +576,28 @@ private struct HomePage: View {
                 }
                 .padding(.top, 40)
 
+                if !downloader.isInstalled(store.settings.asrModel) {
+                    BrandCard {
+                        HStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Preparing speech model")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text(modelSetupDetail)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                if let fraction = downloader.status.fraction {
+                                    ProgressView(value: fraction)
+                                        .progressViewStyle(.linear)
+                                        .frame(maxWidth: 300)
+                                }
+                            }
+                            Spacer()
+                            Button("View model") { page = .dictation }
+                                .buttonStyle(SecondaryButtonStyle())
+                        }
+                    }
+                }
+
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 20) {
                         HeroCard(page: $page)
@@ -585,6 +612,19 @@ private struct HomePage: View {
             .padding(.horizontal, 32)
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var modelSetupDetail: String {
+        let model = ASRModelCatalog.descriptor(for: store.settings.asrModel)
+        switch downloader.status {
+        case .downloading(let id, _, _) where id == model.id:
+            let percent = downloader.status.fraction.map { Int($0 * 100) } ?? 0
+            return "Downloading \(model.displayName)… \(percent)%"
+        case .failed(let id, let message) where id == model.id:
+            return message
+        default:
+            return "\(model.displayName) is required before the first dictation."
         }
     }
 }
