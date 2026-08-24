@@ -4,7 +4,7 @@ Local voice transcription for macOS. Lives in your menu bar, runs fully on-devic
 
 ## TL;DR
 
-**Hold the recording shortcut → speak → release.** The shortcut defaults to Fn and can be changed in Settings → Dictation. Choose **Hold to record** or **Tap to start** without changing the shortcut itself. Your words are transcribed into the field where the take began. You can switch elsewhere while recording; Whisperino pauses field updates and safely resumes when that exact input regains focus.
+**Hold the recording shortcut → speak → release.** The shortcut defaults to Fn and can be changed in Settings → Dictation. Choose **Hold to record** or **Tap to start** without changing the shortcut itself. Your words are transcribed into the app where the take began; keep the intended field focused until delivery.
 
 **Want the LLM to answer instead of just transcribe?** Add Shift any time while you're holding the shortcut - the pill turns rainbow, AI mode is on, and the recording becomes latched. Cmd+C any text or images you want as context (no clicks needed). Tap the shortcut (or press Enter) to submit. Esc to cancel.
 

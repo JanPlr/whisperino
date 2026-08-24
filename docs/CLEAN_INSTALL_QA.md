@@ -33,8 +33,9 @@ only part of this procedure that cannot be automated unattended.
 4. In TextEdit, start and finish a transcription. Confirm the result appears in
    the selected text field and is not duplicated in the notch.
 5. Start another transcription in a browser input, switch to another app while
-   speaking, then return to the original field and stop. Confirm no controls in
-   the other app are clicked and the final text returns to the original field.
+   speaking, then return to the intended field before stopping. Confirm no text
+   lands in the other app and the final result pastes after the browser becomes
+   frontmost again.
 6. Repeat with Parakeet, Nemotron streaming, and one Whisper model.
 
 ## Adversarial download path (ZIP or app launched from the DMG)
