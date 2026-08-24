@@ -558,11 +558,13 @@ private struct HomePage: View {
                     Text("Hey \(firstName).")
                         .font(.system(size: 20, weight: .semibold))
                     HStack(spacing: 6) {
-                        Text("Hold")
+                        Text(store.settings.recordingActivation == .tap ? "Tap" : "Hold")
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                         KeyCap(label: store.settings.triggerKey.shortLabel)
-                        Text("and just talk - words land where your cursor is.")
+                        Text(store.settings.recordingActivation == .tap
+                             ? "to start talking - tap it again to send."
+                             : "and just talk - words land where your cursor is.")
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
@@ -607,7 +609,9 @@ private struct HeroCard: View {
                     .foregroundStyle(.white)
 
                 Text(aiReady
-                     ? "Hold \(trigger) + ⇧, speak, and the answer lands at your cursor."
+                     ? (store.settings.recordingActivation == .tap
+                        ? "Tap \(trigger) + ⇧, speak, then tap \(trigger) again to send."
+                        : "Hold \(trigger) + ⇧, speak, and the answer lands at your cursor.")
                      : "Add your Langdock API key and every text field becomes a Langdock prompt.")
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.6))
@@ -661,7 +665,9 @@ private struct HistorySection: View {
             EmptyListCard(
                 icon: "waveform.badge.mic",
                 title: "No dictations yet",
-                hint: "Hold \(SettingsStore.shared.settings.triggerKey.shortLabel) and start talking - your transcripts show up here."
+                hint: SettingsStore.shared.settings.recordingActivation == .tap
+                    ? "Tap \(SettingsStore.shared.settings.triggerKey.shortLabel) and start talking - your transcripts show up here."
+                    : "Hold \(SettingsStore.shared.settings.triggerKey.shortLabel) and start talking - your transcripts show up here."
             )
         } else {
             VStack(alignment: .leading, spacing: 16) {
@@ -976,26 +982,34 @@ private struct DictationSettingsPage: View {
 
             SettingsCard(title: "Recording shortcut") {
                 HStack(alignment: .top, spacing: 10) {
-                    ForEach(TriggerKey.allCases) { key in
-                        ChoiceCard(
-                            title: key == .fn ? "Function key" : "Option + D",
-                            detail: key == .fn
-                                ? "Hold Fn and speak. Release to submit."
-                                : "Hold ⌥D and speak. Release to submit.",
-                            selected: store.settings.triggerKey == key
-                        ) {
-                            store.settings.triggerKey = key
-                        }
+                    ChoiceCard(
+                        title: "Hold",
+                        detail: "Dictate (release to send).",
+                        selected: store.settings.recordingActivation == .hold
+                    ) {
+                        store.settings.selectActivation(.hold)
+                    }
+                    ChoiceCard(
+                        title: "Tap",
+                        detail: "Dictate (tap to stop).",
+                        selected: store.settings.recordingActivation == .tap
+                    ) {
+                        store.settings.selectActivation(.tap)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
 
-                CaptionText("Option + D needs Accessibility permission so Whisperino can intercept the shortcut without typing “∂”.")
+                ShortcutRecorder(
+                    shortcut: $store.settings.triggerKey,
+                    defaultShortcut: store.settings.recordingActivation.defaultShortcut
+                )
+
+                CaptionText("Click Record, then press the shortcut you want. Hold defaults to Fn; Tap defaults to fn + space. Reset restores that mode’s default. Shift is reserved for Talk to your screen. Combos that include a key need Accessibility permission so the original keystroke isn’t typed.")
 
                 Divider().padding(.vertical, 4)
 
                 ShortcutRow(keys: "hold \(triggerLabel)", label: "Dictate (release to send)")
-                ShortcutRow(keys: "\(triggerLabel) \(triggerLabel)", label: "Hands-free dictation (tap to stop)")
+                ShortcutRow(keys: "tap \(triggerLabel)", label: "Dictate (tap to stop)")
                 ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Talk to your screen - hold both, get an answer")
                 ShortcutRow(keys: "↩", label: "Submit any recording")
                 ShortcutRow(keys: "esc", label: "Cancel")
@@ -1614,12 +1628,154 @@ private struct ShortcutRow: View {
     var body: some View {
         HStack(spacing: 10) {
             KeyCap(label: keys)
-                .frame(width: 88, alignment: .leading)
+                .frame(minWidth: 88, alignment: .leading)
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// Click-to-record control for an arbitrary modifier / key combo.
+private struct ShortcutRecorder: View {
+    @Binding var shortcut: TriggerShortcut
+    var defaultShortcut: TriggerShortcut
+    @StateObject private var capture = ShortcutCaptureController()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    if capture.isRecording {
+                        capture.cancel()
+                    } else {
+                        capture.start { shortcut = $0 }
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        if capture.isRecording {
+                            Text("Press a shortcut…")
+                                .font(Brand.mono(12, .semibold))
+                                .foregroundStyle(.primary)
+                        } else {
+                            KeyCap(label: shortcut.shortLabel, size: 12)
+                        }
+                        Spacer(minLength: 8)
+                        Text(capture.isRecording ? "Esc to cancel" : "Record")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 40)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(capture.isRecording ? Brand.selected : Brand.canvas)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(capture.isRecording ? Brand.ink : Brand.border, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                if shortcut != defaultShortcut {
+                    Button("Reset to \(defaultShortcut.shortLabel)") {
+                        shortcut = defaultShortcut
+                    }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
+            }
+
+            if let error = capture.error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onDisappear { capture.cancel() }
+    }
+}
+
+/// Local event monitors that turn the next shortcut into a `TriggerShortcut`.
+/// Dictation hotkeys are suspended for the duration so the combo isn't also
+/// interpreted as a push-to-talk press.
+private final class ShortcutCaptureController: ObservableObject {
+    @Published var isRecording = false
+    @Published var error: String?
+
+    private var keyMonitor: Any?
+    private var flagsMonitor: Any?
+    private var heldModifiers: NSEvent.ModifierFlags = []
+    private var onCapture: ((TriggerShortcut) -> Void)?
+
+    func start(onCapture: @escaping (TriggerShortcut) -> Void) {
+        guard !isRecording else { return }
+        self.onCapture = onCapture
+        error = nil
+        heldModifiers = []
+        isRecording = true
+        HotkeyManager.shared.suspend()
+
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKeyDown(event)
+            return nil
+        }
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handleFlagsChanged(event)
+            return event
+        }
+    }
+
+    func cancel() {
+        finish(resumeHotkeys: true)
+    }
+
+    private func handleKeyDown(_ event: NSEvent) {
+        if event.keyCode == 53 {
+            cancel()
+            return
+        }
+        guard let shortcut = TriggerShortcut.fromKeyDown(event) else {
+            error = "Add a modifier (fn, ⌥, ⌃, or ⌘). Esc and Return are reserved."
+            return
+        }
+        commit(shortcut)
+    }
+
+    private func handleFlagsChanged(_ event: NSEvent) {
+        let mods = TriggerShortcut.sanitizedModifiers(event.modifierFlags)
+        if !mods.isEmpty {
+            heldModifiers = mods
+            return
+        }
+        // All recognized modifiers released with no key → modifier-only
+        // shortcut (Fn, Option, …).
+        if !heldModifiers.isEmpty, let shortcut = TriggerShortcut.fromModifiersOnly(heldModifiers) {
+            commit(shortcut)
+        }
+    }
+
+    private func commit(_ shortcut: TriggerShortcut) {
+        onCapture?(shortcut)
+        finish(resumeHotkeys: true)
+    }
+
+    private func finish(resumeHotkeys: Bool) {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        keyMonitor = nil
+        flagsMonitor = nil
+        heldModifiers = []
+        onCapture = nil
+        isRecording = false
+        if resumeHotkeys {
+            HotkeyManager.shared.resume()
+        }
+    }
+
+    deinit {
+        finish(resumeHotkeys: true)
     }
 }
 

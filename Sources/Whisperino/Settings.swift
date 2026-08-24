@@ -6,42 +6,53 @@ import Foundation
 /// Two flavours:
 /// - **Modifier-only** (Fn) - hold a single modifier. Driven by
 ///   `NSEvent.flagsChanged`.
-/// - **Modifier + key combo** (Option+D) - hold a modifier and tap a
-///   regular key. Driven by a `CGEventTap` in `HotkeyManager` which
-///   intercepts the keystroke so the underlying character (e.g. "∂" for
-///   ⌥D) isn't typed into the focused app.
-enum TriggerKey: String, Codable, CaseIterable, Identifiable {
-    case fn
-    case optionD
+/// - **Modifier + key combo** (Fn+Space, Option+D) - hold modifier(s) and
+///   tap a regular key. Driven by a `CGEventTap` in `HotkeyManager` which
+///   intercepts the keystroke so it isn't typed into the focused app.
+///
+/// Shift is never stored as part of the trigger: it is reserved for
+/// upgrading a take to Talk to your screen.
+struct TriggerShortcut: Codable, Equatable {
+    /// Device-independent modifier bits that must be held.
+    var modifierFlags: UInt
+    /// Virtual key code the combo listens for. `nil` for modifier-only.
+    /// Values are Carbon `kVK_*` constants.
+    var keyCode: UInt16?
 
-    var id: String { rawValue }
+    static let recognizedModifiers: NSEvent.ModifierFlags = [
+        .command, .control, .option, .function
+    ]
 
-    /// True for combo triggers (modifier + key); false for modifier-only.
-    /// Combo triggers route through the `CGEventTap`, modifier-only triggers
-    /// route through the `flagsChanged` monitor.
-    var isCombo: Bool {
-        comboKeyCode != nil
+    static let fn = TriggerShortcut(
+        modifierFlags: NSEvent.ModifierFlags.function.rawValue,
+        keyCode: nil
+    )
+    static let fnSpace = TriggerShortcut(
+        modifierFlags: NSEvent.ModifierFlags.function.rawValue,
+        keyCode: 49  // kVK_Space
+    )
+    static let optionD = TriggerShortcut(
+        modifierFlags: NSEvent.ModifierFlags.option.rawValue,
+        keyCode: 2  // kVK_ANSI_D
+    )
+
+    var modifiers: NSEvent.ModifierFlags {
+        NSEvent.ModifierFlags(rawValue: modifierFlags).intersection(Self.recognizedModifiers)
     }
 
-    /// Virtual key code the combo listens for. `nil` for modifier-only triggers.
-    /// Values are `kVK_ANSI_*` constants (Carbon HIToolbox).
-    var comboKeyCode: UInt16? {
-        switch self {
-        case .optionD: return 2   // kVK_ANSI_D
-        case .fn:      return nil
-        }
+    /// True for combo triggers (modifier + key); false for modifier-only.
+    var isCombo: Bool { keyCode != nil }
+
+    /// Virtual key code the combo listens for. `nil` for modifier-only.
+    var comboKeyCode: UInt16? { keyCode }
+
+    var isValid: Bool {
+        !modifiers.isEmpty
     }
 
     /// Whether the trigger's modifier portion is currently held.
-    /// For modifier-only triggers, this IS the trigger.
-    /// For combo triggers, the modifier alone isn't enough - the combo key
-    /// must also be pressed (handled by the event tap).
     func isDown(in flags: NSEvent.ModifierFlags) -> Bool {
-        switch self {
-        case .fn: return flags.contains(.function)
-        case .optionD:
-            return flags.contains(.option)
-        }
+        flags.contains(modifiers) && !modifiers.isEmpty
     }
 
     /// Modifiers that, if held alongside the trigger, should suppress
@@ -50,27 +61,133 @@ enum TriggerKey: String, Codable, CaseIterable, Identifiable {
     /// trigger doesn't self-block.
     var blockedFlags: NSEvent.ModifierFlags {
         var blocked: NSEvent.ModifierFlags = [.command, .control, .option]
-        switch self {
-        case .fn: break
-        case .optionD:
-            blocked.subtract(.option)
-        }
+        blocked.subtract(modifiers)
         return blocked
     }
 
-    /// Compact label for inline shortcut hints ("hold fn", "fn + ⇧").
+    /// Compact label for inline shortcut hints ("hold fn", "fn + space").
     var shortLabel: String {
-        switch self {
-        case .fn:      return "fn"
-        case .optionD: return "⌥D"
+        let mods = Self.modifierSymbols(modifiers)
+        guard let keyCode else {
+            return mods.joined(separator: " + ")
+        }
+        let key = Self.label(forKeyCode: keyCode)
+        if key.count == 1, mods.count == 1, mods[0] != "fn" {
+            return mods[0] + key
+        }
+        return (mods + [key]).joined(separator: " + ")
+    }
+
+    var displayName: String { shortLabel }
+
+    static func sanitizedModifiers(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
+        flags.intersection(recognizedModifiers)
+    }
+
+    /// Build a combo from a key-down. Requires at least one recognized
+    /// modifier; Escape / Return are rejected because they are cancel/submit.
+    static func fromKeyDown(_ event: NSEvent) -> TriggerShortcut? {
+        let key = event.keyCode
+        if key == 53 || key == 36 || key == 76 { return nil }
+        let mods = sanitizedModifiers(event.modifierFlags)
+        guard !mods.isEmpty else { return nil }
+        return TriggerShortcut(modifierFlags: mods.rawValue, keyCode: key)
+    }
+
+    /// Build a modifier-only trigger from flags after the keys are released.
+    static func fromModifiersOnly(_ flags: NSEvent.ModifierFlags) -> TriggerShortcut? {
+        let mods = sanitizedModifiers(flags)
+        guard !mods.isEmpty else { return nil }
+        return TriggerShortcut(modifierFlags: mods.rawValue, keyCode: nil)
+    }
+
+    static func modifierSymbols(_ flags: NSEvent.ModifierFlags) -> [String] {
+        var parts: [String] = []
+        if flags.contains(.control) { parts.append("⌃") }
+        if flags.contains(.option) { parts.append("⌥") }
+        if flags.contains(.command) { parts.append("⌘") }
+        if flags.contains(.function) { parts.append("fn") }
+        return parts
+    }
+
+    static func label(forKeyCode keyCode: UInt16) -> String {
+        switch keyCode {
+        case 36, 76: return "↩"
+        case 48: return "tab"
+        case 49: return "space"
+        case 51: return "delete"
+        case 53: return "esc"
+        case 96: return "F5"
+        case 97: return "F6"
+        case 98: return "F7"
+        case 99: return "F3"
+        case 100: return "F8"
+        case 101: return "F9"
+        case 103: return "F11"
+        case 105: return "F13"
+        case 107: return "F14"
+        case 109: return "F10"
+        case 111: return "F12"
+        case 113: return "F15"
+        case 114: return "help"
+        case 115: return "home"
+        case 116: return "page up"
+        case 117: return "fwd delete"
+        case 118: return "F4"
+        case 119: return "end"
+        case 120: return "F2"
+        case 121: return "page down"
+        case 122: return "F1"
+        case 123: return "←"
+        case 124: return "→"
+        case 125: return "↓"
+        case 126: return "↑"
+        default:
+            return ansiKeyLabel(keyCode) ?? "key \(keyCode)"
         }
     }
 
-    /// Verbose name for the picker UI.
-    var displayName: String {
+    /// US-layout ANSI keycaps. Matching uses the virtual key code, so this
+    /// is display-only and stays stable even on other layouts.
+    private static func ansiKeyLabel(_ keyCode: UInt16) -> String? {
+        let map: [UInt16: String] = [
+            0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X",
+            8: "C", 9: "V", 11: "B", 12: "Q", 13: "W", 14: "E", 15: "R",
+            16: "Y", 17: "T", 18: "1", 19: "2", 20: "3", 21: "4", 22: "6",
+            23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8", 29: "0",
+            30: "]", 31: "O", 32: "U", 33: "[", 34: "I", 35: "P", 37: "L",
+            38: "J", 39: "'", 40: "K", 41: ";", 42: "\\", 43: ",", 44: "/",
+            45: "N", 46: "M", 47: ".", 50: "`",
+        ]
+        return map[keyCode]
+    }
+}
+
+/// How the configured recording shortcut starts and stops dictation.
+enum RecordingActivation: String, Codable, CaseIterable, Identifiable {
+    case hold
+    case tap
+
+    var id: String { rawValue }
+
+    var defaultShortcut: TriggerShortcut {
         switch self {
-        case .fn:      return "Fn (function key)"
-        case .optionD: return "Option + D (⌥D)"
+        case .hold: return .fn
+        case .tap: return .fnSpace
+        }
+    }
+
+    func idleHint(for trigger: String) -> String {
+        switch self {
+        case .hold: return "hold \(trigger)"
+        case .tap: return "tap \(trigger)"
+        }
+    }
+
+    func recordingHint(for trigger: String) -> String {
+        switch self {
+        case .hold: return "release \(trigger) or ↩"
+        case .tap: return "tap \(trigger) or ↩"
         }
     }
 }
@@ -137,7 +254,12 @@ struct AppSettings: Codable, Equatable {
     /// raw transcription if the API misbehaves.
     var aiModeEnabled: Bool = false
     var apiKey: String = ""
-    var triggerKey: TriggerKey = .fn
+    var triggerKey: TriggerShortcut = .fn
+    /// How the recording shortcut starts and stops a take.
+    /// Hold is push-to-talk (release submits). Tap starts a latched take on
+    /// a single press; the same shortcut again submits. Double-tap-to-latch
+    /// only applies in Hold, so Tap doesn't immediately stop itself.
+    var recordingActivation: RecordingActivation = .hold
     var soundEffectsEnabled: Bool = false
     /// Pause the active system media session before opening the microphone.
     /// Enabled by default so music does not leak into dictation recordings.
@@ -162,6 +284,16 @@ struct AppSettings: Codable, Equatable {
     var asrModel: ASRModelID = ASRModelCatalog.default
     init() {}
 
+    /// Switch Hold/Tap. If the shortcut is still the previous mode's default,
+    /// move to the new mode's default (Fn vs fn + space). A recorded custom
+    /// shortcut is left alone.
+    mutating func selectActivation(_ mode: RecordingActivation) {
+        if triggerKey == recordingActivation.defaultShortcut {
+            triggerKey = mode.defaultShortcut
+        }
+        recordingActivation = mode
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         llmRefinementEnabled = try container.decodeIfPresent(Bool.self, forKey: .llmRefinementEnabled) ?? false
@@ -169,13 +301,20 @@ struct AppSettings: Codable, Equatable {
         // installs only had one toggle, and AI mode previously required it.
         aiModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .aiModeEnabled) ?? llmRefinementEnabled
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
-        // Migrate retired triggers (e.g. .optionQ) to the default rather
-        // than failing the whole settings decode.
-        if let stored = try? container.decode(TriggerKey.self, forKey: .triggerKey) {
+        // Custom shortcuts encode as an object. Older builds stored a
+        // TriggerKey string ("fn", "optionD"); retired values fall back to Fn.
+        if let stored = try? container.decode(TriggerShortcut.self, forKey: .triggerKey),
+           stored.isValid {
             triggerKey = stored
+        } else if let legacy = try? container.decode(String.self, forKey: .triggerKey) {
+            switch legacy {
+            case "optionD": triggerKey = .optionD
+            default: triggerKey = .fn
+            }
         } else {
             triggerKey = .fn
         }
+        recordingActivation = (try? container.decode(RecordingActivation.self, forKey: .recordingActivation)) ?? .hold
         soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
         pauseMediaOnRecordingStart = try container.decodeIfPresent(
             Bool.self,
@@ -212,6 +351,7 @@ struct AppSettings: Codable, Equatable {
         try container.encode(aiModeEnabled, forKey: .aiModeEnabled)
         try container.encode(apiKey, forKey: .apiKey)
         try container.encode(triggerKey, forKey: .triggerKey)
+        try container.encode(recordingActivation, forKey: .recordingActivation)
         try container.encode(soundEffectsEnabled, forKey: .soundEffectsEnabled)
         try container.encode(pauseMediaOnRecordingStart, forKey: .pauseMediaOnRecordingStart)
         try container.encode(transcriptionLanguageCodes, forKey: .transcriptionLanguageCodes)
@@ -225,6 +365,7 @@ struct AppSettings: Codable, Equatable {
         case aiModeEnabled
         case apiKey
         case triggerKey
+        case recordingActivation
         case soundEffectsEnabled
         case pauseMediaOnRecordingStart
         case transcriptionLanguageCode

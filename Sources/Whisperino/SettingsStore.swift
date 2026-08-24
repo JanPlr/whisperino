@@ -20,7 +20,8 @@ class SettingsStore: ObservableObject {
             save(settings, to: settingsFile)
             // Trigger swap mid-session leaves the hotkey state machine
             // referencing the old key - clear it so the next press starts fresh.
-            if settings.triggerKey != oldValue.triggerKey {
+            if settings.triggerKey != oldValue.triggerKey
+                || settings.recordingActivation != oldValue.recordingActivation {
                 HotkeyManager.shared.resetTriggerState()
             }
         }

@@ -137,7 +137,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
         // Dictation action with a custom view that draws icon · title · gray shortcut
         let dictView = HotkeyMenuItemView(
             title: "Start Dictation",
-            shortcut: "hold \(triggerLabel)",
+            shortcut: store.settings.recordingActivation.idleHint(for: triggerLabel),
             image: NSImage(systemSymbolName: "waveform", accessibilityDescription: "Dictate")
         )
         dictView.onClick = { [weak self] in self?.toggleDictation() }
@@ -195,11 +195,16 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         let triggerLabel = store.settings.triggerKey.shortLabel
+        let activation = store.settings.recordingActivation
 
         // Reflect current state in the two custom-view action items
         switch appState.state {
         case .recording:
-            dictationView?.update(title: "Stop & Submit", shortcut: "release \(triggerLabel) or ↩", enabled: true)
+            dictationView?.update(
+                title: "Stop & Submit",
+                shortcut: activation.recordingHint(for: triggerLabel),
+                enabled: true
+            )
             if appState.isInstructionMode {
                 aiModeView?.update(title: "Talk to your screen is active", shortcut: "", enabled: false)
             } else {
@@ -209,7 +214,11 @@ class StatusBarController: NSObject, NSMenuDelegate {
             dictationView?.update(title: "Working…", shortcut: "", enabled: false)
             aiModeView?.update(title: "Working…", shortcut: "", enabled: false)
         default:
-            dictationView?.update(title: "Start Dictation", shortcut: "hold \(triggerLabel)", enabled: true)
+            dictationView?.update(
+                title: "Start Dictation",
+                shortcut: activation.idleHint(for: triggerLabel),
+                enabled: true
+            )
             aiModeView?.update(title: "Talk to your screen", shortcut: "\(triggerLabel) + ⇧", enabled: true)
         }
 
