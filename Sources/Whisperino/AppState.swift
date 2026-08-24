@@ -628,13 +628,15 @@ class AppState: ObservableObject {
             pid: recordingTargetPID
         )
         recordingTargetEditable = focusedTarget.editable
-        // Offline models do not publish partials into the field, but a valid
-        // bound target still owns the eventual result. Keep the notch compact
-        // throughout that take instead of suddenly expanding when a rolling
-        // chunk completes or immediately before the final paste.
+        // Offline models do not need a writable Accessibility range. When the
+        // frontmost app exists and focus was not positively classified as
+        // non-editable, the compatibility path will reactivate that app and
+        // paste there. Reserve that destination now so a transient/missing AX
+        // element in Cursor or a terminal does not flash the transcript card
+        // immediately before the paste.
         streamsTranscriptIntoFocusedField = !instruction
             && focusedTarget.editable
-            && focusedTarget.element != nil
+            && recordingTargetPID != nil
         publishesStreamingPartialsForTake = transcriber.supportsStreaming
             && store.settings.streamingTranscriptionEnabled
         if publishesStreamingPartialsForTake, !instruction {

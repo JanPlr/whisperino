@@ -1,19 +1,18 @@
-# Whisperino 3.2.7 — Restore Pasting Across Apps
+# Whisperino 3.2.8 — Compact Offline Delivery
 
-This compatibility hotfix restores automatic pasting for users whose
-Accessibility text-field identity is unavailable or changes during a take.
+This patch keeps offline dictation compact while retaining the cross-app
+compatibility paste restored in 3.2.7.
 
 ## What changed
 
-- Restores the dependable pre-3.2.5 behavior: Whisperino remembers the app
-  where dictation began, brings it forward, waits for it to become ready, and
-  pastes into its currently focused field.
-- Fixes rescue-card-only results in Cursor, terminals, Electron apps, and
-  systems where macOS recreates or cannot expose a stable Accessibility node.
-- Restores live insertion when an Electron or terminal Accessibility object is
-  rebuilt while its application remains frontmost.
-- Keeps the v3.2.6 permission relaunch, stable Applications-path enforcement,
-  DMG installation flow, and ad-hoc update permission handling.
+- Prevents Parakeet and Whisper results from flashing in the notch immediately
+  before a compatibility paste.
+- Applies generally to offline dictation in Cursor, terminals, Electron apps,
+  browsers, and native apps when macOS cannot expose a stable text-field node.
+- Keeps rescue cards for destinations that are positively non-editable.
+- Leaves Nemotron live streaming unchanged: when no writable Accessibility
+  range exists, its live hypothesis remains visible in the notch.
+- Preserves the v3.2.7 app-reactivation paste and auto-submit behavior.
 
 ## Upgrade note
 
