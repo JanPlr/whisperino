@@ -1,17 +1,14 @@
-# Whisperino 3.2.0 — Live Dictation Where You Type
+# Whisperino 3.2.1 — Unobtrusive External Displays
 
-This release makes Nemotron's live transcript appear directly in the text field you are using, with a cleaner fallback in Whisperino's top widget.
+This patch keeps Whisperino accessible without occupying real menu-bar space on external displays.
 
 ## What changed
 
-- Streams partial text into the focused editable field while you speak, including browser-based inputs such as search bars and chat boxes.
-- Falls back to the top widget when no writable field is focused, without briefly flashing the final transcript there after successful field insertion.
-- Preserves existing text, selections, and clipboard contents while live partials are updated and finalized.
-- Moves the widget to the display containing the focused field and smooths transitions between displays.
-- Makes long fallback transcripts scroll cleanly inside the widget.
-- Pauses media only when it was actually playing before dictation, then resumes that same playback afterward.
-- Simplifies **Settings → Dictation**: Nemotron's streaming switch lives directly in the downloaded model tile with a compact live-text badge.
+- Removes the permanent idle fake notch from external displays.
+- Keeps external menu-bar icons visible, clickable, and free from accidental hover expansion.
+- Still opens Whisperino on the display containing the focused text field while dictating.
+- Preserves the idle hover affordance on a MacBook's physical notch, where it does not cover usable menu-bar space.
 
 ## Upgrade note
 
-Live field insertion requires Accessibility access. Select the downloaded Nemotron 3.5 model and leave its tile switch enabled. If macOS asks again after replacing an ad-hoc signed development build, re-enable Whisperino in **System Settings → Privacy & Security → Accessibility**.
+Use the configured Fn or Option-D shortcut to start dictation on an external display. The active notch appears for the take and disappears again afterward.
