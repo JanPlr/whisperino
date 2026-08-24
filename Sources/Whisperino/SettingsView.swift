@@ -1147,7 +1147,7 @@ private struct SpeechModelRow: View {
                                 .foregroundStyle(.primary)
 
                             if model.supportsStreaming {
-                                Text("LIVE STREAMING OF TEXT")
+                                Text("LIVE TEXT")
                                     .font(Brand.mono(8, .semibold))
                                     .foregroundStyle(Brand.ink)
                                     .padding(.horizontal, 6)

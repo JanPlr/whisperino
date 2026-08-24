@@ -56,7 +56,7 @@ enum ASRModelCatalog {
             family: .nemotron,
             displayName: "Nemotron 3.5 ASR",
             shortLabel: "Nemotron 3.5",
-            detail: "Live transcription · 32 languages",
+            detail: "32 languages",
             fileName: "nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf",
             downloadURL: URL(string:
                 "https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf"

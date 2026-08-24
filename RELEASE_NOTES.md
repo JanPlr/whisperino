@@ -10,7 +10,7 @@ This release makes Nemotron's live transcript appear directly in the text field 
 - Moves the widget to the display containing the focused field and smooths transitions between displays.
 - Makes long fallback transcripts scroll cleanly inside the widget.
 - Pauses media only when it was actually playing before dictation, then resumes that same playback afterward.
-- Simplifies **Settings → Dictation**: Nemotron has one “Live streaming of text” badge and its streaming switch lives directly in the downloaded model tile.
+- Simplifies **Settings → Dictation**: Nemotron's streaming switch lives directly in the downloaded model tile with a compact live-text badge.
 
 ## Upgrade note
 
