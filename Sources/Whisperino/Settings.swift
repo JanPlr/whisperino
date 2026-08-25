@@ -303,7 +303,6 @@ struct AppSettings: Codable, Equatable {
         let additional = max(0, triggerKeys.count - 1)
         return additional == 0 ? primary : "\(primary) (+\(additional))"
     }
-
     /// How the recording shortcut starts and stops a take.
     /// Hold is push-to-talk (release submits). Tap starts a latched take on
     /// a single press; the same shortcut again submits. Double-tap-to-latch
@@ -334,9 +333,6 @@ struct AppSettings: Codable, Equatable {
     /// Show partial hypotheses while recording when the selected model can
     /// produce them. Defaults on for existing installs.
     var streamingTranscriptionEnabled: Bool = true
-    /// Opt-in post-transcription speaker selection. Speaker analysis runs in a
-    /// separate process and never receives audio when this is disabled.
-    var voiceIsolationEnabled: Bool = false
     init() {}
 
     /// Change how the current shortcut behaves without silently changing the
@@ -402,10 +398,6 @@ struct AppSettings: Codable, Equatable {
             Bool.self,
             forKey: .streamingTranscriptionEnabled
         ) ?? true
-        voiceIsolationEnabled = try container.decodeIfPresent(
-            Bool.self,
-            forKey: .voiceIsolationEnabled
-        ) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -425,7 +417,6 @@ struct AppSettings: Codable, Equatable {
         try container.encode(rafterinoModeEnabled, forKey: .rafterinoModeEnabled)
         try container.encode(asrModel, forKey: .asrModel)
         try container.encode(streamingTranscriptionEnabled, forKey: .streamingTranscriptionEnabled)
-        try container.encode(voiceIsolationEnabled, forKey: .voiceIsolationEnabled)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -443,7 +434,6 @@ struct AppSettings: Codable, Equatable {
         case rafterinoModeEnabled
         case asrModel
         case streamingTranscriptionEnabled
-        case voiceIsolationEnabled
     }
 
     private static func normalizedTriggers(_ triggers: [TriggerShortcut]) -> [TriggerShortcut] {

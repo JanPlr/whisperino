@@ -233,9 +233,6 @@ class AppState: ObservableObject {
     /// True when this take feeds live PCM into a transcribe.cpp stream
     /// (Nemotron) instead of rotating WAV chunks.
     private var streamingTake = false
-    /// Snapshotted once per take. When false, the audio and ASR path remain
-    /// byte-for-byte the ordinary transcription path.
-    private var voiceFilterActiveForTake = false
     /// Snapshot of the user-visible streaming preference for this take. The
     /// model can keep its streaming decoder internally while partial words are
     /// hidden until finalization.
@@ -640,11 +637,8 @@ class AppState: ObservableObject {
         streamsTranscriptIntoFocusedField = !instruction
             && focusedTarget.editable
             && recordingTargetPID != nil
-        voiceFilterActiveForTake = store.settings.voiceIsolationEnabled
-            && SpeakerProfileManager.shared.isReadyForFiltering
         publishesStreamingPartialsForTake = transcriber.supportsStreaming
             && store.settings.streamingTranscriptionEnabled
-            && !voiceFilterActiveForTake
         if publishesStreamingPartialsForTake, !instruction {
             if focusedTarget.supportsLiveInsertion,
                let element = focusedTarget.element,
@@ -831,9 +825,7 @@ class AppState: ObservableObject {
         liveTranscript = ""
         chunksDone = 0
         chunksTotal = 0
-        // Filtered takes use the offline result because it has timestamps.
-        // The normal streaming path is completely unchanged when disabled.
-        streamingTake = transcriber.supportsStreaming && !voiceFilterActiveForTake
+        streamingTake = transcriber.supportsStreaming
 
         if streamingTake {
             let languages = recordingLanguageCodes
@@ -880,8 +872,7 @@ class AppState: ObservableObject {
     private func beginChunkedSession() {
         let session = TranscriptionSession(
             transcriber: transcriber,
-            languages: recordingLanguageCodes,
-            filterToEnrolledSpeaker: voiceFilterActiveForTake
+            languages: recordingLanguageCodes
         )
         session.onProgress = { [weak self] progress in
             guard let self = self else { return }
@@ -1004,7 +995,6 @@ class AppState: ObservableObject {
         transcriptionSession = nil
         transcriber.cancelStream()
         streamingTake = false
-        voiceFilterActiveForTake = false
         publishesStreamingPartialsForTake = false
         discardLiveTextInsertion()
         liveTranscript = ""
@@ -1079,8 +1069,6 @@ class AppState: ObservableObject {
         // Streaming models finalize the same live stream on release.
         // Offline models hand the file to the rolling pipeline.
         let usedStreaming = streamingTake
-        let filteredTake = voiceFilterActiveForTake
-        voiceFilterActiveForTake = false
         let pipeline: TranscriptionSession?
         if usedStreaming {
             transcriptionSession = nil
@@ -1089,8 +1077,7 @@ class AppState: ObservableObject {
         } else {
             let session = transcriptionSession ?? TranscriptionSession(
                 transcriber: transcriber,
-                languages: recordingLanguageCodes,
-                filterToEnrolledSpeaker: filteredTake
+                languages: recordingLanguageCodes
             )
             transcriptionSession = nil
             streamingTake = false

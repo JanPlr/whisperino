@@ -61,11 +61,6 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 # Copy binary
 cp .build/release/Whisperino "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
-if [ ! -f ".build/release/WhisperinoSpeakerWorker" ]; then
-    echo "Error: isolated speaker worker missing after swift build" >&2
-    exit 1
-fi
-cp .build/release/WhisperinoSpeakerWorker "$APP_BUNDLE/Contents/MacOS/"
 
 # Embed transcribe.cpp's Metal framework. The binary loads it via @rpath;
 # @loader_path only covers Contents/MacOS, so add the standard Frameworks slot.
@@ -111,13 +106,11 @@ if [ "$SIGN_IDENTITY" != "-" ]; then
     fi
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/libMediaRemoteAdapter.dylib"
-    codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/WhisperinoSpeakerWorker"
     codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
     echo "==> Signed with requested identity ($SIGN_IDENTITY)"
 else
     codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/CTranscribe.framework"
     codesign --force --sign - "$APP_BUNDLE/Contents/Frameworks/libMediaRemoteAdapter.dylib"
-    codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/WhisperinoSpeakerWorker"
     codesign --force --sign - "$APP_BUNDLE"
     echo "==> Ad-hoc signed"
 fi

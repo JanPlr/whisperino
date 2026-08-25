@@ -1,6 +1,4 @@
 import Foundation
-import SpeakerFilteringCore
-import TranscribeCpp
 
 enum TranscriptionSessionError: LocalizedError {
     case allChunksFailed
@@ -41,7 +39,6 @@ final class TranscriptionSession {
 
     private let transcriber: Transcriber
     private let languages: [String]
-    private let filterToEnrolledSpeaker: Bool
     private let recoveryDir: URL
     private let recoveryFile: URL
 
@@ -56,14 +53,9 @@ final class TranscriptionSession {
     private var cancelled = false
     private var chain: Task<Void, Never>?
 
-    init(
-        transcriber: Transcriber,
-        languages: [String] = [],
-        filterToEnrolledSpeaker: Bool = false
-    ) {
+    init(transcriber: Transcriber, languages: [String] = []) {
         self.transcriber = transcriber
         self.languages = languages
-        self.filterToEnrolledSpeaker = filterToEnrolledSpeaker
         let home = FileManager.default.homeDirectoryForCurrentUser
         recoveryDir = home.appendingPathComponent(".whisperino/recovery")
         recoveryFile = recoveryDir.appendingPathComponent("last-raw-transcript.txt")
@@ -94,58 +86,7 @@ final class TranscriptionSession {
                 return
             }
             do {
-                let text: String
-                if filterToEnrolledSpeaker {
-                    let analysisTask = Task {
-                        await SpeakerProfileManager.shared.analyze(audioURL: chunkURL)
-                    }
-                    do {
-                        let transcript = try await transcriber.transcribeDetailed(
-                            audioURL: chunkURL,
-                            languages: languages,
-                            timestamps: .word
-                        )
-                        let fullText = Transcriber.cleanOutput(transcript.text)
-                        let units: [TimedTranscriptUnit]
-                        if !transcript.words.isEmpty {
-                            units = transcript.words.map {
-                                TimedTranscriptUnit(
-                                    startMs: $0.t0Ms,
-                                    endMs: $0.t1Ms,
-                                    text: $0.text
-                                )
-                            }
-                        } else {
-                            units = transcript.segments.map {
-                                TimedTranscriptUnit(
-                                    startMs: $0.t0Ms,
-                                    endMs: $0.t1Ms,
-                                    text: $0.text
-                                )
-                            }
-                        }
-                        text = SpeakerTranscriptSelector.select(
-                            fullText: fullText,
-                            units: units,
-                            analysis: await analysisTask.value
-                        )
-                    } catch {
-                        // Some ASR families cannot produce word timestamps. The
-                        // filter must never turn that capability gap into a lost
-                        // dictation, so immediately retry the ordinary path.
-                        analysisTask.cancel()
-                        print("[whisperino] timestamped transcription unavailable; speaker filter failed open: \(error.localizedDescription)")
-                        text = try await transcriber.transcribe(
-                            audioURL: chunkURL,
-                            languages: languages
-                        )
-                    }
-                } else {
-                    text = try await transcriber.transcribe(
-                        audioURL: chunkURL,
-                        languages: languages
-                    )
-                }
+                let text = try await transcriber.transcribe(audioURL: chunkURL, languages: languages)
                 try? FileManager.default.removeItem(at: chunkURL)
                 doneCount += 1
                 if !text.isEmpty {
