@@ -130,14 +130,16 @@ private final class SpeakerEngine {
         let segmentation = sherpaOnnxOfflineSpeakerSegmentationModelConfig(
             pyannote: sherpaOnnxOfflineSpeakerSegmentationPyannoteModelConfig(
                 model: segmentationModel,
-                windowShiftRatio: 0.2
+                // Upstream's quality-oriented default. Smaller shifts add
+                // overlap (and compute) but improve boundary consistency.
+                windowShiftRatio: 0.1
             ),
             numThreads: 2,
             provider: "cpu"
         )
         let clustering = oneSpeaker
             ? sherpaOnnxFastClusteringConfig(numClusters: 1)
-            : sherpaOnnxFastClusteringConfig(numClusters: -1, threshold: 0.85)
+            : sherpaOnnxFastClusteringConfig(numClusters: -1, threshold: 0.70)
         var diarizationConfig = sherpaOnnxOfflineSpeakerDiarizationConfig(
             segmentation: segmentation,
             embedding: embeddingConfig,
