@@ -1719,7 +1719,11 @@ class AppState: ObservableObject {
             }
         }
 
-        streamsTranscriptIntoFocusedField = false
+        // Keep the destination reserved while the compatibility paste is in
+        // flight. Clearing this during `.refining` makes OverlayView interpret
+        // the retained `liveTranscript` as rescue content and expand the notch
+        // for one frame before the dismiss sequence starts. Successful
+        // delivery clears the flag when dismissal reaches `.idle`.
         deliverPaste(
             text,
             reactivating: targetPID,

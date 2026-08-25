@@ -42,7 +42,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     /// Draw the waveform icon. When `isTemplate` is true, macOS adapts the
     /// color automatically (black in light mode, white in dark mode).
-    /// When false, `barColor` is used directly (e.g. red for recording).
+    /// When false, `barColor` is used directly.
     private static func makeIcon(barColor: NSColor, asTemplate: Bool) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
@@ -69,7 +69,8 @@ class StatusBarController: NSObject, NSMenuDelegate {
 
     /// The Rafterino counterpart: the raft mark as the menu bar icon,
     /// rasterized from the shared SwiftUI artwork. Same color contract as
-    /// `makeIcon` - template for idle, explicit color for recording states.
+    /// `makeIcon` - template for normal menu-bar tint, explicit color for
+    /// special states.
     private static func makeRafterinoIcon(barColor: NSColor, asTemplate: Bool) -> NSImage {
         let icon = MainActor.assumeIsolated {
             let renderer = ImageRenderer(
@@ -376,8 +377,9 @@ class StatusBarController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         switch state {
         case .recording:
-            // Red is explicitly colored - not a template
-            button.image = Self.icon(barColor: .systemRed, asTemplate: false)
+            // Keep recording visible through the waveform state without
+            // introducing a red accent into the menu bar.
+            button.image = Self.icon(barColor: .black, asTemplate: true)
         case .transcribing:
             button.image = Self.icon(barColor: .systemGray, asTemplate: false)
         default:
