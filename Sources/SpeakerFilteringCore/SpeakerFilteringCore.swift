@@ -119,8 +119,8 @@ public enum SpeakerTranscriptSelector {
         values.reduce(into: "") { result, raw in
             let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return }
-            if result.isEmpty || raw.first?.isWhitespace == true {
-                result += text
+            if result.isEmpty {
+                result = text
             } else if text.first.map({ ",.!?:;)]}".contains($0) }) == true {
                 result += text
             } else {
