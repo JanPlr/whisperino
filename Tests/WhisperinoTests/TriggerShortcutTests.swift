@@ -29,6 +29,17 @@ final class TriggerShortcutTests: XCTestCase {
         XCTAssertFalse(shortcut.isDown(in: .option))
     }
 
+    func testAuxiliaryMouseButtonLabelAndValidation() {
+        XCTAssertNil(TriggerShortcut.fromMouseButton(0))
+        XCTAssertNil(TriggerShortcut.fromMouseButton(1))
+
+        let backButton = TriggerShortcut.fromMouseButton(3)
+        XCTAssertEqual(backButton?.shortLabel, "Mouse 4")
+        XCTAssertEqual(backButton?.mouseButton, 3)
+        XCTAssertTrue(backButton?.isMouseButton == true)
+        XCTAssertTrue(backButton?.isValid == true)
+    }
+
     func testMigratesLegacyTriggerKeyStrings() throws {
         let fn = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"triggerKey":"fn"}"#.utf8))
         XCTAssertEqual(fn.triggerKey, .fn)
@@ -63,6 +74,28 @@ final class TriggerShortcutTests: XCTestCase {
         let data = try JSONEncoder().encode(settings)
         let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
         XCTAssertEqual(decoded.triggerKey, settings.triggerKey)
+    }
+
+    func testRoundTripsMultipleKeyboardAndMouseTriggers() throws {
+        var settings = AppSettings()
+        settings.triggerKeys = [.fn, .optionD, .mouseButton(3)]
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+
+        XCTAssertEqual(decoded.triggerKeys, settings.triggerKeys)
+        XCTAssertEqual(decoded.triggerKey, .fn)
+        XCTAssertEqual(decoded.triggerSummaryLabel, "fn (+2)")
+    }
+
+    func testNewTriggerListTakesPrecedenceAndIsNormalized() throws {
+        let flags = NSEvent.ModifierFlags.function.rawValue
+        let json = Data(
+            #"{"triggerKeys":[{"modifierFlags":\#(flags)},{"modifierFlags":\#(flags)},{"modifierFlags":0,"mouseButton":4}],"triggerKey":"optionD"}"#.utf8
+        )
+
+        let settings = try JSONDecoder().decode(AppSettings.self, from: json)
+        XCTAssertEqual(settings.triggerKeys, [.fn, .mouseButton(4)])
     }
 
     func testRecordingActivationDefaultsToHold() throws {

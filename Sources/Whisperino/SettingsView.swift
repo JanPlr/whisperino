@@ -1019,11 +1019,11 @@ private struct DictationSettingsPage: View {
             }
 
             SettingsCard(title: "Recording") {
-                SectionLabel("Shortcut")
+                SectionLabel("Dictation buttons")
 
                 ShortcutRecorder(
-                    shortcut: $store.settings.triggerKey,
-                    defaultShortcut: .fn
+                    shortcuts: $store.settings.triggerKeys,
+                    defaultShortcuts: [.fn]
                 )
 
                 Divider().padding(.vertical, 4)
@@ -1823,67 +1823,134 @@ private struct ShortcutRow: View {
     }
 }
 
-/// Click-to-record control for an arbitrary modifier / key combo.
+/// Click-to-record controls for any number of keyboard or mouse triggers.
 private struct ShortcutRecorder: View {
-    @Binding var shortcut: TriggerShortcut
-    var defaultShortcut: TriggerShortcut
+    @Binding var shortcuts: [TriggerShortcut]
+    var defaultShortcuts: [TriggerShortcut]
     @StateObject private var capture = ShortcutCaptureController()
+    @State private var editingIndex: Int?
+    @State private var isAdding = false
+    @State private var validationError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Button {
-                    if capture.isRecording {
-                        capture.cancel()
-                    } else {
-                        capture.start { shortcut = $0 }
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        if capture.isRecording {
-                            Text("Press a shortcut…")
-                                .font(Brand.mono(12, .semibold))
-                                .foregroundStyle(.primary)
-                        } else {
-                            KeyCap(label: shortcut.shortLabel, size: 12)
+            ForEach(shortcuts.indices, id: \.self) { index in
+                HStack(spacing: 8) {
+                    Button {
+                        startCapture(editing: index)
+                    } label: {
+                        HStack(spacing: 10) {
+                            if capture.isRecording && editingIndex == index && !isAdding {
+                                Text("Press a shortcut or mouse button…")
+                                    .font(Brand.mono(12, .semibold))
+                                    .foregroundStyle(.primary)
+                            } else {
+                                KeyCap(label: shortcuts[index].shortLabel, size: 12)
+                            }
+                            Spacer(minLength: 8)
+                            Text(capture.isRecording && editingIndex == index && !isAdding
+                                 ? "Esc to cancel" : "Change")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
                         }
-                        Spacer(minLength: 8)
-                        Text(capture.isRecording ? "Esc to cancel" : "Change")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 40)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(capture.isRecording && editingIndex == index && !isAdding
+                                      ? Brand.selected : Brand.canvas)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(capture.isRecording && editingIndex == index && !isAdding
+                                        ? Brand.ink : Brand.border, lineWidth: 1)
+                        )
                     }
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 40)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(capture.isRecording ? Brand.selected : Brand.canvas)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(capture.isRecording ? Brand.ink : Brand.border, lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
+                    .buttonStyle(.plain)
 
-                if shortcut != defaultShortcut {
-                    Button("Reset to \(defaultShortcut.shortLabel)") {
-                        shortcut = defaultShortcut
-                    }
+                    if shortcuts.count > 1 {
+                        Button {
+                            capture.cancel()
+                            editingIndex = nil
+                            isAdding = false
+                            shortcuts.remove(at: index)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12, weight: .medium))
+                        }
                         .buttonStyle(SecondaryButtonStyle())
+                        .help("Remove \(shortcuts[index].shortLabel)")
+                    }
                 }
             }
 
-            if let error = capture.error {
+            HStack(spacing: 8) {
+                Button {
+                    startCapture(editing: nil)
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: isAdding && capture.isRecording ? "record.circle" : "plus")
+                        Text(isAdding && capture.isRecording
+                             ? "Press a shortcut or mouse button…" : "Add button")
+                    }
+                }
+                .buttonStyle(SecondaryButtonStyle())
+
+                if shortcuts != defaultShortcuts {
+                    Button("Restore default") {
+                        capture.cancel()
+                        editingIndex = nil
+                        isAdding = false
+                        shortcuts = defaultShortcuts
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            if let error = validationError ?? capture.error {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .onDisappear { capture.cancel() }
+        .onDisappear {
+            capture.cancel()
+            editingIndex = nil
+            isAdding = false
+        }
+    }
+
+    private func startCapture(editing index: Int?) {
+        if capture.isRecording {
+            capture.cancel()
+            if editingIndex == index && isAdding == (index == nil) {
+                editingIndex = nil
+                isAdding = false
+                return
+            }
+        }
+
+        editingIndex = index
+        isAdding = index == nil
+        validationError = nil
+        capture.start { newShortcut in
+            if let existing = shortcuts.firstIndex(of: newShortcut), existing != index {
+                validationError = "That button is already configured."
+            } else if let index, shortcuts.indices.contains(index) {
+                shortcuts[index] = newShortcut
+            } else {
+                shortcuts.append(newShortcut)
+            }
+            editingIndex = nil
+            isAdding = false
+        }
     }
 }
 
-/// Local event monitors that turn the next shortcut into a `TriggerShortcut`.
+/// Local event monitors that turn the next keyboard or auxiliary-mouse input
+/// into a `TriggerShortcut`.
 /// Dictation hotkeys are suspended for the duration so the combo isn't also
 /// interpreted as a push-to-talk press.
 private final class ShortcutCaptureController: ObservableObject {
@@ -1892,6 +1959,7 @@ private final class ShortcutCaptureController: ObservableObject {
 
     private var keyMonitor: Any?
     private var flagsMonitor: Any?
+    private var mouseMonitor: Any?
     private var heldModifiers: NSEvent.ModifierFlags = []
     private var onCapture: ((TriggerShortcut) -> Void)?
 
@@ -1910,6 +1978,10 @@ private final class ShortcutCaptureController: ObservableObject {
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.handleFlagsChanged(event)
             return event
+        }
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [weak self] event in
+            self?.handleMouseDown(event)
+            return nil
         }
     }
 
@@ -1942,6 +2014,14 @@ private final class ShortcutCaptureController: ObservableObject {
         }
     }
 
+    private func handleMouseDown(_ event: NSEvent) {
+        guard let shortcut = TriggerShortcut.fromMouseButton(event.buttonNumber) else {
+            error = "Use an auxiliary mouse button; left and right click are reserved."
+            return
+        }
+        commit(shortcut)
+    }
+
     private func commit(_ shortcut: TriggerShortcut) {
         onCapture?(shortcut)
         finish(resumeHotkeys: true)
@@ -1950,8 +2030,10 @@ private final class ShortcutCaptureController: ObservableObject {
     private func finish(resumeHotkeys: Bool) {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         keyMonitor = nil
         flagsMonitor = nil
+        mouseMonitor = nil
         heldModifiers = []
         onCapture = nil
         isRecording = false

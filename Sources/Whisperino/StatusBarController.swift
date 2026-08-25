@@ -133,7 +133,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
     private var updateItem: NSMenuItem?
 
     private func buildMenu() {
-        let triggerLabel = store.settings.triggerKey.shortLabel
+        let triggerLabel = store.settings.triggerSummaryLabel
 
         // Dictation action with a custom view that draws icon · title · gray shortcut
         let dictView = HotkeyMenuItemView(
@@ -195,7 +195,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        let triggerLabel = store.settings.triggerKey.shortLabel
+        let triggerLabel = store.settings.triggerSummaryLabel
         let activation = store.settings.recordingActivation
 
         // Reflect current state in the two custom-view action items

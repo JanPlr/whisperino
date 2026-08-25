@@ -1,15 +1,19 @@
-# Whisperino 3.2.9 — Polished Dictation Handoff
+# Whisperino 3.3.0 — More Ways to Dictate
 
-This patch keeps successful dictation delivery visually quiet from recording
-through paste and submission.
+This release lets every user start dictation with the input that is most
+comfortable and convenient for their setup.
 
 ## What changed
 
-- Keeps the notch compact while a finished offline transcript is pasted into
-  its reserved destination, eliminating the brief transcript flash before
-  paste and auto-submit.
-- Uses the standard adaptive macOS menu-bar tint for the recording waveform
-  instead of turning the icon red.
+- Adds multiple dictation buttons, all active at the same time.
+- Supports auxiliary mouse buttons such as middle, back, and forward alongside
+  existing modifier-only and keyboard-combination triggers.
+- Adds controls in Settings → Dictation to add, change, remove, deduplicate, or
+  restore recording buttons.
+- Preserves existing shortcuts automatically when upgrading and keeps the
+  primary shortcut compatible with older Whisperino versions.
+- Applies Hold, Tap, double-tap latch, and Shift-powered Talk to your screen
+  behavior consistently to every configured button.
 
 ## Upgrade note
 

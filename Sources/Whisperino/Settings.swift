@@ -3,21 +3,31 @@ import Foundation
 
 /// User-selectable trigger for push-to-talk / dictation.
 ///
-/// Two flavours:
+/// Supported input types:
 /// - **Modifier-only** (Fn) - hold a single modifier. Driven by
 ///   `NSEvent.flagsChanged`.
 /// - **Modifier + key combo** (Fn+Space, Option+D) - hold modifier(s) and
 ///   tap a regular key. Driven by a `CGEventTap` in `HotkeyManager` which
 ///   intercepts the keystroke so it isn't typed into the focused app.
+/// - **Mouse button** - any auxiliary button (middle, back, forward, etc.).
 ///
 /// Shift is never stored as part of the trigger: it is reserved for
 /// upgrading a take to Talk to your screen.
-struct TriggerShortcut: Codable, Equatable {
+struct TriggerShortcut: Codable, Hashable {
     /// Device-independent modifier bits that must be held.
     var modifierFlags: UInt
     /// Virtual key code the combo listens for. `nil` for modifier-only.
     /// Values are Carbon `kVK_*` constants.
     var keyCode: UInt16?
+    /// Zero-based Quartz mouse button number. Primary and secondary clicks
+    /// are deliberately unavailable; auxiliary buttons start at 2.
+    var mouseButton: Int?
+
+    init(modifierFlags: UInt, keyCode: UInt16?, mouseButton: Int? = nil) {
+        self.modifierFlags = modifierFlags
+        self.keyCode = keyCode
+        self.mouseButton = mouseButton
+    }
 
     static let recognizedModifiers: NSEvent.ModifierFlags = [
         .command, .control, .option, .function
@@ -36,6 +46,10 @@ struct TriggerShortcut: Codable, Equatable {
         keyCode: 2  // kVK_ANSI_D
     )
 
+    static func mouseButton(_ number: Int) -> TriggerShortcut {
+        TriggerShortcut(modifierFlags: 0, keyCode: nil, mouseButton: number)
+    }
+
     var modifiers: NSEvent.ModifierFlags {
         NSEvent.ModifierFlags(rawValue: modifierFlags).intersection(Self.recognizedModifiers)
     }
@@ -43,11 +57,14 @@ struct TriggerShortcut: Codable, Equatable {
     /// True for combo triggers (modifier + key); false for modifier-only.
     var isCombo: Bool { keyCode != nil }
 
+    var isMouseButton: Bool { mouseButton != nil }
+
     /// Virtual key code the combo listens for. `nil` for modifier-only.
     var comboKeyCode: UInt16? { keyCode }
 
     var isValid: Bool {
-        !modifiers.isEmpty
+        if let mouseButton { return mouseButton >= 2 }
+        return !modifiers.isEmpty
     }
 
     /// Whether the trigger's modifier portion is currently held.
@@ -67,6 +84,9 @@ struct TriggerShortcut: Codable, Equatable {
 
     /// Compact label for inline shortcut hints ("hold fn", "fn + space").
     var shortLabel: String {
+        if let mouseButton {
+            return "Mouse \(mouseButton + 1)"
+        }
         let mods = Self.modifierSymbols(modifiers)
         guard let keyCode else {
             return mods.joined(separator: " + ")
@@ -99,6 +119,14 @@ struct TriggerShortcut: Codable, Equatable {
         let mods = sanitizedModifiers(flags)
         guard !mods.isEmpty else { return nil }
         return TriggerShortcut(modifierFlags: mods.rawValue, keyCode: nil)
+    }
+
+    /// Build an auxiliary-mouse trigger. Left and right click remain reserved
+    /// for normal pointer interaction so an accidental setting cannot make
+    /// the Mac difficult to use.
+    static func fromMouseButton(_ buttonNumber: Int) -> TriggerShortcut? {
+        guard buttonNumber >= 2 else { return nil }
+        return .mouseButton(buttonNumber)
     }
 
     static func modifierSymbols(_ flags: NSEvent.ModifierFlags) -> [String] {
@@ -251,7 +279,30 @@ struct AppSettings: Codable, Equatable {
     /// raw transcription if the API misbehaves.
     var aiModeEnabled: Bool = false
     var apiKey: String = ""
-    var triggerKey: TriggerShortcut = .fn
+    /// Every configured input can start or stop the same dictation action.
+    /// The first item is the primary trigger shown in compact UI hints.
+    var triggerKeys: [TriggerShortcut] = [.fn]
+
+    /// Compatibility accessor for call sites and older tests that only need
+    /// the primary trigger. Assigning it replaces the primary while retaining
+    /// any additional buttons the user configured.
+    var triggerKey: TriggerShortcut {
+        get { triggerKeys.first ?? .fn }
+        set {
+            if triggerKeys.isEmpty {
+                triggerKeys = [newValue]
+            } else {
+                triggerKeys[0] = newValue
+            }
+            triggerKeys = Self.normalizedTriggers(triggerKeys)
+        }
+    }
+
+    var triggerSummaryLabel: String {
+        let primary = triggerKey.shortLabel
+        let additional = max(0, triggerKeys.count - 1)
+        return additional == 0 ? primary : "\(primary) (+\(additional))"
+    }
     /// How the recording shortcut starts and stops a take.
     /// Hold is push-to-talk (release submits). Tap starts a latched take on
     /// a single press; the same shortcut again submits. Double-tap-to-latch
@@ -297,18 +348,22 @@ struct AppSettings: Codable, Equatable {
         // installs only had one toggle, and AI mode previously required it.
         aiModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .aiModeEnabled) ?? llmRefinementEnabled
         apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
-        // Custom shortcuts encode as an object. Older builds stored a
-        // TriggerKey string ("fn", "optionD"); retired values fall back to Fn.
-        if let stored = try? container.decode(TriggerShortcut.self, forKey: .triggerKey),
-           stored.isValid {
-            triggerKey = stored
+        // New builds store an ordered list. Fall back through the prior
+        // single-object and legacy-string formats without dropping a user's
+        // existing shortcut during the upgrade.
+        if let stored = try? container.decode([TriggerShortcut].self, forKey: .triggerKeys),
+           !Self.normalizedTriggers(stored).isEmpty {
+            triggerKeys = Self.normalizedTriggers(stored)
+        } else if let stored = try? container.decode(TriggerShortcut.self, forKey: .triggerKey),
+                  stored.isValid {
+            triggerKeys = [stored]
         } else if let legacy = try? container.decode(String.self, forKey: .triggerKey) {
             switch legacy {
-            case "optionD": triggerKey = .optionD
-            default: triggerKey = .fn
+            case "optionD": triggerKeys = [.optionD]
+            default: triggerKeys = [.fn]
             }
         } else {
-            triggerKey = .fn
+            triggerKeys = [.fn]
         }
         recordingActivation = (try? container.decode(RecordingActivation.self, forKey: .recordingActivation)) ?? .hold
         soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? false
@@ -350,6 +405,9 @@ struct AppSettings: Codable, Equatable {
         try container.encode(llmRefinementEnabled, forKey: .llmRefinementEnabled)
         try container.encode(aiModeEnabled, forKey: .aiModeEnabled)
         try container.encode(apiKey, forKey: .apiKey)
+        try container.encode(triggerKeys, forKey: .triggerKeys)
+        // Keep the primary in the old field so downgrading to a previous
+        // Whisperino build still leaves the user with a working trigger.
         try container.encode(triggerKey, forKey: .triggerKey)
         try container.encode(recordingActivation, forKey: .recordingActivation)
         try container.encode(soundEffectsEnabled, forKey: .soundEffectsEnabled)
@@ -366,6 +424,7 @@ struct AppSettings: Codable, Equatable {
         case aiModeEnabled
         case apiKey
         case triggerKey
+        case triggerKeys
         case recordingActivation
         case soundEffectsEnabled
         case pauseMediaOnRecordingStart
@@ -375,6 +434,13 @@ struct AppSettings: Codable, Equatable {
         case rafterinoModeEnabled
         case asrModel
         case streamingTranscriptionEnabled
+    }
+
+    private static func normalizedTriggers(_ triggers: [TriggerShortcut]) -> [TriggerShortcut] {
+        triggers.reduce(into: []) { result, trigger in
+            guard trigger.isValid, !result.contains(trigger) else { return }
+            result.append(trigger)
+        }
     }
 }
 

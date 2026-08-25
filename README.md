@@ -4,7 +4,7 @@ Local voice transcription for macOS. Lives in your menu bar, runs fully on-devic
 
 ## TL;DR
 
-**Hold the recording shortcut → speak → release.** The shortcut defaults to Fn and can be changed in Settings → Dictation. Choose **Hold to record** or **Tap to start** without changing the shortcut itself. Your words are transcribed into the app where the take began; keep the intended field focused until delivery.
+**Hold a recording button → speak → release.** The default is Fn. In Settings → Dictation you can add multiple keyboard shortcuts or auxiliary mouse buttons, then choose **Hold to record** or **Tap to start**. Your words are transcribed into the app where the take began; keep the intended field focused until delivery.
 
 **Want the LLM to answer instead of just transcribe?** Add Shift any time while you're holding the shortcut - the pill turns rainbow, AI mode is on, and the recording becomes latched. Cmd+C any text or images you want as context (no clicks needed). Tap the shortcut (or press Enter) to submit. Esc to cancel.
 
@@ -51,7 +51,7 @@ continues in the background.
 
 ## Shortcuts
 
-The recording shortcut is customizable in **Settings → Dictation**. Defaults below use Fn; substitute whatever combo you recorded.
+Recording buttons are customizable in **Settings → Dictation**. Add as many keyboard shortcuts or auxiliary mouse buttons as you like. Defaults below use Fn; substitute any button you configured.
 
 | Shortcut | What it does |
 |----------|-------------|
@@ -103,8 +103,8 @@ Nothing gets lost:
 
 Click the menu bar icon → **Settings**.
 
-- **General**: launch at login · pause and resume playing media around dictation · sound effects · **trigger key** (Fn · ⌥D) · API key · AI capabilities (Haiku enhancement · AI mode)
-- **Dictation**: speech model (Parakeet · Nemotron 3.5 · Whisper turbo · Whisper large-v3) · custom multi-select transcription languages (or automatic detection) · auto-submit apps
+- **General**: launch at login · pause and resume playing media around dictation · sound effects · API key · AI capabilities (Haiku enhancement · AI mode)
+- **Dictation**: speech model (Parakeet · Nemotron 3.5 · Whisper turbo · Whisper large-v3) · multiple keyboard/mouse recording buttons · custom multi-select transcription languages (or automatic detection) · auto-submit apps
 - **Dictionary**: terms the LLM should always spell correctly (`Langdock` or `langdonk = Langdock` mappings)
 - **Snippets**: reusable text blocks
 - **History**: last 50 transcriptions
