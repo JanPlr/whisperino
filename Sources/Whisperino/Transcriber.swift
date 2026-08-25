@@ -226,10 +226,25 @@ final class Transcriber {
     // MARK: - Offline transcription
 
     func transcribe(audioURL: URL, languages: [String] = []) async throws -> String {
+        let transcript = try await transcribeDetailed(
+            audioURL: audioURL,
+            languages: languages,
+            timestamps: .none
+        )
+        return Self.cleanOutput(transcript.text)
+    }
+
+    /// Structured timestamps are requested only by the opt-in speaker path.
+    /// The ordinary method above keeps its original `.none` options and cost.
+    func transcribeDetailed(
+        audioURL: URL,
+        languages: [String] = [],
+        timestamps: TimestampKind
+    ) async throws -> Transcript {
         try await ensureEngine()
         let pcm = try AudioPCM.loadMono16k(from: audioURL)
-        guard !pcm.isEmpty else { return "" }
-        let options = runOptions(languages: languages)
+        guard !pcm.isEmpty else { throw TranscriberError.noOutput }
+        let options = runOptions(languages: languages, timestamps: timestamps)
         let transcript: Transcript = try await withCheckedThrowingContinuation { continuation in
             engineQueue.async { [weak self] in
                 guard let self, let session = self.session else {
@@ -247,7 +262,7 @@ final class Transcriber {
                 }
             }
         }
-        return Self.cleanOutput(transcript.text)
+        return transcript
     }
 
     // MARK: - Streaming (Nemotron)
@@ -477,7 +492,10 @@ final class Transcriber {
 
     // MARK: - Options
 
-    private func runOptions(languages: [String]) -> RunOptions {
+    private func runOptions(
+        languages: [String],
+        timestamps: TimestampKind = .none
+    ) -> RunOptions {
         let id = selectedModel
         let mapped = ASRModelCatalog.recognitionLanguage(for: id, selectedCodes: languages)
         let family: RunExtension?
@@ -491,7 +509,7 @@ final class Transcriber {
         }
         let language = mapped.language.flatMap { $0 == "auto" ? nil : $0 }
         return RunOptions(
-            timestamps: .none,
+            timestamps: timestamps,
             language: language,
             family: family
         )

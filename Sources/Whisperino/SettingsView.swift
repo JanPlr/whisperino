@@ -107,6 +107,31 @@ private extension View {
     }
 }
 
+/// Keeps interactive card fills on one opaque surface and fades translucent
+/// state colors above it. Animating directly between `Brand.card` and an
+/// alpha-based dynamic color can briefly interpolate through a bright gray in
+/// dark mode.
+private struct InteractiveCardBackground: View {
+    let cornerRadius: CGFloat
+    let hovered: Bool
+    let selected: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Brand.card)
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Brand.hover)
+                    .opacity(hovered && !selected ? 1 : 0)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Brand.selected)
+                    .opacity(selected ? 1 : 0)
+            }
+    }
+}
+
 /// Small custom icon action used inside setting rows and inputs.
 private struct InputIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -1018,6 +1043,8 @@ private struct DictationSettingsPage: View {
                 LanguageMultiSelector(selection: $store.settings.transcriptionLanguageCodes)
             }
 
+            VoiceIsolationSettingsCard()
+
             SettingsCard(title: "Recording") {
                 SectionLabel("Dictation buttons")
 
@@ -1097,6 +1124,113 @@ private struct DictationSettingsPage: View {
     private func deleteAutoSubmit(_ app: AutoSubmitApp) {
         guard let index = store.autoSubmitApps.firstIndex(where: { $0.id == app.id }) else { return }
         store.removeAutoSubmitApps(at: [index])
+    }
+}
+
+private struct VoiceIsolationSettingsCard: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @ObservedObject private var profile = SpeakerProfileManager.shared
+
+    var body: some View {
+        SettingsCard(title: "Your voice") {
+            Toggle(isOn: $store.settings.voiceIsolationEnabled) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Only use my speech")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Transcribes the original audio first, then removes text attributed to other speakers.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .disabled(!profile.isEnrolled || profile.status.isBusy)
+
+            CaptionText("When speaker matching is uncertain or unavailable, Whisperino keeps the normal transcript instead of dropping speech.")
+
+            Divider().padding(.vertical, 3)
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch profile.status {
+        case .idle:
+            HStack(spacing: 10) {
+                Button(profile.isEnrolled ? "Record again…" : "Set up my voice…") {
+                    profile.startEnrollment(
+                        preferredDeviceUID: store.settings.preferredInputDeviceUID
+                    )
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                if profile.isEnrolled {
+                    Text("Voice profile ready")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Remove voice data") { profile.deleteVoiceData() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .downloading(let name):
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Downloading \(name) locally…")
+                    .font(.system(size: 12.5, weight: .medium))
+                Spacer()
+                Button("Cancel") { profile.cancelEnrollment() }
+                    .buttonStyle(SecondaryButtonStyle())
+            }
+        case .recording(let secondsRemaining):
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Speak naturally for \(secondsRemaining) more seconds")
+                            .font(.system(size: 12.5, weight: .semibold))
+                        Text("Use complete sentences and vary your pitch slightly. Record in a quiet room.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Cancel") { profile.cancelEnrollment() }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Brand.selected)
+                        Capsule().fill(Brand.ink)
+                            .frame(width: max(4, geometry.size.width * CGFloat(profile.enrollmentLevel)))
+                    }
+                }
+                .frame(height: 5)
+            }
+        case .processing:
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Checking and creating your local voice profile…")
+                    .font(.system(size: 12.5, weight: .medium))
+            }
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 8) {
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+                HStack(spacing: 8) {
+                    Button("Try again") {
+                        profile.startEnrollment(
+                            preferredDeviceUID: store.settings.preferredInputDeviceUID
+                        )
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    Button("Dismiss") { profile.cancelEnrollment() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }
 
@@ -1257,8 +1391,11 @@ private struct SpeechModelRow: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(selected ? Brand.selected : (hovering && !disabled ? Brand.hover : Brand.card))
+            InteractiveCardBackground(
+                cornerRadius: 7,
+                hovered: hovering && !disabled,
+                selected: selected
+            )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -1732,11 +1869,6 @@ private struct ChoiceCard: View {
 
     @State private var hovering = false
 
-    private var fill: Color {
-        if selected { return Brand.selected }
-        return hovering ? Brand.hover : Brand.card
-    }
-
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 5) {
@@ -1756,8 +1888,11 @@ private struct ChoiceCard: View {
             // the HStack's fixedSize settles on, so both frames are equal.
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(fill)
+                InteractiveCardBackground(
+                    cornerRadius: 7,
+                    hovered: hovering && enabled,
+                    selected: selected
+                )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)

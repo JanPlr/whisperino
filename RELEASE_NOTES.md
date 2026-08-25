@@ -1,24 +1,25 @@
-# Whisperino 3.3.0 — More Ways to Dictate
+# Whisperino 3.3.1 — Your Voice, Smoother Settings
 
-This release lets every user start dictation with the input that is most
-comfortable and convenient for their setup.
+This patch adds optional local speaker filtering and removes the bright hover
+flash that could appear while moving through Settings in dark mode.
 
 ## What changed
 
-- Adds multiple dictation buttons, all active at the same time.
-- Supports auxiliary mouse buttons such as middle, back, and forward alongside
-  existing modifier-only and keyboard-combination triggers.
-- Adds controls in Settings → Dictation to add, change, remove, deduplicate, or
-  restore recording buttons.
-- Preserves existing shortcuts automatically when upgrading and keeps the
-  primary shortcut compatible with older Whisperino versions.
-- Applies Hold, Tap, double-tap latch, and Shift-powered Talk to your screen
-  behavior consistently to every configured button.
+- Adds an opt-in **Only use my speech** mode with local voice enrollment and
+  speaker matching. Enrollment audio is discarded after the voice profile is
+  created.
+- Keeps normal transcription as the safe fallback whenever speaker analysis is
+  unavailable, times out, or is uncertain.
+- Runs speaker analysis in an isolated helper process and only downloads its
+  local models when voice setup is requested.
+- Fixes dark-mode hover animations briefly flashing bright gray on speech-model
+  rows and other selectable setting cards.
 
 ## Upgrade note
 
-Existing users can install this release with Whisperino's Update button. Since
-GitHub artifacts remain ad-hoc signed, macOS may ask them to enable
+Existing users can install this release with Whisperino's Update button. Voice
+filtering remains off until a voice profile is set up in Settings → Dictation.
+Since GitHub artifacts remain ad-hoc signed, macOS may ask users to enable
 Accessibility for the new build; Whisperino relaunches after the grant becomes
 active.
 

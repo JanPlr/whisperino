@@ -1,4 +1,6 @@
 import Foundation
+import SpeakerFilteringCore
+import TranscribeCpp
 
 enum TranscriptionSessionError: LocalizedError {
     case allChunksFailed
@@ -39,6 +41,7 @@ final class TranscriptionSession {
 
     private let transcriber: Transcriber
     private let languages: [String]
+    private let filterToEnrolledSpeaker: Bool
     private let recoveryDir: URL
     private let recoveryFile: URL
 
@@ -53,9 +56,14 @@ final class TranscriptionSession {
     private var cancelled = false
     private var chain: Task<Void, Never>?
 
-    init(transcriber: Transcriber, languages: [String] = []) {
+    init(
+        transcriber: Transcriber,
+        languages: [String] = [],
+        filterToEnrolledSpeaker: Bool = false
+    ) {
         self.transcriber = transcriber
         self.languages = languages
+        self.filterToEnrolledSpeaker = filterToEnrolledSpeaker
         let home = FileManager.default.homeDirectoryForCurrentUser
         recoveryDir = home.appendingPathComponent(".whisperino/recovery")
         recoveryFile = recoveryDir.appendingPathComponent("last-raw-transcript.txt")
@@ -86,7 +94,44 @@ final class TranscriptionSession {
                 return
             }
             do {
-                let text = try await transcriber.transcribe(audioURL: chunkURL, languages: languages)
+                let text: String
+                if filterToEnrolledSpeaker {
+                    async let analysis = SpeakerProfileManager.shared.analyze(audioURL: chunkURL)
+                    let transcript = try await transcriber.transcribeDetailed(
+                        audioURL: chunkURL,
+                        languages: languages,
+                        timestamps: .word
+                    )
+                    let fullText = Transcriber.cleanOutput(transcript.text)
+                    let units: [TimedTranscriptUnit]
+                    if !transcript.words.isEmpty {
+                        units = transcript.words.map {
+                            TimedTranscriptUnit(
+                                startMs: $0.t0Ms,
+                                endMs: $0.t1Ms,
+                                text: $0.text
+                            )
+                        }
+                    } else {
+                        units = transcript.segments.map {
+                            TimedTranscriptUnit(
+                                startMs: $0.t0Ms,
+                                endMs: $0.t1Ms,
+                                text: $0.text
+                            )
+                        }
+                    }
+                    text = SpeakerTranscriptSelector.select(
+                        fullText: fullText,
+                        units: units,
+                        analysis: await analysis
+                    )
+                } else {
+                    text = try await transcriber.transcribe(
+                        audioURL: chunkURL,
+                        languages: languages
+                    )
+                }
                 try? FileManager.default.removeItem(at: chunkURL)
                 doneCount += 1
                 if !text.isEmpty {

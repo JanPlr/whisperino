@@ -104,7 +104,7 @@ Nothing gets lost:
 Click the menu bar icon → **Settings**.
 
 - **General**: launch at login · pause and resume playing media around dictation · sound effects · API key · AI capabilities (Haiku enhancement · AI mode)
-- **Dictation**: speech model (Parakeet · Nemotron 3.5 · Whisper turbo · Whisper large-v3) · multiple keyboard/mouse recording buttons · custom multi-select transcription languages (or automatic detection) · auto-submit apps
+- **Dictation**: speech model (Parakeet · Nemotron 3.5 · Whisper turbo · Whisper large-v3) · optional local speaker filtering · multiple keyboard/mouse recording buttons · custom multi-select transcription languages (or automatic detection) · auto-submit apps
 - **Dictionary**: terms the LLM should always spell correctly (`Langdock` or `langdonk = Langdock` mappings)
 - **Snippets**: reusable text blocks
 - **History**: last 50 transcriptions
@@ -112,7 +112,7 @@ Click the menu bar icon → **Settings**.
 
 ## Privacy
 
-- **Transcription is 100% local.** Audio is processed on-device by transcribe.cpp (Metal). No audio leaves your machine. Models are GGUFs from Hugging Face under `handy-computer`.
+- **Transcription is 100% local.** Audio and optional speaker matching are processed on-device. Voice enrollment stores embeddings rather than the enrollment recording, and no audio leaves your machine.
 - **LLM features are opt-in.** Only transcribed *text* (and your attached context) is sent to `api.langdock.com` (EU). Off by default.
 - **No telemetry, no analytics.** Everything stored as JSON in `~/.whisperino/`.
 

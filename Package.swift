@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Whisperino", targets: ["Whisperino"]),
+        .executable(name: "WhisperinoSpeakerWorker", targets: ["WhisperinoSpeakerWorker"]),
     ],
     dependencies: [
         // Direct MediaRemote access is blocked for ordinary applications on
@@ -14,6 +15,10 @@ let package = Package(
         .package(
             url: "https://github.com/ejbills/mediaremote-adapter.git",
             revision: "b4ae765bbfa111f1e8fad240a8ea74f01e91d325"
+        ),
+        .package(
+            url: "https://github.com/k2-fsa/sherpa-onnx.git",
+            revision: "1cb484af5e69d3c7803c1eb0b3b5ab8041e0e911"
         ),
     ],
     targets: [
@@ -41,13 +46,26 @@ let package = Package(
             name: "Whisperino",
             dependencies: [
                 "TranscribeCpp",
+                "SpeakerFilteringCore",
                 .product(name: "MediaRemoteAdapter", package: "mediaremote-adapter"),
             ],
             path: "Sources/Whisperino"
         ),
+        .target(
+            name: "SpeakerFilteringCore",
+            path: "Sources/SpeakerFilteringCore"
+        ),
+        .executableTarget(
+            name: "WhisperinoSpeakerWorker",
+            dependencies: [
+                "SpeakerFilteringCore",
+                .product(name: "sherpa-onnx", package: "sherpa-onnx"),
+            ],
+            path: "Sources/WhisperinoSpeakerWorker"
+        ),
         .testTarget(
             name: "WhisperinoTests",
-            dependencies: ["Whisperino"],
+            dependencies: ["Whisperino", "SpeakerFilteringCore"],
             path: "Tests/WhisperinoTests"
         ),
     ]
