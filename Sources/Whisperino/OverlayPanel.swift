@@ -90,6 +90,13 @@ class OverlayPanel {
         panel.contentView = hostingView
 
         configureNotchHotspot()
+        // Park the hidden panel on the current display's top edge now. The
+        // window is created at (0, 0) — the bottom-left of the global
+        // coordinate space — and SwiftUI's first take reads
+        // overlayUsesTopEdgeSurface / overlayHasPhysicalNotch from AppState.
+        // Seeding both here means the island is already at the notch before
+        // the first orderFront, instead of appearing at y=0 and gliding up.
+        positionAtNotch(instant: true)
 
         // Resize panel whenever picker visibility or device count changes.
         // Uses the exact same formula as OverlayView.panelContentHeight.
@@ -171,7 +178,7 @@ class OverlayPanel {
                 forName: NSApplication.didChangeScreenParametersNotification,
                 object: nil,
                 queue: .main
-            ) { [weak self] _ in self?.positionNotchHotspot() }
+            ) { [weak self] _ in self?.handleScreenParametersChanged() }
         )
         screenChangeObservers.append(
             NSWorkspace.shared.notificationCenter.addObserver(
@@ -311,6 +318,11 @@ class OverlayPanel {
         // starts. Any fade-in here reads as input lag.
         panel.alphaValue = 1
         panel.orderFront(nil)
+        // A window that has never been on screen can ignore the origin
+        // set above and reopen at its contentRect (y=0). Snap again now
+        // that it is attached so the tracker never eases it up from the
+        // bottom of the display.
+        positionAtNotch(instant: true)
     }
 
     func dismiss() {
@@ -522,6 +534,9 @@ class OverlayPanel {
     /// (Space/app switch) and a tight follow for small deltas - all via plain
     /// setFrameOrigin, so there's no NSWindow-animator state to fight and no
     /// feedback loop with the tracker. Snaps the last sub-pixel to settle.
+    /// Jumps larger than a menu-bar follow (an unplugged display remapping
+    /// global coordinates) snap immediately — easing those looks like the
+    /// island flying up from the bottom of the screen.
     private func easeOriginTowardTarget() {
         guard let target = targetOrigin else { return }
         let cur = panel.frame.origin
@@ -531,9 +546,26 @@ class OverlayPanel {
             if dx != 0 || dy != 0 { panel.setFrameOrigin(target) }
             return
         }
+        if abs(dx) > 80 || abs(dy) > 80 {
+            panel.setFrameOrigin(target)
+            return
+        }
         // ~0.32/frame ≈ settles in ~7 frames (~120ms) at 60fps: fast but eased.
         let f: CGFloat = 0.32
         panel.setFrameOrigin(NSPoint(x: cur.x + dx * f, y: cur.y + dy * f))
+    }
+
+    /// Recalculate notch geometry after a display is attached or removed.
+    /// The global AppKit coordinate space is rebuilt on that notification,
+    /// so any cached frame from the old arrangement is discarded and both
+    /// windows are pinned to the remaining display's top edge in one step.
+    private func handleScreenParametersChanged() {
+        hotspotDisplayID = nil
+        hotspotStyle = nil
+        hotspotFrame = nil
+        targetOrigin = nil
+        positionNotchHotspot()
+        positionAtNotch(instant: true)
     }
 
 }

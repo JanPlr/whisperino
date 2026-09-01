@@ -1,14 +1,17 @@
-# Whisperino 3.3.2 — Smooth Dark-Mode Settings
+# Whisperino 3.3.3 — Notch Placement After Unplugging a Display
 
-This patch fixes the bright flash that could appear while moving through
-Settings in dark mode.
+This patch keeps the notch island on the MacBook's top edge after an
+external display is disconnected. The island no longer flies in from the
+bottom of the screen on the next take.
 
 ## What changed
 
-- Keeps speech-model rows on a stable dark card surface while their hover
-  treatment fades in and out.
-- Applies the same stable hover rendering to other selectable setting cards.
-- Contains no speaker-filtering or voice-enrollment functionality.
+- Parks the overlay on the current display's notch before the first
+  recording, instead of leaving it at the bottom-left of the screen map.
+- Snaps the island into place after a display is plugged or unplugged,
+  rather than easing it across the remapped coordinates.
+- Re-applies that notch position once the window is actually on screen,
+  so macOS cannot reopen it at the bottom.
 
 ## Upgrade note
 
