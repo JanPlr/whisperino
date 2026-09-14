@@ -1,14 +1,16 @@
-# Whisperino 3.4.2 — Settings Window Focus
+# Whisperino 3.4.3 — Settings Window Focus, Again
 
-Fixes the settings window opening in its inactive look when reached from the
-menu bar.
+3.4.2 fixed the settings window coming up in its inactive look only for the
+first open. Reopening it from the menu bar item went through a different
+path that still ordered the window front before activating the app.
 
 ## What changed
 
-- Opening Settings from the menu bar item activates Whisperino before the
-  window appears. Previously the window could come up without focus and
-  macOS drew it flat - no sidebar panel, dimmed selection, a stray title.
-- The "When you dictate" chart on the Overview draws its bars again.
+- Both the first and every later open of the settings window activate
+  Whisperino first, then bring the window front, and re-check on the next
+  turn of the run loop in case activation lands late. The window now comes
+  up focused from the menu bar item every time: sidebar panel, vivid
+  selection, no stray title.
 
 ## Upgrade note
 

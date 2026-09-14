@@ -58,6 +58,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         showWelcomeIfNeeded()
         requestInitialPermissions()
+        // Developer aid: WHISPERINO_SETTINGS_QA_OPEN_AFTER=<seconds>[,<seconds>…]
+        // opens the window through the normal path at each delay, once the
+        // app is no longer the active app - the menu bar item case, which a
+        // fresh launch never exercises. A second delay exercises the
+        // already-created window.
+        if let delays = ProcessInfo.processInfo.environment["WHISPERINO_SETTINGS_QA_OPEN_AFTER"] {
+            for delay in delays.split(separator: ",").compactMap({ Double($0) }) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    MainWindowController.shared.show()
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

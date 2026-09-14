@@ -26,8 +26,7 @@ final class MainWindowController: NSObject {
 
     private func showWindow(rootView: SettingsView) {
         if let window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            present(window)
             return
         }
 
@@ -51,15 +50,29 @@ final class MainWindowController: NSObject {
         window.center()
         self.window = window
 
-        // Activate before ordering front: from the menu bar item the app is
-        // not active, and a window shown into an inactive app comes up
-        // without key status.
+        present(window)
+    }
+
+    /// Bring the window front as the key window of the active app.
+    ///
+    /// Reached from the menu bar item the app is not active, and a window
+    /// ordered front into an inactive app comes up without key status -
+    /// macOS 26 then draws it flat: no sidebar glass, dimmed selection, the
+    /// toolbar title back. Activate first, then order front, then check on
+    /// the next turn of the run loop because activation on macOS 14+ is
+    /// cooperative and can land late.
+    private func present(_ window: NSWindow) {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        // SwiftUI's split view configures the toolbar after attaching and can
-        // bring the title back; assert the hidden title once it has.
         DispatchQueue.main.async {
+            // SwiftUI's split view configures the toolbar after attaching
+            // and can bring the title back.
             window.titleVisibility = .hidden
+            if !window.isKeyWindow || !NSApp.isActive {
+                NSRunningApplication.current.activate(options: [.activateAllWindows])
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+            }
         }
         dumpHierarchyIfRequested(window)
     }
