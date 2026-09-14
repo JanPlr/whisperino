@@ -1,14 +1,14 @@
-# Whisperino 3.4.1 — Window Chrome
+# Whisperino 3.4.2 — Settings Window Focus
 
-A small follow-up to 3.4.0's new window.
+Fixes the settings window opening in its inactive look when reached from the
+menu bar.
 
 ## What changed
 
-- Removes the empty toolbar band that 3.4.0 drew across the top of the
-  settings window; the sidebar still runs up under the traffic lights.
-- The sidebar no longer scrolls.
-- The Whisperino mark at the top of the sidebar is smaller and sits at the
-  scale of the rows below it.
+- Opening Settings from the menu bar item activates Whisperino before the
+  window appears. Previously the window could come up without focus and
+  macOS drew it flat - no sidebar panel, dimmed selection, a stray title.
+- The "When you dictate" chart on the Overview draws its bars again.
 
 ## Upgrade note
 

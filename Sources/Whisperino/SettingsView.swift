@@ -359,21 +359,21 @@ private struct HourOfDayChart: View {
     var body: some View {
         Chart(hours) { hour in
             BarMark(
-                x: .value("Hour", hour.hour),
-                y: .value("Dictations", hour.dictations),
-                width: .ratio(0.7)
+                xStart: .value("Hour", Double(hour.hour) + 0.15),
+                xEnd: .value("Hour", Double(hour.hour) + 0.85),
+                y: .value("Dictations", hour.dictations)
             )
             .foregroundStyle(hour.dictations == peak && peak > 0
                              ? AnyShapeStyle(Brand.limeDeep)
                              : AnyShapeStyle(Color.accentColor.opacity(0.55)))
             .cornerRadius(2)
         }
-        .chartXScale(domain: -0.5...23.5)
+        .chartXScale(domain: 0.0...24.0)
         .chartXAxis {
-            AxisMarks(values: [0, 6, 12, 18]) { value in
+            AxisMarks(values: [0.0, 6.0, 12.0, 18.0]) { value in
                 AxisValueLabel {
-                    if let h = value.as(Int.self) {
-                        Text(Self.hourLabel(h))
+                    if let h = value.as(Double.self) {
+                        Text(Self.hourLabel(Int(h)))
                     }
                 }
             }

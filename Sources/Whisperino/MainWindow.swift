@@ -51,8 +51,50 @@ final class MainWindowController: NSObject {
         window.center()
         self.window = window
 
-        window.makeKeyAndOrderFront(nil)
+        // Activate before ordering front: from the menu bar item the app is
+        // not active, and a window shown into an inactive app comes up
+        // without key status.
         NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        // SwiftUI's split view configures the toolbar after attaching and can
+        // bring the title back; assert the hidden title once it has.
+        DispatchQueue.main.async {
+            window.titleVisibility = .hidden
+        }
+        dumpHierarchyIfRequested(window)
+    }
+
+    /// Developer aid: write the window's state and AppKit view hierarchy to
+    /// a file once it has settled, so sidebar/toolbar chrome can be checked
+    /// from any launch path without a screenshot. Triggered by the
+    /// WHISPERINO_SETTINGS_QA_DUMP environment variable, or - for an app
+    /// launched by Finder/Spotlight, where there is no environment - by the
+    /// presence of ~/.whisperino/window-report.txt, which is overwritten.
+    private func dumpHierarchyIfRequested(_ window: NSWindow) {
+        let flagFile = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".whisperino/window-report.txt").path
+        let path: String
+        if let env = ProcessInfo.processInfo.environment["WHISPERINO_SETTINGS_QA_DUMP"] {
+            path = env
+        } else if FileManager.default.fileExists(atPath: flagFile) {
+            path = flagFile
+        } else {
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            var lines: [String] = [
+                "key=\(window.isKeyWindow) main=\(window.isMainWindow) appActive=\(NSApp.isActive)",
+                "titleVisibility=\(window.titleVisibility.rawValue) toolbarStyle=\(window.toolbarStyle.rawValue) styleMask=\(window.styleMask.rawValue)",
+                "appearance=\(window.effectiveAppearance.name.rawValue) reduceTransparency=\(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)",
+                "firstResponder=\(String(describing: window.firstResponder.map { type(of: $0) }))",
+            ]
+            func walk(_ v: NSView, _ depth: Int) {
+                lines.append(String(repeating: "  ", count: depth) + "\(type(of: v)) \(NSStringFromRect(v.frame))")
+                for sub in v.subviews { walk(sub, depth + 1) }
+            }
+            if let root = window.contentView?.superview { walk(root, 0) }
+            try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        }
     }
 
     /// Open the window directly on `page`. Used by the settings visual-QA
