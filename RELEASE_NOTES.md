@@ -1,16 +1,15 @@
-# Whisperino 3.4.3 — Settings Window Focus, Again
+# Whisperino 3.4.4 — Built Against the macOS 26 SDK
 
-3.4.2 fixed the settings window coming up in its inactive look only for the
-first open. Reopening it from the menu bar item went through a different
-path that still ordered the window front before activating the app.
+The 3.4.x releases were built on a macOS 14 runner and linked against the
+macOS 14.5 SDK. On macOS 26 such an app runs in compatibility mode: the
+settings window came up with the older flat sidebar and chrome instead of
+the native macOS 26 look it was designed for. Locally built copies never
+showed this, which is why it took a few releases to pin down.
 
 ## What changed
 
-- Both the first and every later open of the settings window activate
-  Whisperino first, then bring the window front, and re-check on the next
-  turn of the run loop in case activation lands late. The window now comes
-  up focused from the menu bar item every time: sidebar panel, vivid
-  selection, no stray title.
+- Release builds run on a macOS 26 runner, so the app is linked against the
+  macOS 26 SDK and gets the current system appearance. No app code changed.
 
 ## Upgrade note
 

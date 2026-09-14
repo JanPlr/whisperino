@@ -12,12 +12,22 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14 # arm64 — app requires Apple Silicon
+    # arm64 (the app requires Apple Silicon) AND the macOS 26 SDK: an app
+    # linked against an older SDK runs on macOS 26 in compatibility mode and
+    # loses the current system appearance (flat sidebar, old chrome).
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
 
       - name: Build app bundle
         run: VERSION="${GITHUB_REF_NAME#v}" ./build.sh --bundle-only
+
+      # Fail loudly rather than ship a compatibility-mode build again.
+      - name: Check linked SDK
+        run: |
+          sdk=$(otool -l build/Whisperino.app/Contents/MacOS/Whisperino | awk '/LC_BUILD_VERSION/{f=1} f&&/sdk/{print $2; exit}')
+          echo "linked against macOS SDK $sdk"
+          case "$sdk" in 26.*|2[7-9].*|[3-9][0-9].*) ;; *) echo "::error::SDK $sdk is older than 26 - release would run in compatibility mode"; exit 1;; esac
 
       - name: Zip app
         run: ditto -c -k --keepParent build/Whisperino.app "Whisperino-${GITHUB_REF_NAME}.zip"
