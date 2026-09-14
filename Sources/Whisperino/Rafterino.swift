@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Rafterino mode - the Team Rafterino easter egg, born at the 2026 offsite
@@ -13,6 +14,8 @@ enum Rafterino {
     static let lettering = Color(red: 0.78, green: 0.16, blue: 0.13)
     /// Water/foam accent that reads on the black pill.
     static let foam = Color(red: 0.45, green: 0.75, blue: 1.0)
+    /// Weathered spar wood - the mast the flag is hoisted up.
+    static let spar = Color(red: 0.56, green: 0.51, blue: 0.46)
 
     /// Draws the little raft - lashed-log deck, mast, skull flag - with its
     /// waterline at the context's origin. ~14pt wide, 11pt of mast+flag
@@ -171,6 +174,188 @@ struct RafterinoFlag: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .strokeBorder(.black.opacity(0.08), lineWidth: 1)
         )
+    }
+}
+
+// MARK: - Flag hoist
+
+/// Rafterino mode is not toggled, it is *hoisted*: drag the flag up the mast
+/// to run it up, drag it down to strike it. Once it is flying the cloth
+/// catches the wind.
+///
+/// This is the app's one piece of deliberate whimsy. It reports itself to
+/// assistive technology as an ordinary switch, so nobody is required to drag.
+struct RafterinoFlagHoist: View {
+    @Binding var isHoisted: Bool
+
+    @State private var dragFraction: Double?
+    @State private var phase: Double = 0
+    @State private var hovering = false
+
+    private let mastHeight: CGFloat = 84
+    private let flagWidth: CGFloat = 52
+    private let flagHeight: CGFloat = 34
+    private let mastWidth: CGFloat = 3
+    /// Headroom under the truck so the flag never covers the masthead.
+    private let headroom: CGFloat = 9
+
+    /// 0 = struck, 1 = fully hoisted. A drag in progress wins over the
+    /// settled state so the flag tracks the pointer exactly.
+    private var raised: Double { dragFraction ?? (isHoisted ? 1 : 0) }
+
+    private var travel: CGFloat { mastHeight - flagHeight - headroom }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            mast
+            flag
+                .offset(x: mastWidth - 0.5, y: headroom + travel * (1 - raised))
+        }
+        .frame(width: flagWidth + mastWidth + 6, height: mastHeight, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .gesture(hoistGesture)
+        .onHover { inside in
+            hovering = inside
+            if inside { NSCursor.openHand.set() } else { NSCursor.arrow.set() }
+        }
+        .onAppear { if isHoisted { startFlying() } }
+        .onChange(of: isHoisted) { _, nowHoisted in
+            if nowHoisted { startFlying() }
+        }
+        .help(isHoisted ? "Drag the flag down to strike it" : "Drag the flag up the mast")
+        .accessibilityRepresentation {
+            Toggle("Rafterino mode", isOn: $isHoisted)
+        }
+    }
+
+    private var mast: some View {
+        ZStack(alignment: .top) {
+            // Turned spar: lighter down its lit side, so it reads round.
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [Rafterino.spar.opacity(0.95), Rafterino.spar.opacity(0.6)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: mastWidth, height: mastHeight)
+
+            Circle()
+                .fill(Rafterino.spar)
+                .frame(width: 6, height: 6)
+                .offset(y: -3)
+        }
+        .overlay(alignment: .bottom) {
+            // The cleat the halyard belays to.
+            Capsule()
+                .fill(Rafterino.spar.opacity(0.8))
+                .frame(width: 14, height: 3)
+        }
+        .frame(width: mastWidth, height: mastHeight, alignment: .top)
+    }
+
+    private var flag: some View {
+        // While the flag is being hauled it hangs slack; flying, it fills.
+        let amplitude: CGFloat = isHoisted && dragFraction == nil ? 3.2 : 1.0
+
+        let cloth = FlagCloth(phase: phase, amplitude: amplitude)
+
+        return ZStack {
+            // The field, shaded so the ripple reads as cloth rather than a
+            // flat blue rectangle: the troughs fall into shadow.
+            cloth.fill(
+                LinearGradient(
+                    colors: [Rafterino.field.opacity(0.92), Rafterino.field],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+
+            RafterinoSkull()
+                .padding(.vertical, 5)
+                .padding(.leading, 7)
+                .padding(.trailing, 10)
+                .clipShape(cloth)
+
+            // Luff shadow where the cloth is lashed to the spar.
+            cloth
+                .fill(
+                    LinearGradient(
+                        colors: [.black.opacity(0.22), .clear],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: flagWidth * 0.25)
+                .frame(width: flagWidth, alignment: .leading)
+                .clipShape(cloth)
+        }
+        .frame(width: flagWidth, height: flagHeight)
+        .shadow(color: .black.opacity(0.22), radius: 3, y: 1.5)
+    }
+
+    private var hoistGesture: some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                NSCursor.closedHand.set()
+                let settled = isHoisted ? 1.0 : 0.0
+                let delta = -Double(value.translation.height) / Double(travel)
+                dragFraction = min(max(settled + delta, 0), 1)
+            }
+            .onEnded { _ in
+                NSCursor.openHand.set()
+                // Past halfway the halyard is made fast; short of it the
+                // flag runs back down.
+                let target = (dragFraction ?? 0) > 0.5
+                withAnimation(.spring(response: 0.42,
+                                      dampingFraction: target ? 0.62 : 0.82)) {
+                    dragFraction = nil
+                    isHoisted = target
+                }
+            }
+    }
+
+    private func startFlying() {
+        phase = 0
+        withAnimation(.linear(duration: 2.2).repeatForever(autoreverses: false)) {
+            phase = .pi * 2
+        }
+    }
+}
+
+/// A rectangle whose free edge ripples. Amplitude grows from the luff (the
+/// edge lashed to the mast, which cannot move) to the fly.
+private struct FlagCloth: Shape {
+    var phase: Double
+    var amplitude: CGFloat
+
+    var animatableData: Double {
+        get { phase }
+        set { phase = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let steps = 24
+        func wave(_ t: CGFloat) -> CGFloat {
+            sin(Double(t) * .pi * 2.1 + phase) * Double(amplitude) * Double(t)
+        }
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        for step in 0...steps {
+            let t = CGFloat(step) / CGFloat(steps)
+            path.addLine(to: CGPoint(x: rect.minX + rect.width * t,
+                                     y: rect.minY + wave(t)))
+        }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY + wave(1)))
+        for step in stride(from: steps, through: 0, by: -1) {
+            let t = CGFloat(step) / CGFloat(steps)
+            path.addLine(to: CGPoint(x: rect.minX + rect.width * t,
+                                     y: rect.maxY + wave(t)))
+        }
+        path.closeSubpath()
+        return path
     }
 }
 

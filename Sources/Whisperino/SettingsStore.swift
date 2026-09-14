@@ -74,6 +74,15 @@ class SettingsStore: ObservableObject {
                 totalTranscripts: history.count
             )
         }
+        // Likewise for the per-dictation log the charts read: installs that
+        // predate it start with whatever the history still holds.
+        if stats.samples.isEmpty && !history.isEmpty {
+            stats.samples = history.reversed().map {
+                UsageSample(date: $0.createdAt,
+                            words: Self.wordCount($0.text),
+                            isInstruction: $0.isInstruction)
+            }
+        }
     }
 
     static func wordCount(_ text: String) -> Int {
@@ -135,15 +144,22 @@ class SettingsStore: ObservableObject {
 
     // MARK: - History
 
-    func addTranscript(_ text: String, isInstruction: Bool = false) {
+    func addTranscript(_ text: String, isInstruction: Bool = false, seconds: Double = 0) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        history.insert(TranscriptEntry(text: trimmed, isInstruction: isInstruction), at: 0)
+        let entry = TranscriptEntry(text: trimmed, isInstruction: isInstruction)
+        history.insert(entry, at: 0)
         if history.count > Self.maxHistoryEntries {
             history = Array(history.prefix(Self.maxHistoryEntries))
         }
-        stats.totalWords += Self.wordCount(trimmed)
+        let words = Self.wordCount(trimmed)
+        stats.totalWords += words
         stats.totalTranscripts += 1
+        stats.samples.append(UsageSample(date: entry.createdAt, words: words,
+                                         isInstruction: isInstruction, seconds: seconds))
+        if stats.samples.count > UsageStats.maxSamples {
+            stats.samples.removeFirst(stats.samples.count - UsageStats.maxSamples)
+        }
     }
 
     func clearHistory() {

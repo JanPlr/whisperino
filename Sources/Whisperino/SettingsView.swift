@@ -1,233 +1,28 @@
 import AppKit
+import Charts
 import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - Brand
-//
-// Flat, modern, engineering-tool aesthetic (Langfuse/PostHog lineage):
-// near-white surfaces, hairline borders, small radii, full-bleed layout,
-// monospace micro-labels, one dark CTA per screen. The single black hero
-// card keeps the recording pill's surface so app and pill read as one
-// product.
-enum Brand {
-    // Content background.
-    static let canvas = dyn(light: NSColor(red: 0.984, green: 0.984, blue: 0.976, alpha: 1),
-                            dark: NSColor(red: 0.071, green: 0.071, blue: 0.067, alpha: 1))
-    // Sidebar background, slightly tinted.
-    static let sidebar = dyn(light: NSColor(red: 0.953, green: 0.953, blue: 0.941, alpha: 1),
-                             dark: NSColor(red: 0.102, green: 0.102, blue: 0.094, alpha: 1))
-    // Card surface.
-    static let card = dyn(light: NSColor.white,
-                          dark: NSColor(red: 0.118, green: 0.118, blue: 0.110, alpha: 1))
-    // Ink - primary buttons, selected states.
-    static let ink = dyn(light: NSColor(red: 0.067, green: 0.067, blue: 0.063, alpha: 1),
-                         dark: NSColor(red: 0.925, green: 0.925, blue: 0.910, alpha: 1))
-    // Hairline borders.
-    static let border = dyn(light: NSColor(white: 0, alpha: 0.10),
-                            dark: NSColor(white: 1, alpha: 0.12))
-    static let hover = dyn(light: NSColor(white: 0, alpha: 0.035),
-                           dark: NSColor(white: 1, alpha: 0.05))
-    static let selected = dyn(light: NSColor(white: 0, alpha: 0.07),
-                              dark: NSColor(white: 1, alpha: 0.09))
-
-    static func mono(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
-    }
-
-    private static func dyn(light: NSColor, dark: NSColor) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-        })
-    }
-}
-
-/// Compact solid-ink button - the one strong element per screen.
-private struct PrimaryButtonStyle: ButtonStyle {
-    var onDark = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12.5, weight: .semibold))
-            .foregroundStyle(onDark ? Color.black : Brand.card)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(onDark ? Color.white : Brand.ink)
-            )
-            .opacity(configuration.isPressed ? 0.75 : 1)
-    }
-}
-
-/// Hairline-bordered quiet button (Cancel, secondary actions).
-private struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12.5, weight: .medium))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(configuration.isPressed ? Brand.hover : Brand.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(Brand.border, lineWidth: 1)
-            )
-    }
-}
-
-/// Whisperino's text-input chrome. The editable control stays native for
-/// keyboard, selection, password-manager, and accessibility behavior, while
-/// every visible part (surface, border, spacing, focus treatment) belongs to
-/// the app's design system.
-private struct BrandTextInputModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .textFieldStyle(.plain)
-            .font(.system(size: 12.5))
-            .padding(.horizontal, 11)
-            .frame(minHeight: 36)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Brand.canvas)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(Brand.border, lineWidth: 1)
-            )
-    }
-}
-
-private extension View {
-    func brandTextInput() -> some View {
-        modifier(BrandTextInputModifier())
-    }
-}
-
-/// Keeps interactive card fills on one opaque surface and fades translucent
-/// state colors above it. Animating directly between `Brand.card` and an
-/// alpha-based dynamic color can briefly interpolate through a bright gray in
-/// dark mode.
-private struct InteractiveCardBackground: View {
-    let cornerRadius: CGFloat
-    let hovered: Bool
-    let selected: Bool
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(Brand.card)
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Brand.hover)
-                    .opacity(hovered && !selected ? 1 : 0)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Brand.selected)
-                    .opacity(selected ? 1 : 0)
-            }
-    }
-}
-
-/// Small custom icon action used inside setting rows and inputs.
-private struct InputIconButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 36, height: 36)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(configuration.isPressed ? Brand.selected : Brand.canvas)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(Brand.border, lineWidth: 1)
-            )
-    }
-}
-
-/// Flat keycap chip - mono label, hairline border (Langfuse keyboard hints).
-private struct KeyCap: View {
-    let label: String
-    var size: CGFloat = 11
-
-    var body: some View {
-        Text(label)
-            .font(Brand.mono(size, .semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, size * 0.55)
-            .padding(.vertical, size * 0.28)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Brand.card))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Brand.border, lineWidth: 1))
-    }
-}
-
-/// The black hero surface - the recording pill's color, so the app and
-/// the pill read as one product.
-private struct ConsoleCard<Content: View>: View {
-    var padding: CGFloat = 20
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.black)
-            )
-    }
-}
-
-/// Monospace micro-label ("TODAY", "USAGE", ...) - the Langfuse eyebrow.
-private struct SectionLabel: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-
-    var body: some View {
-        Text(text.uppercased())
-            .font(Brand.mono(10, .semibold))
-            .kerning(1.1)
-            .foregroundStyle(.secondary)
-    }
-}
-
-private struct BrandCard<Content: View>: View {
-    var padding: CGFloat = 16
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Brand.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Brand.border, lineWidth: 1)
-            )
-    }
-}
+// The window is built from stock SwiftUI: a sidebar `List`, grouped `Form`s,
+// `Toggle`, `Picker`, `Table`. No custom surfaces, palettes, or control
+// look-alikes - macOS supplies the vibrancy, selection, focus ring, hover,
+// contrast and accessibility behavior, and the app inherits every future
+// system refinement for free.
 
 // MARK: - Pages
 
-enum FlowPage: String, CaseIterable, Identifiable {
-    case home, general, dictation, ai, dictionary, snippets, agents
+enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
+    case overview, general, dictation, ai, dictionary, snippets, agents
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .home:       return "Overview"
+        case .overview:   return "Overview"
         case .general:    return "General"
         case .dictation:  return "Dictation"
-        case .ai:         return "AI"
+        case .ai:         return "Langdock"
         case .dictionary: return "Dictionary"
         case .snippets:   return "Snippets"
         case .agents:     return "Agents"
@@ -236,11 +31,11 @@ enum FlowPage: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .home:       return "square.grid.2x2"
+        case .overview:   return "square.grid.2x2"
         case .general:    return "gearshape"
         case .dictation:  return "waveform"
-        case .ai:         return "sparkles"
-        case .dictionary: return "text.book.closed"
+        case .ai:         return ""   // drawn as the Langdock mark
+        case .dictionary: return "character.book.closed"
         case .snippets:   return "text.quote"
         case .agents:     return "cpu"
         }
@@ -250,394 +45,179 @@ enum FlowPage: String, CaseIterable, Identifiable {
 // MARK: - Root
 
 struct SettingsView: View {
-    // A window opened from “Settings…” should land on an actual preference
+    // A window opened from "Settings…" should land on an actual preference
     // category, never an overview that asks the user to find Settings again.
-    @State private var page: FlowPage
+    @State private var page: SettingsPage
 
-    init(startOnHome: Bool = false) {
-        _page = State(initialValue: startOnHome ? .home : .general)
+    init(startOnOverview: Bool = false) {
+        _page = State(initialValue: startOnOverview ? .overview : .general)
+    }
+
+    init(page: SettingsPage) {
+        _page = State(initialValue: page)
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            FlowSidebar(page: $page)
-                .frame(width: 196)
-                .background(Brand.sidebar)
-
-            Rectangle()
-                .fill(Brand.border)
-                .frame(width: 1)
-
-            Group {
-                switch page {
-                case .home:       HomePage(page: $page)
-                case .general:    GeneralSettingsPage()
-                case .dictation:  DictationSettingsPage()
-                case .ai:         AIPage()
-                case .dictionary: DictionaryPage()
-                case .snippets:   SnippetsPage()
-                case .agents:     AgentsPage()
-                }
+        NavigationSplitView {
+            List(SettingsPage.allCases, selection: $page) { item in
+                sidebarRow(item)
+                    .tag(item)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Brand.canvas)
+            .listStyle(.sidebar)
+            .safeAreaInset(edge: .top, spacing: 0) { SidebarHeader() }
+            .navigationSplitViewColumnWidth(min: 190, ideal: 200, max: 240)
+        } detail: {
+            detail
+                .frame(minWidth: 520, minHeight: 480)
         }
-        .frame(minWidth: 980, minHeight: 640)
-        .ignoresSafeArea()
+        .frame(minWidth: 760, minHeight: 520)
+    }
+
+    @ViewBuilder
+    private func sidebarRow(_ item: SettingsPage) -> some View {
+        if item == .ai {
+            // The Langdock mark itself, at the weight of an SF Symbol beside it.
+            Label {
+                Text(item.title)
+            } icon: {
+                LangdockMark()
+                    .frame(width: 11, height: 15)
+            }
+        } else {
+            Label(item.title, systemImage: item.icon)
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch page {
+        case .overview:   OverviewPage(page: $page)
+        case .general:    GeneralPage()
+        case .dictation:  DictationPage()
+        case .ai:         LangdockPage()
+        case .dictionary: DictionaryPage()
+        case .snippets:   SnippetsPage()
+        case .agents:     AgentsPage()
+        }
     }
 }
 
-// MARK: - Sidebar
-
-private struct FlowSidebar: View {
-    @Binding var page: FlowPage
+/// The mark and the name, once, where a document app would show its title.
+/// With the Rafterino flag hoisted the whole identity goes to sea.
+private struct SidebarHeader: View {
     @ObservedObject private var store = SettingsStore.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            // Wordmark - small black chip, a nod to the pill. With the
-            // Rafterino flag hoisted, the whole identity goes to sea.
-            HStack(spacing: 8) {
-                if store.settings.rafterinoModeEnabled {
-                    RafterinoRaftMark()
-                        .frame(width: 15, height: 15)
-                        .padding(3)
-                        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Rafterino.field))
-                } else {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 21, height: 21)
-                        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.black))
-                }
-                Text(store.settings.rafterinoModeEnabled ? "rafterino" : "whisperino")
-                    .font(.system(size: 14, weight: .bold))
+        HStack(spacing: 9) {
+            if store.settings.rafterinoModeEnabled {
+                RafterinoRaftMark()
+                    .frame(width: 18, height: 18)
+                    .padding(5)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Rafterino.field))
+            } else {
+                BrandBadge(size: 28)
             }
-            .padding(.leading, 10)
-            .padding(.top, 44)   // clear the traffic lights (transparent titlebar)
-            .padding(.bottom, 20)
-
-            SidebarSectionHeading("App")
-            SidebarItem(item: .home, selection: $page)
-
-            SidebarSectionHeading("Preferences")
-                .padding(.top, 11)
-            ForEach([FlowPage.general, .dictation, .ai]) { item in
-                SidebarItem(item: item, selection: $page)
-            }
-
-            SidebarSectionHeading("Personalize")
-                .padding(.top, 11)
-            ForEach([FlowPage.dictionary, .snippets, .agents]) { item in
-                SidebarItem(item: item, selection: $page)
-            }
-
-            Spacer()
-
-            if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                Text("v\(version)")
-                    .font(Brand.mono(10))
-                    .foregroundStyle(.tertiary)
-                    .padding(.leading, 10)
-                    .padding(.top, 8)
-            }
+            Text(store.settings.rafterinoModeEnabled ? "rafterino" : "whisperino")
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 14)
     }
 }
 
-private struct SidebarSectionHeading: View {
-    let title: String
-    init(_ title: String) { self.title = title }
+// MARK: - Overview
 
-    var body: some View {
-        Text(title.uppercased())
-            .font(Brand.mono(9, .semibold))
-            .kerning(0.9)
-            .foregroundStyle(.tertiary)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 4)
-    }
-}
-
-private struct SidebarItem: View {
-    let item: FlowPage
-    @Binding var selection: FlowPage
-    @State private var hovering = false
-
-    private var isSelected: Bool { selection == item }
-
-    var body: some View {
-        Button {
-            selection = item
-        } label: {
-            HStack(spacing: 8) {
-                if item == .ai {
-                    // The Langdock mark stands in for the generic icon here.
-                    LangdockMark(color: isSelected ? .primary : .secondary)
-                        .frame(width: 16, height: 15)
-                } else {
-                    Image(systemName: item.icon)
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(width: 16)
-                }
-                Text(item.title)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                Spacer()
-            }
-            .foregroundStyle(isSelected ? .primary : .secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? Brand.selected : (hovering ? Brand.hover : .clear))
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-    }
-}
-
-// MARK: - Page scaffold
-
-private struct PageHeader: View {
-    let title: String
-    var subtitle: String? = nil
-    var actionLabel: String? = nil
-    var action: (() -> Void)? = nil
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.system(size: 20, weight: .semibold))
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if let actionLabel, let action {
-                Button(actionLabel, action: action)
-                    .buttonStyle(PrimaryButtonStyle())
-            }
-        }
-        .padding(.top, 40)   // clear the transparent titlebar
-    }
-}
-
-private struct PageScaffold<Content: View>: View {
-    let title: String
-    var subtitle: String? = nil
-    var actionLabel: String? = nil
-    var action: (() -> Void)? = nil
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                PageHeader(title: title, subtitle: subtitle,
-                           actionLabel: actionLabel, action: action)
-                content
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 32)
-            .frame(maxWidth: 860, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-// MARK: - Shared list row + editor sheet chrome
-
-/// "lead → trail" list row with hover edit/delete.
-private struct MappingRow: View {
-    let lead: String
-    var trail: String? = nil
-    var leadMono = false
-    let onEdit: () -> Void
-    let onDelete: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(lead)
-                .font(leadMono ? Brand.mono(13, .semibold) : .system(size: 13, weight: .medium))
-                .lineLimit(1)
-
-            if let trail {
-                Text("→")
-                    .font(Brand.mono(12))
-                    .foregroundStyle(.tertiary)
-                Text(trail)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            Spacer(minLength: 12)
-
-            HStack(spacing: 10) {
-                Button(action: onEdit) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Edit")
-
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Delete")
-            }
-            .opacity(hovering ? 1 : 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .contentShape(Rectangle())
-        .background(hovering ? Brand.hover : .clear)
-        .onHover { hovering = $0 }
-        .onTapGesture { onEdit() }
-    }
-}
-
-/// Modal sheet chrome - title, content, Cancel / primary action row.
-private struct EditorSheet<Content: View>: View {
-    let title: String
-    let actionLabel: String
-    let actionEnabled: Bool
-    let onSubmit: () -> Void
-    @ViewBuilder var content: Content
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-
-            content
-
-            HStack(spacing: 8) {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                Button(actionLabel) {
-                    onSubmit()
-                    dismiss()
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(!actionEnabled)
-            }
-            .padding(.top, 4)
-        }
-        .padding(20)
-        .frame(width: 440)
-        .background(Brand.card)
-    }
-}
-
-private struct EmptyListCard: View {
-    let icon: String
-    let title: String
-    let hint: String
-
-    var body: some View {
-        BrandCard {
-            VStack(spacing: 7) {
-                Image(systemName: icon)
-                    .font(.system(size: 24))
-                    .foregroundStyle(.tertiary)
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(hint)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 22)
-        }
-    }
-}
-
-// MARK: - Home
-
-private struct HomePage: View {
-    @Binding var page: FlowPage
+/// Usage at a glance. Stock grouped form, Swift Charts, system colours -
+/// the one brand touch is the lime accent on today's bar.
+private struct OverviewPage: View {
+    @Binding var page: SettingsPage
     @ObservedObject private var store = SettingsStore.shared
     @ObservedObject private var downloader = ModelDownloader.shared
 
-    private var firstName: String {
-        let name = NSFullUserName().components(separatedBy: " ").first ?? ""
-        return name.isEmpty ? "there" : name
-    }
+    private var usage: UsageDigest { UsageDigest(stats: store.stats) }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Hey \(firstName).")
-                        .font(.system(size: 20, weight: .semibold))
-                    HStack(spacing: 6) {
-                        Text(store.settings.recordingActivation == .tap ? "Tap" : "Hold")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                        KeyCap(label: store.settings.triggerKey.shortLabel)
-                        Text(store.settings.recordingActivation == .tap
-                             ? "to start talking - tap it again to send."
-                             : "and just talk - words land where your cursor is.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.top, 40)
+        let usage = self.usage
 
-                if !downloader.isInstalled(store.settings.asrModel) {
-                    BrandCard {
-                        HStack(spacing: 16) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Preparing speech model")
-                                    .font(.system(size: 13, weight: .semibold))
-                                Text(modelSetupDetail)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                if let fraction = downloader.status.fraction {
-                                    ProgressView(value: fraction)
-                                        .progressViewStyle(.linear)
-                                        .frame(maxWidth: 300)
-                                }
+        Form {
+            if !downloader.isInstalled(store.settings.asrModel) {
+                Section {
+                    LabeledContent("Speech model") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(modelSetupDetail)
+                            if let fraction = downloader.status.fraction {
+                                ProgressView(value: fraction)
+                                    .frame(maxWidth: 240)
                             }
-                            Spacer()
-                            Button("View model") { page = .dictation }
-                                .buttonStyle(SecondaryButtonStyle())
                         }
                     }
-                }
-
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 20) {
-                        HeroCard(page: $page)
-                        HistorySection()
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    StatsColumn()
-                        .frame(width: 224)
+                    Button("Open Dictation Settings…") { page = .dictation }
                 }
             }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Section {
+                HStack(spacing: 0) {
+                    StatTile(value: usage.wordsToday.formatted(), label: "Words today")
+                    Divider().padding(.vertical, 4)
+                    StatTile(value: store.stats.totalWords.formatted(), label: "Words overall")
+                    Divider().padding(.vertical, 4)
+                    StatTile(value: usage.timeSaved, label: "Time saved")
+                    Divider().padding(.vertical, 4)
+                    StatTile(value: usage.dayStreak.formatted(), label: "Day streak")
+                }
+                .padding(.vertical, 6)
+            }
+
+            Section {
+                WordsPerDayChart(days: usage.lastDays)
+                    .frame(height: 180)
+                    .padding(.vertical, 6)
+            } header: {
+                Text("Last 30 days")
+            }
+
+            Section {
+                HourOfDayChart(hours: usage.byHour)
+                    .frame(height: 140)
+                    .padding(.vertical, 6)
+            } header: {
+                Text("When you dictate")
+            }
+
+            Section {
+                LabeledContent("Average dictation",
+                               value: "\(usage.averageWords) words")
+                if let pace = usage.speakingPace {
+                    LabeledContent("Speaking pace", value: "\(pace) words per minute")
+                }
+                LabeledContent("Talk to your screen",
+                               value: usage.instructionShare)
+                LabeledContent("Longest dictation",
+                               value: "\(usage.longestWords.formatted()) words")
+            }
+
+            Section {
+                if store.history.isEmpty {
+                    Text("No dictations yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(store.history.prefix(10)) { entry in
+                        HistoryRow(entry: entry)
+                    }
+                }
+            } header: {
+                Text("Recent")
+            } footer: {
+                if !store.history.isEmpty {
+                    Button("Clear History", role: .destructive) { store.clearHistory() }
+                        .buttonStyle(.link)
+                }
+            }
         }
+        .formStyle(.grouped)
     }
 
     private var modelSetupDetail: String {
@@ -654,341 +234,291 @@ private struct HomePage: View {
     }
 }
 
-/// One black card - the pill's surface, holding the AI pitch.
-private struct HeroCard: View {
-    @Binding var page: FlowPage
-    @ObservedObject private var store = SettingsStore.shared
+/// Big number, small label.
+private struct StatTile: View {
+    let value: String
+    let label: String
 
-    private var aiReady: Bool {
-        store.settings.aiModeEnabled
-            && !store.settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.system(.title2, design: .rounded, weight: .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+    }
+}
+
+// MARK: Overview · charts
+
+private struct DayCount: Identifiable {
+    let day: Date
+    let words: Int
+    let dictations: Int
+    var id: Date { day }
+}
+
+private struct HourCount: Identifiable {
+    let hour: Int
+    let dictations: Int
+    var id: Int { hour }
+}
+
+/// Words per day for the last 30 days. Today is drawn in the brand lime,
+/// the rest in the system accent at reduced strength; the dashed rule is the
+/// 30-day average.
+private struct WordsPerDayChart: View {
+    let days: [DayCount]
+    @State private var selectedDay: Date?
+
+    private var average: Double {
+        let active = days.filter { $0.words > 0 }
+        guard !active.isEmpty else { return 0 }
+        return Double(active.reduce(0) { $0 + $1.words }) / Double(active.count)
+    }
+
+    private var selected: DayCount? {
+        guard let selectedDay else { return nil }
+        let calendar = Calendar.current
+        return days.first { calendar.isDate($0.day, inSameDayAs: selectedDay) }
     }
 
     var body: some View {
-        let trigger = store.settings.triggerKey.shortLabel
-
-        ConsoleCard {
-            VStack(alignment: .leading, spacing: 7) {
-                Text("Talk to your screen, anywhere you type.")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-
-                Text(aiReady
-                     ? (store.settings.recordingActivation == .tap
-                        ? "Tap \(trigger) + ⇧, speak, then tap \(trigger) again to send."
-                        : "Hold \(trigger) + ⇧, speak, and the answer lands at your cursor.")
-                     : "Add your Langdock API key and every text field becomes a Langdock prompt.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.6))
-
-                HStack(spacing: 10) {
-                    Button(aiReady ? "Open Langdock settings" : "Get started") {
-                        page = .ai
-                    }
-                    .buttonStyle(PrimaryButtonStyle(onDark: true))
-
-                    Text("\(trigger) + ⇧")
-                        .font(Brand.mono(11))
-                        .foregroundStyle(.white.opacity(0.45))
+        VStack(alignment: .trailing, spacing: 6) {
+            Group {
+                if let selected, selected.dictations > 0 {
+                    Text(selected.day, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated))
+                    + Text("  ·  \(selected.words.formatted()) words")
+                } else {
+                    Text(" ")
                 }
-                .padding(.top, 7)
+            }
+            .font(.caption)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+
+            chart
+        }
+    }
+
+    private var chart: some View {
+        Chart {
+            ForEach(days) { day in
+                BarMark(
+                    x: .value("Day", day.day, unit: .day),
+                    y: .value("Words", day.words),
+                    width: .ratio(0.6)
+                )
+                .foregroundStyle(Calendar.current.isDateInToday(day.day)
+                                 ? AnyShapeStyle(Brand.limeDeep)
+                                 : AnyShapeStyle(Color.accentColor.opacity(0.55)))
+                .cornerRadius(3)
+            }
+            if average > 0 {
+                RuleMark(y: .value("Average", average))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    .foregroundStyle(.tertiary)
+            }
+            if let selected, selected.dictations > 0 {
+                RuleMark(x: .value("Selected", selected.day, unit: .day))
+                    .foregroundStyle(.quaternary)
+            }
+        }
+        .chartXSelection(value: $selectedDay)
+        .chartYScale(domain: 0...Double(max(days.map(\.words).max() ?? 0, 10)) * 1.15)
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .day, count: 7)) { _ in
+                AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
+                AxisGridLine().foregroundStyle(.quaternary)
+                AxisValueLabel()
             }
         }
     }
 }
 
-// MARK: Home · history
+/// Dictations by hour of day, all time.
+private struct HourOfDayChart: View {
+    let hours: [HourCount]
 
-private struct HistorySection: View {
-    @ObservedObject private var store = SettingsStore.shared
-
-    private static let dayLabelFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MMMM d"
-        return f
-    }()
-
-    private var groups: [(label: String, entries: [TranscriptEntry])] {
-        let cal = Calendar.current
-        let byDay = Dictionary(grouping: store.history) { cal.startOfDay(for: $0.createdAt) }
-        return byDay.keys.sorted(by: >).map { day in
-            let label: String
-            if cal.isDateInToday(day) {
-                label = "Today"
-            } else if cal.isDateInYesterday(day) {
-                label = "Yesterday"
-            } else {
-                label = Self.dayLabelFormatter.string(from: day)
-            }
-            let entries = byDay[day]!.sorted { $0.createdAt > $1.createdAt }
-            return (label, entries)
-        }
-    }
+    private var peak: Int { hours.map(\.dictations).max() ?? 0 }
 
     var body: some View {
-        if store.history.isEmpty {
-            EmptyListCard(
-                icon: "waveform.badge.mic",
-                title: "No dictations yet",
-                hint: SettingsStore.shared.settings.recordingActivation == .tap
-                    ? "Tap \(SettingsStore.shared.settings.triggerKey.shortLabel) and start talking - your transcripts show up here."
-                    : "Hold \(SettingsStore.shared.settings.triggerKey.shortLabel) and start talking - your transcripts show up here."
+        Chart(hours) { hour in
+            BarMark(
+                x: .value("Hour", hour.hour),
+                y: .value("Dictations", hour.dictations),
+                width: .ratio(0.7)
             )
-        } else {
-            VStack(alignment: .leading, spacing: 16) {
-                ForEach(groups, id: \.label) { group in
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            SectionLabel(group.label)
-                            Spacer()
-                            if group.label == groups.first?.label {
-                                Button("Clear all") { store.clearHistory() }
-                                    .buttonStyle(.plain)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-
-                        BrandCard(padding: 0) {
-                            VStack(spacing: 0) {
-                                ForEach(group.entries) { entry in
-                                    HistoryRow(entry: entry)
-                                    if entry.id != group.entries.last?.id {
-                                        Divider().padding(.leading, 68)
-                                    }
-                                }
-                            }
-                        }
+            .foregroundStyle(hour.dictations == peak && peak > 0
+                             ? AnyShapeStyle(Brand.limeDeep)
+                             : AnyShapeStyle(Color.accentColor.opacity(0.55)))
+            .cornerRadius(2)
+        }
+        .chartXScale(domain: -0.5...23.5)
+        .chartXAxis {
+            AxisMarks(values: [0, 6, 12, 18]) { value in
+                AxisValueLabel {
+                    if let h = value.as(Int.self) {
+                        Text(Self.hourLabel(h))
                     }
                 }
             }
         }
+        .chartYAxis(.hidden)
+    }
+
+    static func hourLabel(_ hour: Int) -> String {
+        var components = DateComponents()
+        components.hour = hour
+        let date = Calendar.current.date(from: components) ?? Date()
+        return date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+    }
+}
+
+// MARK: Overview · numbers
+
+/// Everything the Overview shows, derived once from the usage log.
+private struct UsageDigest {
+    let wordsToday: Int
+    let dayStreak: Int
+    let lastDays: [DayCount]
+    let byHour: [HourCount]
+    let averageWords: Int
+    let longestWords: Int
+    let speakingPace: Int?
+    let instructionShare: String
+    let timeSaved: String
+
+    init(stats: UsageStats) {
+        let calendar = Calendar.current
+        let samples = stats.samples
+        let today = calendar.startOfDay(for: Date())
+
+        // Per-day totals.
+        var perDay: [Date: (words: Int, count: Int)] = [:]
+        for sample in samples {
+            let day = calendar.startOfDay(for: sample.date)
+            perDay[day, default: (0, 0)].words += sample.words
+            perDay[day, default: (0, 0)].count += 1
+        }
+        wordsToday = perDay[today]?.words ?? 0
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+
+        lastDays = (0..<30).reversed().map { offset in
+            let day = calendar.date(byAdding: .day, value: -offset, to: today)!
+            let entry = perDay[day]
+            return DayCount(day: day, words: entry?.words ?? 0, dictations: entry?.count ?? 0)
+        }
+
+        // Streaks over the set of active days.
+        let activeDays = Set(perDay.keys)
+        var current = 0
+        var day = today
+        if !activeDays.contains(day) { day = yesterday }
+        while activeDays.contains(day) {
+            current += 1
+            day = calendar.date(byAdding: .day, value: -1, to: day)!
+        }
+        dayStreak = current
+
+        // Hour of day.
+        var hourCounts = Array(repeating: 0, count: 24)
+        for sample in samples {
+            hourCounts[calendar.component(.hour, from: sample.date)] += 1
+        }
+        byHour = hourCounts.enumerated().map { HourCount(hour: $0.offset, dictations: $0.element) }
+
+        // Per-dictation figures.
+        let count = max(stats.totalTranscripts, 1)
+        averageWords = stats.totalWords / count
+        longestWords = samples.map(\.words).max() ?? 0
+
+        let timed = samples.filter { $0.seconds >= 2 && $0.words >= 3 }
+        if timed.count >= 5 {
+            let words = timed.reduce(0) { $0 + $1.words }
+            let minutes = timed.reduce(0.0) { $0 + $1.seconds } / 60
+            speakingPace = minutes > 0 ? Int((Double(words) / minutes).rounded()) : nil
+        } else {
+            speakingPace = nil
+        }
+
+        let instructions = samples.filter(\.isInstruction).count
+        instructionShare = samples.isEmpty
+            ? "—"
+            : "\(Int((Double(instructions) / Double(samples.count) * 100).rounded()))% of dictations"
+
+        // Typing the same words at 40 wpm versus the time actually spent
+        // speaking (or, without timings, speaking at ~150 wpm).
+        let typingMinutes = Double(stats.totalWords) / 40
+        let spokenMinutes: Double = {
+            let known = samples.reduce(0.0) { $0 + $1.seconds } / 60
+            let untimedWords = samples.filter { $0.seconds < 2 }.reduce(0) { $0 + $1.words }
+            return known + Double(untimedWords) / 150
+        }()
+        let saved = max(typingMinutes - spokenMinutes, 0)
+        timeSaved = Self.durationLabel(minutes: saved)
+    }
+
+    private static func durationLabel(minutes: Double) -> String {
+        if minutes < 1 { return "0 min" }
+        if minutes < 60 { return "\(Int(minutes.rounded())) min" }
+        let hours = minutes / 60
+        if hours < 10 { return String(format: "%.1f h", hours) }
+        return "\(Int(hours.rounded())) h"
     }
 }
 
 private struct HistoryRow: View {
     let entry: TranscriptEntry
-    @State private var hovering = false
-    @State private var copied = false
-
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f
-    }()
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(Self.timeFormatter.string(from: entry.createdAt))
-                .font(Brand.mono(11))
-                .foregroundStyle(.secondary)
-                .frame(width: 40, alignment: .leading)
-
-            if entry.isInstruction {
-                // Langdock mark flags AI-mode transcripts.
-                LangdockMark(color: .secondary)
-                    .frame(width: 11, height: 11)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(entry.createdAt, format: .relative(presentation: .named))
+                if entry.isInstruction {
+                    LangdockMark(color: .secondary)
+                        .frame(width: 7, height: 10)
+                    Text("Langdock")
+                }
             }
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             Text(entry.text)
-                .font(.system(size: 13))
-                .lineLimit(3)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            Button("Copy") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(entry.text, forType: .string)
-                copied = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
-            } label: {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 11))
-                    .foregroundStyle(copied ? Color.green : Color.secondary)
-            }
-            .buttonStyle(.plain)
-            .opacity(hovering || copied ? 1 : 0)
-            .help("Copy")
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(hovering ? Brand.hover : .clear)
-        .onHover { hovering = $0 }
-    }
-}
-
-// MARK: Home · stats
-
-private struct StatsColumn: View {
-    @ObservedObject private var store = SettingsStore.shared
-
-    private var wordsToday: Int {
-        let cal = Calendar.current
-        return store.history
-            .filter { cal.isDateInToday($0.createdAt) }
-            .reduce(0) { $0 + SettingsStore.wordCount($1.text) }
-    }
-
-    /// Consecutive days with at least one dictation, ending today or yesterday.
-    private var dayStreak: Int {
-        let cal = Calendar.current
-        let days = Set(store.history.map { cal.startOfDay(for: $0.createdAt) })
-        guard !days.isEmpty else { return 0 }
-        var day = cal.startOfDay(for: Date())
-        if !days.contains(day) {
-            guard let yesterday = cal.date(byAdding: .day, value: -1, to: day),
-                  days.contains(yesterday) else { return 0 }
-            day = yesterday
-        }
-        var streak = 0
-        while days.contains(day) {
-            streak += 1
-            day = cal.date(byAdding: .day, value: -1, to: day)!
-        }
-        return streak
-    }
-
-    var body: some View {
-        // Langfuse "Community Stats" panel: eyebrow + label/value rows.
-        BrandCard {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionLabel("Usage")
-                    .padding(.bottom, 2)
-
-                StatRow(label: "Total words", value: store.stats.totalWords.formatted())
-                Divider()
-                StatRow(label: "Words today", value: wordsToday.formatted())
-                Divider()
-                StatRow(label: "Day streak", value: dayStreak.formatted())
-                Divider()
-                StatRow(label: "Dictations", value: store.stats.totalTranscripts.formatted())
             }
         }
     }
 }
 
-private struct StatRow: View {
-    let label: String
-    let value: String
+// MARK: - General
 
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 12.5))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-                .font(Brand.mono(12.5, .semibold))
-        }
-    }
-}
-
-// MARK: - AI page
-
-private struct AIPage: View {
-    @ObservedObject private var store = SettingsStore.shared
-    @State private var showAPIKey = false
-
-    private var hasAPIKey: Bool {
-        !store.settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var body: some View {
-        let triggerLabel = store.settings.triggerKey.shortLabel
-
-        PageScaffold(
-            title: "Langdock",
-            subtitle: "Everything Langdock does for you: cleaning up dictations and Talk to your screen."
-        ) {
-            SettingsCard(title: "API key") {
-                HStack {
-                    if showAPIKey {
-                        TextField("Paste Langdock API key", text: $store.settings.apiKey)
-                            .brandTextInput()
-                    } else {
-                        SecureField("Paste Langdock API key", text: $store.settings.apiKey)
-                            .brandTextInput()
-                    }
-                    Button {
-                        showAPIKey.toggle()
-                    } label: {
-                        Image(systemName: showAPIKey ? "eye.slash" : "eye")
-                    }
-                    .buttonStyle(InputIconButtonStyle())
-                    .help(showAPIKey ? "Hide API key" : "Show API key")
-                }
-                CaptionText("Without a key, transcription falls back to raw on-device output - no cleanup, no Talk to your screen.")
-            }
-
-            SettingsCard(title: "Dictation cleanup") {
-                // fixedSize pins the row to its tallest card's ideal height so
-                // both cards' maxHeight:.infinity frames match instead of the
-                // ScrollView stretching them.
-                HStack(alignment: .top, spacing: 10) {
-                    ChoiceCard(
-                        title: "Raw",
-                        detail: "Exactly what you said, including mistakes.",
-                        selected: !store.settings.llmRefinementEnabled,
-                        enabled: true
-                    ) {
-                        store.settings.llmRefinementEnabled = false
-                    }
-                    ChoiceCard(
-                        title: "Cleaned up",
-                        detail: "Langdock removes filler, fixes punctuation, applies your dictionary.",
-                        selected: store.settings.llmRefinementEnabled,
-                        enabled: hasAPIKey
-                    ) {
-                        store.settings.llmRefinementEnabled = true
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            SettingsCard(title: "Talk to your screen") {
-                ToggleRow(label: "Talk to your screen (\(triggerLabel) + ⇧)",
-                          isOn: $store.settings.aiModeEnabled,
-                          disabled: !hasAPIKey)
-                CaptionText("Hold **\(triggerLabel) + ⇧** (or add ⇧ while already dictating) → Whisperino silently screenshots your current screen and frames the window → speak about what's on screen → tap **\(triggerLabel)** or press **Return** to submit. Langdock answers using the screenshot and pastes the reply inline. It's one-shot: to iterate, start again and the fresh screenshot picks up the latest state.")
-
-                Divider().padding(.vertical, 4)
-
-                ShortcutRow(keys: "\(triggerLabel) + ⇧", label: "Start Talk to your screen (screenshots the screen)")
-                ShortcutRow(keys: "tap \(triggerLabel)", label: "Submit")
-                ShortcutRow(keys: "↩", label: "Submit")
-                ShortcutRow(keys: "esc", label: "Cancel")
-            }
-        }
-        .onChange(of: store.settings.apiKey) { oldValue, newValue in
-            let hadKey = !oldValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            let hasKey = !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            if !hadKey && hasKey {
-                // First key paste - opt the user into the full AI experience.
-                // They can flip either off if the API misbehaves.
-                store.settings.llmRefinementEnabled = true
-                store.settings.aiModeEnabled = true
-            } else if hadKey && !hasKey {
-                // Key cleared - nothing to call, switch off both.
-                store.settings.llmRefinementEnabled = false
-                store.settings.aiModeEnabled = false
-            }
-        }
-    }
-}
-
-// MARK: - Preference pages
-
-private struct GeneralSettingsPage: View {
+private struct GeneralPage: View {
     @ObservedObject private var store = SettingsStore.shared
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
-        PageScaffold(
-            title: "General",
-            subtitle: "Startup, playback, and the overall Whisperino experience."
-        ) {
-            SettingsCard(title: "Startup") {
-                ToggleRow(label: "Launch at login", isOn: Binding(
+        Form {
+            Section {
+                Toggle("Launch at login", isOn: Binding(
                     get: { launchAtLogin },
                     set: { newValue in
                         do {
@@ -1001,107 +531,319 @@ private struct GeneralSettingsPage: View {
                         launchAtLogin = SMAppService.mainApp.status == .enabled
                     }
                 ))
-                CaptionText("Keep Whisperino ready in the menu bar after you sign in.")
+                .toggleStyle(.switch)
+
+                Toggle("Pause media while dictating", isOn: $store.settings.pauseMediaOnRecordingStart)
+                    .toggleStyle(.switch)
+                Toggle("Play sounds on start and stop", isOn: $store.settings.soundEffectsEnabled)
+                    .toggleStyle(.switch)
             }
 
-            SettingsCard(title: "Playback & feedback") {
-                ToggleRow(
-                    label: "Pause media while dictating",
-                    isOn: $store.settings.pauseMediaOnRecordingStart
-                )
-                Divider()
-                ToggleRow(label: "Sound effects on start / stop", isOn: $store.settings.soundEffectsEnabled)
-                CaptionText("Paused media resumes automatically when recording ends or is cancelled.")
+            Section {
+                LabeledContent("Rafterino mode") {
+                    RafterinoFlagHoist(isHoisted: $store.settings.rafterinoModeEnabled)
+                }
             }
+        }
+        .formStyle(.grouped)
+    }
+}
 
-            SettingsCard(title: "Appearance") {
-                HStack(alignment: .center, spacing: 16) {
-                    RafterinoFlag()
-                        .frame(width: 64)
+// MARK: - Dictation
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        ToggleRow(label: "Hoist the flag", isOn: $store.settings.rafterinoModeEnabled)
-                        CaptionText("Rafterino mode gives the notch an ocean waveform and a tiny sailing raft.")
+private struct DictationPage: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @ObservedObject private var downloader = ModelDownloader.shared
+    @State private var showLanguagePicker = false
+
+    private var selectedModel: ASRModelDescriptor {
+        ASRModelCatalog.descriptor(for: store.settings.asrModel)
+    }
+
+    private var languageSummary: String {
+        let codes = store.settings.transcriptionLanguageCodes
+        switch codes.count {
+        case 0: return "Automatic"
+        case 1...3:
+            let names = TranscriptionLanguageCatalog.localizedOptions
+                .filter { codes.contains($0.code) }
+                .map(\.name)
+            return names.isEmpty ? "Automatic" : names.formatted(.list(type: .and))
+        default: return "\(codes.count) languages"
+        }
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Speech model", selection: $store.settings.asrModel) {
+                    ForEach(ASRModelCatalog.all) { model in
+                        Text(model.displayName).tag(model.id)
                     }
+                }
+                modelStatus
+                if selectedModel.supportsStreaming {
+                    Toggle("Show live text while speaking",
+                           isOn: $store.settings.streamingTranscriptionEnabled)
+                        .toggleStyle(.switch)
+                        .disabled(!downloader.isInstalled(selectedModel.id))
+                }
+                LabeledContent("Languages") {
+                    HStack(spacing: 10) {
+                        Text(languageSummary)
+                            .foregroundStyle(.secondary)
+                        Button("Choose…") { showLanguagePicker = true }
+                    }
+                }
+            }
+
+            Section {
+                LabeledContent("Dictation buttons") {
+                    TriggerEditor(shortcuts: $store.settings.triggerKeys, defaultShortcuts: [.fn])
+                }
+                Picker("Recording", selection: $store.settings.recordingActivation) {
+                    Text("Hold to record, release to send").tag(RecordingActivation.hold)
+                    Text("Tap to start, tap again to send").tag(RecordingActivation.tap)
+                }
+                .pickerStyle(.radioGroup)
+            }
+
+            Section {
+                AutoSubmitRow()
+            }
+        }
+        .formStyle(.grouped)
+        .sheet(isPresented: $showLanguagePicker) {
+            LanguagePickerSheet(selection: $store.settings.transcriptionLanguageCodes)
+        }
+    }
+
+    @ViewBuilder
+    private var modelStatus: some View {
+        let model = selectedModel
+        let progress: Double? = {
+            guard case .downloading(let id, _, _) = downloader.status, id == model.id else { return nil }
+            return downloader.status.fraction
+        }()
+        let failure: String? = {
+            guard case .failed(let id, let message) = downloader.status, id == model.id else { return nil }
+            return message
+        }()
+
+        if downloader.isInstalled(model.id), progress == nil, failure == nil {
+            EmptyView()
+        } else {
+            LabeledContent("Status") {
+                statusDetail(model: model, progress: progress, failure: failure)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statusDetail(model: ASRModelDescriptor,
+                              progress: Double?,
+                              failure: String?) -> some View {
+        Group {
+            if let progress {
+                HStack(spacing: 10) {
+                    ProgressView(value: progress)
+                        .frame(width: 160)
+                    Text("\(Int(progress * 100))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Button("Cancel") { downloader.cancel() }
+                }
+            } else {
+                HStack(spacing: 10) {
+                    if let failure {
+                        Text(failure)
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                    }
+                    Button(failure == nil ? "Download" : "Retry") {
+                        downloader.ensure(model.id)
+                    }
+                    .disabled(downloader.status.isDownloading)
                 }
             }
         }
     }
+
+    private func sizeLabel(_ model: ASRModelDescriptor) -> String {
+        let mib = Double(model.expectedBytes) / 1_048_576
+        return mib >= 1024 ? String(format: "%.1f GB", mib / 1024) : "\(Int(mib.rounded())) MB"
+    }
 }
 
-private struct DictationSettingsPage: View {
-    @ObservedObject private var store = SettingsStore.shared
+// MARK: Dictation · languages
+
+private struct LanguageOption: Identifiable, Hashable {
+    let code: String
+    let name: String
+    var id: String { code }
+}
+
+private struct LanguagePickerSheet: View {
+    @Binding var selection: [String]
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+
+    private var options: [LanguageOption] {
+        TranscriptionLanguageCatalog.localizedOptions.map {
+            LanguageOption(code: $0.code, name: $0.name)
+        }
+    }
+
+    private var filtered: [LanguageOption] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return options }
+        return options.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || $0.code.localizedCaseInsensitiveContains(query)
+        }
+    }
 
     var body: some View {
-        PageScaffold(
-            title: "Dictation",
-            subtitle: "Choose how recording starts, which languages to expect, and where text goes."
-        ) {
-            SpeechModelPicker()
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Transcription Languages")
+                .font(.headline)
+            Text("Leave everything unchecked to detect the spoken language automatically.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
 
-            SettingsCard(title: "Languages") {
-                LanguageMultiSelector(selection: $store.settings.transcriptionLanguageCodes)
-            }
+            TextField("Search", text: $search)
+                .textFieldStyle(.roundedBorder)
 
-            SettingsCard(title: "Recording") {
-                SectionLabel("Dictation buttons")
-
-                ShortcutRecorder(
-                    shortcuts: $store.settings.triggerKeys,
-                    defaultShortcuts: [.fn]
-                )
-
-                Divider().padding(.vertical, 4)
-
-                SectionLabel("How it works")
-
-                HStack(alignment: .top, spacing: 10) {
-                    ChoiceCard(
-                        title: "Hold to record",
-                        detail: "Release to send",
-                        selected: store.settings.recordingActivation == .hold
-                    ) {
-                        store.settings.selectActivation(.hold)
-                    }
-                    ChoiceCard(
-                        title: "Tap to start",
-                        detail: "Tap again to send",
-                        selected: store.settings.recordingActivation == .tap
-                    ) {
-                        store.settings.selectActivation(.tap)
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            SettingsCard(title: "Delivery") {
-                Text("Auto-submit in selected apps")
-                    .font(.system(size: 13, weight: .semibold))
-                CaptionText("After pasting a dictation, Whisperino presses Return in these apps so the message sends immediately.")
-
-                Divider().padding(.vertical, 2)
-
-                if store.autoSubmitApps.isEmpty {
-                    Text("No apps selected")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
-                        .padding(.vertical, 2)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(store.autoSubmitApps) { app in
-                            AutoSubmitRow(app: app) { deleteAutoSubmit(app) }
-                            if app.id != store.autoSubmitApps.last?.id {
-                                Divider()
-                            }
+            List {
+                ForEach(filtered) { option in
+                    Toggle(isOn: binding(for: option.code)) {
+                        HStack {
+                            Text(option.name)
+                            Spacer()
+                            Text(option.code.uppercased())
+                                .font(.caption)
+                                .monospaced()
+                                .foregroundStyle(.secondary)
                         }
                     }
+                    .toggleStyle(.checkbox)
                 }
+            }
+            .frame(minHeight: 280)
 
-                Button("Add app…", action: pickApp)
-                    .buttonStyle(SecondaryButtonStyle())
-                    .padding(.top, 4)
+            HStack {
+                Button("Detect Automatically") { selection = [] }
+                    .disabled(selection.isEmpty)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
             }
         }
+        .padding(20)
+        .frame(width: 420)
+    }
+
+    private func binding(for code: String) -> Binding<Bool> {
+        Binding(
+            get: { selection.contains(code) },
+            set: { isOn in
+                if isOn {
+                    guard !selection.contains(code) else { return }
+                    selection.append(code)
+                } else {
+                    selection.removeAll { $0 == code }
+                }
+            }
+        )
+    }
+}
+
+// MARK: Dictation · auto-submit apps
+
+/// A summary row plus an editing sheet, the same shape the language picker
+/// uses - a full app list inline turned the settings page into a blob.
+private struct AutoSubmitRow: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @State private var showSheet = false
+
+    private var summary: String {
+        switch store.autoSubmitApps.count {
+        case 0: return "None"
+        case 1...2: return store.autoSubmitApps.map(\.name).formatted(.list(type: .and))
+        default: return "\(store.autoSubmitApps.count) apps"
+        }
+    }
+
+    var body: some View {
+        LabeledContent("Auto-submit apps") {
+            HStack(spacing: 10) {
+                Text(summary)
+                    .foregroundStyle(.secondary)
+                Button("Choose…") { showSheet = true }
+            }
+        }
+        .sheet(isPresented: $showSheet) {
+            AutoSubmitSheet()
+        }
+    }
+}
+
+private struct AutoSubmitSheet: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection = Set<UUID>()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Auto-submit Apps")
+                .font(.headline)
+            Text("Whisperino presses Return after pasting a dictation in these apps, so the message sends immediately.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            List(selection: $selection) {
+                ForEach(store.autoSubmitApps) { app in
+                    HStack(spacing: 8) {
+                        if let icon = Self.icon(for: app) {
+                            Image(nsImage: icon)
+                                .resizable()
+                                .frame(width: 16, height: 16)
+                        } else {
+                            Image(systemName: "app.dashed")
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(app.name)
+                    }
+                    .tag(app.id)
+                }
+            }
+            .frame(minHeight: 180)
+            .onDeleteCommand(perform: removeSelected)
+            .overlay {
+                if store.autoSubmitApps.isEmpty {
+                    Text("No apps yet.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack {
+                Button("Add App…", action: pickApp)
+                Button("Remove", action: removeSelected)
+                    .disabled(selection.isEmpty)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+
+    private static func icon(for app: AutoSubmitApp) -> NSImage? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleId)
+        else { return nil }
+        return NSWorkspace.shared.icon(forFile: url.path)
     }
 
     private func pickApp() {
@@ -1119,738 +861,21 @@ private struct DictationSettingsPage: View {
         store.addAutoSubmitApp(name: name, bundleId: bundleId)
     }
 
-    private func deleteAutoSubmit(_ app: AutoSubmitApp) {
-        guard let index = store.autoSubmitApps.firstIndex(where: { $0.id == app.id }) else { return }
-        store.removeAutoSubmitApps(at: [index])
+    private func removeSelected() {
+        let offsets = IndexSet(store.autoSubmitApps.indices.filter {
+            selection.contains(store.autoSubmitApps[$0].id)
+        })
+        guard !offsets.isEmpty else { return }
+        store.removeAutoSubmitApps(at: offsets)
+        selection.removeAll()
     }
 }
 
-/// A fully custom, inline multi-select instead of the platform Picker. The
-/// collapsed control reads like the rest of Whisperino's flat settings cards;
-/// expansion reveals a searchable two-column language surface without
-/// spawning an AppKit menu or visually leaving the page.
-private struct SpeechModelPicker: View {
-    @ObservedObject private var store = SettingsStore.shared
-    @ObservedObject private var downloader = ModelDownloader.shared
-
-    var body: some View {
-        let _ = downloader.installedRevision
-        SettingsCard(title: "Speech model") {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(ASRModelCatalog.all) { model in
-                    modelRow(model)
-                }
-            }
-        }
-    }
-
-    private func modelRow(_ model: ASRModelDescriptor) -> some View {
-        let selected = store.settings.asrModel == model.id
-        let installed = downloader.isInstalled(model.id)
-        let progress: Double? = {
-            guard case .downloading(let id, _, _) = downloader.status,
-                  id == model.id else { return nil }
-            return downloader.status.fraction
-        }()
-        let failed: String? = {
-            if case .failed(let id, let message) = downloader.status, id == model.id {
-                return message
-            }
-            return nil
-        }()
-        let anotherDownloadIsActive = downloader.status.isDownloading && progress == nil && !installed
-
-        return SpeechModelRow(
-            model: model,
-            selected: selected,
-            installed: installed,
-            progress: progress,
-            failedMessage: failed,
-            disabled: anotherDownloadIsActive,
-            streamingEnabled: model.supportsStreaming && installed
-                ? Binding(
-                    get: {
-                        store.settings.asrModel == model.id
-                            && store.settings.streamingTranscriptionEnabled
-                    },
-                    set: { enabled in
-                        if enabled {
-                            store.settings.asrModel = model.id
-                        }
-                        store.settings.streamingTranscriptionEnabled = enabled
-                    }
-                )
-                : nil
-        ) {
-            if installed {
-                store.settings.asrModel = model.id
-            } else if progress == nil {
-                // Selecting an unavailable model should be one action: mark it
-                // active now and download it. Once the file lands, the model
-                // observer loads it without requiring a second click.
-                store.settings.asrModel = model.id
-                downloader.ensure(model.id)
-            }
-        }
-    }
-}
-
-private struct SpeechModelRow: View {
-    let model: ASRModelDescriptor
-    let selected: Bool
-    let installed: Bool
-    let progress: Double?
-    let failedMessage: String?
-    let disabled: Bool
-    let streamingEnabled: Binding<Bool>?
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: action) {
-                HStack(spacing: 12) {
-                    selectionIndicator
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 7) {
-                            Text(model.displayName)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.primary)
-
-                            if model.supportsStreaming {
-                                Text("LIVE TEXT")
-                                    .font(Brand.mono(8, .semibold))
-                                    .foregroundStyle(Brand.ink)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2.5)
-                                    .background(
-                                        Capsule(style: .continuous)
-                                            .fill(Brand.ink.opacity(0.09))
-                                    )
-                            }
-                        }
-
-                        HStack(spacing: 5) {
-                            Text(model.detail)
-                            Text("·")
-                            Text(sizeLabel)
-                        }
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-
-                        if failedMessage != nil {
-                            Text("Download failed")
-                                .font(.system(size: 10.5, weight: .medium))
-                                .foregroundStyle(.red)
-                        }
-                    }
-
-                    Spacer(minLength: 12)
-                    trailingStatus
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(disabled)
-            .accessibilityLabel(model.displayName)
-            .accessibilityValue(accessibilityStatus)
-
-            if let streamingEnabled {
-                Button {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        streamingEnabled.wrappedValue.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 7) {
-                        Text(streamingEnabled.wrappedValue ? "Streaming on" : "Streaming off")
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(.secondary)
-                        BrandSwitch(isOn: streamingEnabled.wrappedValue, disabled: false)
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("Stream live text while speaking")
-                .accessibilityLabel("Stream live text while speaking")
-                .accessibilityValue(streamingEnabled.wrappedValue ? "On" : "Off")
-                .accessibilityAddTraits(streamingEnabled.wrappedValue ? .isSelected : [])
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            InteractiveCardBackground(
-                cornerRadius: 7,
-                hovered: hovering && !disabled,
-                selected: selected
-            )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(selected ? Brand.ink.opacity(0.30) : Brand.border, lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .opacity(disabled ? 0.48 : 1)
-        .onHover { isHovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                hovering = isHovering
-            }
-        }
-        .help(failedMessage ?? "")
-    }
-
-    private var selectionIndicator: some View {
-        ZStack {
-            Circle()
-                .fill(selected ? Brand.ink : Color.clear)
-            Circle()
-                .strokeBorder(selected ? Color.clear : Brand.border, lineWidth: 1.5)
-            if selected {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(Brand.card)
-            }
-        }
-        .frame(width: 17, height: 17)
-    }
-
-    @ViewBuilder
-    private var trailingStatus: some View {
-        if let progress {
-            VStack(alignment: .trailing, spacing: 5) {
-                Text("\(Int(progress * 100))%")
-                    .font(Brand.mono(10, .semibold))
-                    .foregroundStyle(.secondary)
-                ProgressView(value: progress)
-                    .progressViewStyle(.linear)
-                    .tint(Brand.ink)
-                    .frame(width: 96)
-            }
-        } else if !installed {
-            HStack(spacing: 5) {
-                Image(systemName: failedMessage == nil ? "arrow.down" : "arrow.clockwise")
-                    .font(.system(size: 9, weight: .semibold))
-                Text(failedMessage == nil ? "Download" : "Retry")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 5).fill(Brand.canvas))
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Brand.border, lineWidth: 1))
-        }
-    }
-
-    private var sizeLabel: String {
-        let mib = Double(model.expectedBytes) / 1_048_576
-        if mib >= 1024 {
-            return String(format: "%.2f GB", mib / 1024)
-        }
-        return "\(Int(mib.rounded())) MB"
-    }
-
-    private var accessibilityStatus: String {
-        if let progress { return "Downloading, \(Int(progress * 100)) percent" }
-        if selected { return "Selected" }
-        if installed { return "Downloaded" }
-        if failedMessage != nil { return "Download failed, retry" }
-        return "Not downloaded"
-    }
-}
-
-private struct LanguageMultiSelector: View {
-    @Binding var selection: [String]
-    @State private var isExpanded = false
-    @State private var search = ""
-    @State private var hoveringTrigger = false
-
-    private var allOptions: [(code: String, name: String)] {
-        TranscriptionLanguageCatalog.localizedOptions
-    }
-
-    private var selectedOptions: [(code: String, name: String)] {
-        allOptions.filter { selection.contains($0.code) }
-    }
-
-    private var filteredOptions: [(code: String, name: String)] {
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return allOptions }
-        return allOptions.filter {
-            $0.name.localizedCaseInsensitiveContains(query)
-                || $0.code.localizedCaseInsensitiveContains(query)
-        }
-    }
-
-    private var helperText: String {
-        switch selection.count {
-        case 0:
-            return "Any language · automatic detection"
-        case 1:
-            return "Recognition is locked to this language"
-        default:
-            return "Automatic switching between your selected languages"
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Button {
-                withAnimation(.easeOut(duration: 0.16)) {
-                    isExpanded.toggle()
-                }
-                if !isExpanded { search = "" }
-            } label: {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Brand.ink)
-                        Image(systemName: "character.bubble.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Brand.card)
-                    }
-                    .frame(width: 30, height: 30)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Transcription languages")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        Text(helperText)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer(minLength: 12)
-
-                    if selectedOptions.isEmpty {
-                        LanguageChip(label: "AUTO")
-                    } else {
-                        HStack(spacing: 5) {
-                            ForEach(Array(selectedOptions.prefix(2)), id: \.code) { option in
-                                LanguageChip(label: option.code.uppercased())
-                            }
-                            if selectedOptions.count > 2 {
-                                LanguageChip(label: "+\(selectedOptions.count - 2)")
-                            }
-                        }
-                    }
-
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                }
-                .padding(.horizontal, 11)
-                .frame(height: 54)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(hoveringTrigger || isExpanded ? Brand.hover : Brand.canvas)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(isExpanded ? Brand.ink.opacity(0.42) : Brand.border, lineWidth: 1)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .onHover { hoveringTrigger = $0 }
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 9) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        TextField("Search languages", text: $search)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12.5))
-                        if !search.isEmpty {
-                            Button {
-                                search = ""
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 11)
-                    .frame(height: 34)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Brand.card)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(Brand.border, lineWidth: 1)
-                    )
-
-                    ScrollView {
-                        LazyVGrid(
-                            columns: [
-                                GridItem(.flexible(), spacing: 8),
-                                GridItem(.flexible(), spacing: 8),
-                            ],
-                            spacing: 7
-                        ) {
-                            ForEach(filteredOptions, id: \.code) { option in
-                                LanguageChoiceRow(
-                                    code: option.code,
-                                    name: option.name,
-                                    isSelected: selection.contains(option.code),
-                                    action: { toggle(option.code) }
-                                )
-                            }
-                        }
-                        .padding(.vertical, 1)
-                    }
-                    .frame(height: 224)
-
-                    HStack {
-                        Button {
-                            withAnimation(.easeOut(duration: 0.14)) {
-                                selection = []
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "waveform.badge.magnifyingglass")
-                                    .font(.system(size: 11, weight: .semibold))
-                                Text("Use any language")
-                                    .font(.system(size: 12, weight: .medium))
-                            }
-                            .foregroundStyle(selection.isEmpty ? .tertiary : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(selection.isEmpty)
-
-                        Spacer()
-
-                        Text(selection.isEmpty ? "AUTO" : "\(selection.count) SELECTED")
-                            .font(Brand.mono(9.5, .semibold))
-                            .kerning(0.7)
-                            .foregroundStyle(.secondary)
-
-                        Button("Done") {
-                            withAnimation(.easeOut(duration: 0.15)) {
-                                isExpanded = false
-                            }
-                            search = ""
-                        }
-                        .buttonStyle(PrimaryButtonStyle())
-                    }
-                }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Brand.canvas)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Brand.border, lineWidth: 1)
-                )
-                // Keep the panel spatially anchored below the trigger. A move
-                // transition made every row fly down from the top edge and
-                // felt like a detached menu instead of an inline control.
-                .transition(.opacity.combined(with: .scale(scale: 0.992, anchor: .top)))
-            }
-        }
-    }
-
-    private func toggle(_ code: String) {
-        withAnimation(.easeOut(duration: 0.13)) {
-            if let index = selection.firstIndex(of: code) {
-                selection.remove(at: index)
-            } else {
-                selection.append(code)
-            }
-        }
-    }
-}
-
-private struct LanguageChip: View {
-    let label: String
-
-    var body: some View {
-        Text(label)
-            .font(Brand.mono(9.5, .semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 7)
-            .frame(height: 22)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Brand.selected)
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(Brand.border, lineWidth: 1)
-            )
-    }
-}
-
-private struct LanguageChoiceRow: View {
-    let code: String
-    let name: String
-    let isSelected: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(isSelected ? Brand.ink : Color.clear)
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(isSelected ? Color.clear : Brand.border, lineWidth: 1)
-                    if isSelected {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 8.5, weight: .bold))
-                            .foregroundStyle(Brand.card)
-                    }
-                }
-                .frame(width: 19, height: 19)
-
-                Text(name)
-                    .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text(code.uppercased())
-                    .font(Brand.mono(9.5, .medium))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 9)
-            .frame(height: 36)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(isSelected ? Brand.selected : (hovering ? Brand.hover : Brand.card))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(isSelected ? Brand.ink.opacity(0.28) : Brand.border, lineWidth: 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-    }
-}
-
-/// App row for the auto-submit list: icon + name, hover-to-delete.
-private struct AutoSubmitRow: View {
-    let app: AutoSubmitApp
-    let onDelete: () -> Void
-    @State private var hovering = false
-
-    private var icon: NSImage? {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleId)
-        else { return nil }
-        return NSWorkspace.shared.icon(forFile: url.path)
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            if let icon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 18, height: 18)
-            } else {
-                Image(systemName: "app.dashed")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 18, height: 18)
-            }
-            Text(app.name)
-                .font(.system(size: 13, weight: .medium))
-            Spacer(minLength: 12)
-
-            Button(action: onDelete) {
-                Image(systemName: "trash")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .opacity(hovering ? 1 : 0)
-            .help("Remove")
-        }
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-    }
-}
-
-private struct SettingsCard<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        BrandCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionLabel(title)
-                    .padding(.bottom, 2)
-                content
-            }
-        }
-    }
-}
-
-/// Label left, switch right - grouped settings row.
-private struct ToggleRow: View {
-    let label: String
-    @Binding var isOn: Bool
-    var disabled = false
-
-    var body: some View {
-        Button {
-            guard !disabled else { return }
-            withAnimation(.easeOut(duration: 0.15)) {
-                isOn.toggle()
-            }
-        } label: {
-            HStack {
-                Text(label)
-                    .font(.system(size: 13))
-                    .foregroundStyle(disabled ? .secondary : .primary)
-                Spacer()
-                BrandSwitch(isOn: isOn, disabled: disabled)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .accessibilityLabel(label)
-        .accessibilityValue(isOn ? "On" : "Off")
-        .accessibilityAddTraits(isOn ? .isSelected : [])
-    }
-}
-
-private struct BrandSwitch: View {
-    let isOn: Bool
-    let disabled: Bool
-
-    var body: some View {
-        ZStack {
-            Capsule(style: .continuous)
-                .fill(isOn ? Brand.ink : Brand.selected)
-            Capsule(style: .continuous)
-                .stroke(isOn ? Color.clear : Brand.border, lineWidth: 1)
-
-            Circle()
-                .fill(isOn ? Brand.card : Color.secondary.opacity(0.7))
-                .frame(width: 13, height: 13)
-                .shadow(color: .black.opacity(isOn ? 0.18 : 0.08), radius: 1, y: 0.5)
-                .offset(x: isOn ? 7 : -7)
-        }
-        .frame(width: 34, height: 19)
-        .opacity(disabled ? 0.42 : 1)
-        .animation(.easeOut(duration: 0.15), value: isOn)
-    }
-}
-
-/// Selectable option card - title with a radio indicator, detail below.
-private struct ChoiceCard: View {
-    let title: String
-    let detail: String
-    let selected: Bool
-    var enabled = true
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer(minLength: 0)
-                    radio
-                }
-                Text(detail)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(12)
-            // maxHeight:.infinity lets the shorter card grow to the row height
-            // the HStack's fixedSize settles on, so both frames are equal.
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(
-                InteractiveCardBackground(
-                    cornerRadius: 7,
-                    hovered: hovering && enabled,
-                    selected: selected
-                )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(selected ? Brand.ink : Brand.border, lineWidth: 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.45)
-        // Scope the hover fade to its own transaction. A broad
-        // .animation(value: hovering) fought the plain button's built-in
-        // hover handling and made the highlight flicker on entry.
-        .onHover { isHovering in
-            let next = isHovering && enabled
-            guard next != hovering else { return }
-            withAnimation(.easeOut(duration: 0.12)) { hovering = next }
-        }
-        .animation(.easeOut(duration: 0.12), value: selected)
-    }
-
-    private var radio: some View {
-        ZStack {
-            Circle()
-                .fill(selected ? Brand.ink : Color.clear)
-            Circle()
-                .strokeBorder(selected ? Color.clear : Brand.border, lineWidth: 1.5)
-            if selected {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8.5, weight: .bold))
-                    .foregroundStyle(Brand.card)
-            }
-        }
-        .frame(width: 16, height: 16)
-    }
-}
-
-private struct CaptionText: View {
-    let text: LocalizedStringKey
-    init(_ text: LocalizedStringKey) { self.text = text }
-
-    var body: some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-private struct ShortcutRow: View {
-    let keys: String
-    let label: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            KeyCap(label: keys)
-                .frame(minWidth: 88, alignment: .leading)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 2)
-    }
-}
+// MARK: Dictation · trigger
 
 /// Click-to-record controls for any number of keyboard or mouse triggers.
-private struct ShortcutRecorder: View {
+/// One compact row of chips: click a chip to re-record it, `+` to add another.
+private struct TriggerEditor: View {
     @Binding var shortcuts: [TriggerShortcut]
     var defaultShortcuts: [TriggerShortcut]
     @StateObject private var capture = ShortcutCaptureController()
@@ -1859,79 +884,41 @@ private struct ShortcutRecorder: View {
     @State private var validationError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(shortcuts.indices, id: \.self) { index in
-                HStack(spacing: 8) {
+        VStack(alignment: .trailing, spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(shortcuts.indices, id: \.self) { index in
                     Button {
                         startCapture(editing: index)
                     } label: {
-                        HStack(spacing: 10) {
-                            if capture.isRecording && editingIndex == index && !isAdding {
-                                Text("Press a shortcut or mouse button…")
-                                    .font(Brand.mono(12, .semibold))
-                                    .foregroundStyle(.primary)
-                            } else {
-                                KeyCap(label: shortcuts[index].shortLabel, size: 12)
-                            }
-                            Spacer(minLength: 8)
-                            Text(capture.isRecording && editingIndex == index && !isAdding
-                                 ? "Esc to cancel" : "Change")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 40)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(capture.isRecording && editingIndex == index && !isAdding
-                                      ? Brand.selected : Brand.canvas)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .stroke(capture.isRecording && editingIndex == index && !isAdding
-                                        ? Brand.ink : Brand.border, lineWidth: 1)
-                        )
+                        Text(isCapturing(index) ? "Press a key…" : shortcuts[index].shortLabel)
+                            .monospaced()
                     }
-                    .buttonStyle(.plain)
-
-                    if shortcuts.count > 1 {
-                        Button {
-                            capture.cancel()
-                            editingIndex = nil
-                            isAdding = false
-                            shortcuts.remove(at: index)
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 12, weight: .medium))
+                    .help("Click to record a new trigger; right-click to remove")
+                    .contextMenu {
+                        if shortcuts.count > 1 {
+                            Button("Remove", role: .destructive) {
+                                cancelCapture()
+                                shortcuts.remove(at: index)
+                            }
                         }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .help("Remove \(shortcuts[index].shortLabel)")
                     }
                 }
-            }
 
-            HStack(spacing: 8) {
                 Button {
                     startCapture(editing: nil)
                 } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: isAdding && capture.isRecording ? "record.circle" : "plus")
-                        Text(isAdding && capture.isRecording
-                             ? "Press a shortcut or mouse button…" : "Add button")
-                    }
+                    Image(systemName: isAdding && capture.isRecording ? "record.circle" : "plus")
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .help(isAdding && capture.isRecording ? "Press a shortcut or mouse button…" : "Add another trigger")
 
                 if shortcuts != defaultShortcuts {
-                    Button("Restore default") {
-                        capture.cancel()
-                        editingIndex = nil
-                        isAdding = false
+                    Button {
+                        cancelCapture()
                         shortcuts = defaultShortcuts
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .help("Restore the default trigger")
                 }
             }
 
@@ -1939,13 +926,20 @@ private struct ShortcutRecorder: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
             }
         }
-        .onDisappear {
-            capture.cancel()
-            editingIndex = nil
-            isAdding = false
-        }
+        .onDisappear(perform: cancelCapture)
+    }
+
+    private func isCapturing(_ index: Int) -> Bool {
+        capture.isRecording && editingIndex == index && !isAdding
+    }
+
+    private func cancelCapture() {
+        capture.cancel()
+        editingIndex = nil
+        isAdding = false
     }
 
     private func startCapture(editing index: Int?) {
@@ -2073,51 +1067,164 @@ private final class ShortcutCaptureController: ObservableObject {
     }
 }
 
-// MARK: - Dictionary page
+// MARK: - Langdock
+
+private struct LangdockPage: View {
+    @ObservedObject private var store = SettingsStore.shared
+    @State private var showAPIKey = false
+
+    private var hasAPIKey: Bool {
+        !store.settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        let trigger = store.settings.triggerKey.shortLabel
+
+        Form {
+            Section {
+                LabeledContent("API key") {
+                    HStack(spacing: 6) {
+                        Group {
+                            if showAPIKey {
+                                TextField("Paste Langdock API key", text: $store.settings.apiKey)
+                            } else {
+                                SecureField("Paste Langdock API key", text: $store.settings.apiKey)
+                            }
+                        }
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+
+                        Button {
+                            showAPIKey.toggle()
+                        } label: {
+                            Image(systemName: showAPIKey ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(showAPIKey ? "Hide API key" : "Show API key")
+                    }
+                }
+            }
+
+            Section {
+                Picker("Transcripts", selection: $store.settings.llmRefinementEnabled) {
+                    Text("Raw").tag(false)
+                    Text("Cleaned up").tag(true)
+                }
+                .pickerStyle(.radioGroup)
+                .disabled(!hasAPIKey)
+
+                Toggle("Talk to your screen", isOn: $store.settings.aiModeEnabled)
+                    .toggleStyle(.switch)
+                    .disabled(!hasAPIKey)
+            } footer: {
+                Text("Talk to your screen: hold \(trigger) + ⇧, speak, then tap \(trigger) or press ↩ to submit.")
+            }
+        }
+        .formStyle(.grouped)
+        .onChange(of: store.settings.apiKey) { oldValue, newValue in
+            let hadKey = !oldValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasKey = !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !hadKey && hasKey {
+                // First key paste - opt the user into the full AI experience.
+                // They can flip either off if the API misbehaves.
+                store.settings.llmRefinementEnabled = true
+                store.settings.aiModeEnabled = true
+            } else if hadKey && !hasKey {
+                // Key cleared - nothing to call, switch off both.
+                store.settings.llmRefinementEnabled = false
+                store.settings.aiModeEnabled = false
+            }
+        }
+    }
+}
+
+// MARK: - List page scaffold
+
+/// A stock macOS editable list: description, `Table`, and the `+` / `−` bar
+/// underneath it, the same shape System Settings uses for login items.
+private struct ListPageChrome<Content: View>: View {
+    let description: String
+    let addLabel: String
+    let canRemove: Bool
+    let onAdd: () -> Void
+    let onRemove: () -> Void
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(description)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+            content
+
+            HStack(spacing: 10) {
+                Button(action: onAdd) {
+                    Label(addLabel, systemImage: "plus")
+                }
+                Button(action: onRemove) {
+                    Label("Remove", systemImage: "minus")
+                }
+                .disabled(!canRemove)
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+        }
+    }
+}
+
+// MARK: - Dictionary
 
 private struct DictionaryPage: View {
     @ObservedObject private var store = SettingsStore.shared
+    @State private var selection = Set<UUID>()
     @State private var showAddSheet = false
     @State private var editingEntry: DictionaryEntry?
 
-    /// Split "phonetic = Correct" mappings for arrow display.
-    private static func parts(of term: String) -> (lead: String, trail: String?) {
+    /// Split "phonetic = Correct" mappings into two columns.
+    private static func parts(of term: String) -> (heard: String, written: String) {
         let pieces = term.split(separator: "=", maxSplits: 1)
-        guard pieces.count == 2 else { return (term, nil) }
+        guard pieces.count == 2 else { return (term, term) }
         return (pieces[0].trimmingCharacters(in: .whitespaces),
                 pieces[1].trimmingCharacters(in: .whitespaces))
     }
 
     var body: some View {
-        PageScaffold(
-            title: "Dictionary",
-            subtitle: "Terms the LLM should always spell correctly - your name, product names, company jargon.",
-            actionLabel: "Add new",
-            action: { showAddSheet = true }
+        ListPageChrome(
+            description: "Terms Langdock should always spell correctly — your name, product names, company jargon.",
+            addLabel: "Add Term",
+            canRemove: !selection.isEmpty,
+            onAdd: { showAddSheet = true },
+            onRemove: removeSelected
         ) {
             if store.dictionary.isEmpty {
-                EmptyListCard(
-                    icon: "text.book.closed",
-                    title: "No terms yet",
-                    hint: "Add words Whisper keeps mishearing - plain terms, or “phonetic = Correct” mappings like “langdonk = Langdock”."
+                ContentUnavailableView(
+                    "No Terms",
+                    systemImage: "character.book.closed",
+                    description: Text("Add words the model keeps mishearing — plain terms, or “phonetic = Correct” mappings like “langdonk = Langdock”.")
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                BrandCard(padding: 0) {
-                    VStack(spacing: 0) {
-                        ForEach(store.dictionary) { entry in
-                            let p = Self.parts(of: entry.term)
-                            MappingRow(
-                                lead: p.lead,
-                                trail: p.trail,
-                                onEdit: { editingEntry = entry },
-                                onDelete: { delete(entry) }
-                            )
-                            if entry.id != store.dictionary.last?.id {
-                                Divider().padding(.leading, 14)
-                            }
-                        }
+                Table(store.dictionary, selection: $selection) {
+                    TableColumn("Heard as") { entry in
+                        Text(Self.parts(of: entry.term).heard)
+                    }
+                    TableColumn("Written as") { entry in
+                        Text(Self.parts(of: entry.term).written)
                     }
                 }
+                .contextMenu(forSelectionType: UUID.self) { _ in
+                    Button("Edit…") { editSelected() }
+                    Button("Remove", role: .destructive) { removeSelected() }
+                } primaryAction: { _ in
+                    editSelected()
+                }
+                .onDeleteCommand(perform: removeSelected)
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -2128,9 +1235,19 @@ private struct DictionaryPage: View {
         }
     }
 
-    private func delete(_ entry: DictionaryEntry) {
-        guard let index = store.dictionary.firstIndex(where: { $0.id == entry.id }) else { return }
-        store.removeDictionaryTerms(at: [index])
+    private func editSelected() {
+        guard let id = selection.first,
+              let entry = store.dictionary.first(where: { $0.id == id }) else { return }
+        editingEntry = entry
+    }
+
+    private func removeSelected() {
+        let offsets = IndexSet(store.dictionary.indices.filter {
+            selection.contains(store.dictionary[$0].id)
+        })
+        guard !offsets.isEmpty else { return }
+        store.removeDictionaryTerms(at: offsets)
+        selection.removeAll()
     }
 }
 
@@ -2150,18 +1267,18 @@ private struct DictionaryEditorSheet: View {
 
     var body: some View {
         EditorSheet(
-            title: entry == nil ? "Add to dictionary" : "Edit term",
-            actionLabel: entry == nil ? "Add term" : "Save",
+            title: entry == nil ? "Add to Dictionary" : "Edit Term",
+            actionLabel: entry == nil ? "Add" : "Save",
             actionEnabled: !trimmed.isEmpty,
             onSubmit: submit
         ) {
-            Text("Use “phonetic = Correct” to map what Whisper mishears to the right spelling. Requires cleanup to be enabled.")
-                .font(.system(size: 12))
+            Text("Use “phonetic = Correct” to map what the model mishears to the right spelling. Requires cleanup to be enabled.")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            TextField("e.g. Langdock  or  langdonk = Langdock", text: $term)
-                .brandTextInput()
+            TextField("Term", text: $term, prompt: Text("Langdock  or  langdonk = Langdock"))
+                .textFieldStyle(.roundedBorder)
         }
     }
 
@@ -2174,42 +1291,43 @@ private struct DictionaryEditorSheet: View {
     }
 }
 
-// MARK: - Snippets page
+// MARK: - Snippets
 
 private struct SnippetsPage: View {
     @ObservedObject private var store = SettingsStore.shared
+    @State private var selection = Set<UUID>()
     @State private var showAddSheet = false
     @State private var editingSnippet: Snippet?
 
     var body: some View {
-        PageScaffold(
-            title: "Snippets",
-            subtitle: "Text you type often - say a snippet's name while dictating to drop it in place.",
-            actionLabel: "Add new",
-            action: { showAddSheet = true }
+        ListPageChrome(
+            description: "Text you type often — say a snippet's name while dictating to drop it in place.",
+            addLabel: "Add Snippet",
+            canRemove: !selection.isEmpty,
+            onAdd: { showAddSheet = true },
+            onRemove: removeSelected
         ) {
             if store.snippets.isEmpty {
-                EmptyListCard(
-                    icon: "text.quote",
-                    title: "No snippets yet",
-                    hint: "Add one with the button above - “my email = jan@…” is a classic."
+                ContentUnavailableView(
+                    "No Snippets",
+                    systemImage: "text.quote",
+                    description: Text("“my email = jan@…” is a classic.")
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                BrandCard(padding: 0) {
-                    VStack(spacing: 0) {
-                        ForEach(store.snippets) { snippet in
-                            MappingRow(
-                                lead: snippet.name,
-                                trail: snippet.text.replacingOccurrences(of: "\n", with: " "),
-                                onEdit: { editingSnippet = snippet },
-                                onDelete: { delete(snippet) }
-                            )
-                            if snippet.id != store.snippets.last?.id {
-                                Divider().padding(.leading, 14)
-                            }
-                        }
+                Table(store.snippets, selection: $selection) {
+                    TableColumn("Name", value: \.name)
+                    TableColumn("Expansion") { snippet in
+                        Text(snippet.text.replacingOccurrences(of: "\n", with: " "))
                     }
                 }
+                .contextMenu(forSelectionType: UUID.self) { _ in
+                    Button("Edit…") { editSelected() }
+                    Button("Remove", role: .destructive) { removeSelected() }
+                } primaryAction: { _ in
+                    editSelected()
+                }
+                .onDeleteCommand(perform: removeSelected)
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -2220,9 +1338,19 @@ private struct SnippetsPage: View {
         }
     }
 
-    private func delete(_ snippet: Snippet) {
-        guard let index = store.snippets.firstIndex(where: { $0.id == snippet.id }) else { return }
-        store.removeSnippets(at: [index])
+    private func editSelected() {
+        guard let id = selection.first,
+              let snippet = store.snippets.first(where: { $0.id == id }) else { return }
+        editingSnippet = snippet
+    }
+
+    private func removeSelected() {
+        let offsets = IndexSet(store.snippets.indices.filter {
+            selection.contains(store.snippets[$0].id)
+        })
+        guard !offsets.isEmpty else { return }
+        store.removeSnippets(at: offsets)
+        selection.removeAll()
     }
 }
 
@@ -2244,34 +1372,22 @@ private struct SnippetEditorSheet: View {
 
     var body: some View {
         EditorSheet(
-            title: snippet == nil ? "Add snippet" : "Edit snippet",
-            actionLabel: snippet == nil ? "Add snippet" : "Save",
+            title: snippet == nil ? "Add Snippet" : "Edit Snippet",
+            actionLabel: snippet == nil ? "Add" : "Save",
             actionEnabled: valid,
             onSubmit: submit
         ) {
-            TextField("Snippet name - what you'll say", text: $name)
-                .brandTextInput()
+            TextField("Name", text: $name, prompt: Text("What you'll say"))
+                .textFieldStyle(.roundedBorder)
+
+            Text("Expansion")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
 
             TextEditor(text: $text)
-                .font(.system(size: 13, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(6)
+                .font(.body)
                 .frame(height: 150)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Brand.hover))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Brand.border, lineWidth: 1)
-                )
-                .overlay(alignment: .topLeading) {
-                    if text.isEmpty {
-                        Text("Expansion - what gets typed")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.tertiary)
-                            .padding(.top, 10)
-                            .padding(.leading, 11)
-                            .allowsHitTesting(false)
-                    }
-                }
+                .border(Color(nsColor: .separatorColor))
         }
     }
 
@@ -2284,42 +1400,43 @@ private struct SnippetEditorSheet: View {
     }
 }
 
-// MARK: - Agents page
+// MARK: - Agents
 
 private struct AgentsPage: View {
     @ObservedObject private var store = SettingsStore.shared
+    @State private var selection = Set<UUID>()
     @State private var showAddSheet = false
     @State private var editingAgent: AgentEntry?
 
     var body: some View {
-        PageScaffold(
-            title: "Agents",
-            subtitle: "Langdock agents you can call by voice - say the agent's name while talking to your screen to route your request there instead of the default Langdock model.",
-            actionLabel: "Add new",
-            action: { showAddSheet = true }
+        ListPageChrome(
+            description: "Langdock agents you can call by voice — say an agent's name while talking to your screen to route the request there instead of the default model.",
+            addLabel: "Add Agent",
+            canRemove: !selection.isEmpty,
+            onAdd: { showAddSheet = true },
+            onRemove: removeSelected
         ) {
             if store.agents.isEmpty {
-                EmptyListCard(
-                    icon: "cpu",
-                    title: "No agents yet",
-                    hint: "Add a Langdock agent with its ID, then just say its name while dictating an instruction."
+                ContentUnavailableView(
+                    "No Agents",
+                    systemImage: "cpu",
+                    description: Text("Add a Langdock agent with its ID, then say its name while dictating an instruction.")
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                BrandCard(padding: 0) {
-                    VStack(spacing: 0) {
-                        ForEach(store.agents) { agent in
-                            MappingRow(
-                                lead: agent.name,
-                                trail: agent.agentId,
-                                onEdit: { editingAgent = agent },
-                                onDelete: { delete(agent) }
-                            )
-                            if agent.id != store.agents.last?.id {
-                                Divider().padding(.leading, 14)
-                            }
-                        }
+                Table(store.agents, selection: $selection) {
+                    TableColumn("Name", value: \.name)
+                    TableColumn("Agent ID") { agent in
+                        Text(agent.agentId).monospaced()
                     }
                 }
+                .contextMenu(forSelectionType: UUID.self) { _ in
+                    Button("Edit…") { editSelected() }
+                    Button("Remove", role: .destructive) { removeSelected() }
+                } primaryAction: { _ in
+                    editSelected()
+                }
+                .onDeleteCommand(perform: removeSelected)
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -2330,9 +1447,19 @@ private struct AgentsPage: View {
         }
     }
 
-    private func delete(_ agent: AgentEntry) {
-        guard let index = store.agents.firstIndex(where: { $0.id == agent.id }) else { return }
-        store.removeAgents(at: [index])
+    private func editSelected() {
+        guard let id = selection.first,
+              let agent = store.agents.first(where: { $0.id == id }) else { return }
+        editingAgent = agent
+    }
+
+    private func removeSelected() {
+        let offsets = IndexSet(store.agents.indices.filter {
+            selection.contains(store.agents[$0].id)
+        })
+        guard !offsets.isEmpty else { return }
+        store.removeAgents(at: offsets)
+        selection.removeAll()
     }
 }
 
@@ -2355,16 +1482,16 @@ private struct AgentEditorSheet: View {
 
     var body: some View {
         EditorSheet(
-            title: agent == nil ? "Add agent" : "Edit agent",
-            actionLabel: agent == nil ? "Add agent" : "Save",
+            title: agent == nil ? "Add Agent" : "Edit Agent",
+            actionLabel: agent == nil ? "Add" : "Save",
             actionEnabled: valid,
             onSubmit: submit
         ) {
-            TextField("Agent name - what you'll say", text: $name)
-                .brandTextInput()
+            TextField("Name", text: $name, prompt: Text("What you'll say"))
+                .textFieldStyle(.roundedBorder)
             TextField("Agent ID", text: $agentId)
-                .brandTextInput()
-                .font(Brand.mono(12))
+                .textFieldStyle(.roundedBorder)
+                .monospaced()
         }
     }
 
@@ -2374,5 +1501,42 @@ private struct AgentEditorSheet: View {
         } else {
             store.addAgent(name: name, agentId: agentId)
         }
+    }
+}
+
+// MARK: - Shared sheet chrome
+
+/// Standard macOS dialog layout: title, fields, then Cancel / default button
+/// in the bottom-trailing corner.
+private struct EditorSheet<Content: View>: View {
+    let title: String
+    let actionLabel: String
+    let actionEnabled: Bool
+    let onSubmit: () -> Void
+    @ViewBuilder var content: Content
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+
+            content
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(actionLabel) {
+                    onSubmit()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!actionEnabled)
+            }
+            .padding(.top, 4)
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }

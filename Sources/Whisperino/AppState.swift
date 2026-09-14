@@ -84,6 +84,8 @@ class AppState: ObservableObject {
     /// callback bursts.
     @Published var audioSamples: [Float] = Array(repeating: 0, count: AppState.waveformBarCount)
     @Published var recordingStartTime: Date?
+    /// Length of the take that is being transcribed, for the usage log.
+    private var lastRecordingSeconds: Double = 0
     /// Whether we are currently in instruction mode (Shift+hotkey)
     @Published var isInstructionMode: Bool = false
     /// Whether the current request is routed to a Langdock Agent
@@ -1043,6 +1045,7 @@ class AppState: ObservableObject {
         audioLevel = 0
         let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
         recordingStartTime = nil
+        lastRecordingSeconds = duration
 
         guard duration >= 0.5 else {
             try? FileManager.default.removeItem(at: audioURL)
@@ -1291,7 +1294,7 @@ class AppState: ObservableObject {
 
                     await MainActor.run {
                         self.lastTranscriptionResult = finalText
-                        self.store.addTranscript(finalText, isInstruction: false)
+                        self.store.addTranscript(finalText, isInstruction: false, seconds: self.lastRecordingSeconds)
                         if self.insertResult(finalText) {
                             // A real target field owns the result. Stay in the
                             // compact processing surface until the paste fires,
@@ -1343,7 +1346,7 @@ class AppState: ObservableObject {
     /// dictation finish path.
     private func deliverAIResult(_ finalText: String) {
         lastTranscriptionResult = finalText
-        store.addTranscript(finalText, isInstruction: true)
+        store.addTranscript(finalText, isInstruction: true, seconds: lastRecordingSeconds)
         if insertResult(finalText) {
             startDismissSequence()
         } else {

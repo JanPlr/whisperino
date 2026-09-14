@@ -80,13 +80,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// A menu-bar-only app otherwise appears to do nothing after launch. Show
-    /// the existing overview once so setup progress and the trigger gesture
-    /// have a visible home behind the sequenced permission prompts.
+    /// Show the overview once on the very first launch so setup progress and
+    /// the trigger gesture have a visible home behind the sequenced permission
+    /// prompts. Later launches stay quiet - the app usually starts at login,
+    /// and its window is one Dock click away.
     private func showWelcomeIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: Self.didShowWelcomeKey) else { return }
         UserDefaults.standard.set(true, forKey: Self.didShowWelcomeKey)
-        SettingsWindowController.shared.show(startOnHome: true)
+        MainWindowController.shared.show(startOnOverview: true)
+    }
+
+    /// Clicking the Dock icon with no window open brings the window back,
+    /// the behavior every Dock app has.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard !flag else { return true }
+        MainWindowController.shared.show()
+        return true
+    }
+
+    /// Closing the window does not quit: dictation keeps working from the
+    /// global trigger and the menu bar item.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     private static func seedLaunchAtLogin() {
@@ -113,20 +128,24 @@ if let previewMode = ProcessInfo.processInfo.environment["WHISPERINO_NOTCH_QA"] 
     exit(0)
 }
 
-app.setActivationPolicy(.accessory)
+// Deterministic visual QA for the settings window, the counterpart to the
+// notch preview above. Opens the real window with the real store but registers
+// no hotkeys, requests no permissions, and starts no audio/model services.
+if let qaPage = ProcessInfo.processInfo.environment["WHISPERINO_SETTINGS_QA"] {
+    app.setActivationPolicy(.regular)
+    AppMenu.install(into: app)
+    MainActor.assumeIsolated {
+        MainWindowController.shared.show(page: SettingsPage(rawValue: qaPage) ?? .overview)
+    }
+    app.activate(ignoringOtherApps: true)
+    app.run()
+    exit(0)
+}
 
-// Accessory apps have no default menu bar, so Cmd+V/C/X/A don't work
-// in text fields. Add a hidden Edit menu so the responder chain handles them.
-let editMenu = NSMenu(title: "Edit")
-editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
-editMenuItem.submenu = editMenu
-let mainMenu = NSMenu()
-mainMenu.addItem(editMenuItem)
-app.mainMenu = mainMenu
+// A regular app: Dock icon, app switcher entry, and a real menu bar - on top
+// of the menu bar item, which stays the fastest way to reach dictation.
+app.setActivationPolicy(.regular)
+AppMenu.install(into: app)
 
 let delegate = AppDelegate()
 app.delegate = delegate

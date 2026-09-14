@@ -1,6 +1,6 @@
 # Whisperino
 
-Local voice transcription for macOS. Lives in your menu bar, runs fully on-device via [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) with Metal GPU acceleration. Parakeet TDT 0.6B v3 is the default; Nemotron (streaming) and Whisper are one click away.
+Local voice transcription for macOS. Lives in the Dock and the menu bar, runs fully on-device via [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) with Metal GPU acceleration. Parakeet TDT 0.6B v3 is the default; Nemotron (streaming) and Whisper are one click away.
 
 ## TL;DR
 
@@ -45,9 +45,11 @@ After install, grant two permissions:
 - **Microphone** - allow the first-launch prompt.
 - **Accessibility** - needed for auto-paste. Its prompt follows the microphone prompt so macOS dialogs do not overlap; open System Settings from it and toggle Whisperino ON.
 
-On the first launch Whisperino opens its Overview once, shows speech-model
-setup progress, and then lives in the menu bar. The default Parakeet download
-continues in the background.
+On the first launch Whisperino opens its window once, shows speech-model setup
+progress, and then stays out of the way. The default Parakeet download continues
+in the background. Closing the window does not quit the app - dictation keeps
+working from the global shortcut, and the window comes back from the Dock icon,
+the menu bar item, or Cmd+, .
 
 ## Shortcuts
 
@@ -63,6 +65,7 @@ Recording buttons are customizable in **Settings → Dictation**. Add as many ke
 | **Cmd+C** *(in AI mode)* | Auto-attach the copied text/image as context |
 | **Tap shortcut or Return** *(in AI mode)* | Submit |
 | **Esc** | Cancel - recording is discarded |
+| **Cmd+,** | Open the Whisperino window |
 | Click menu bar icon | Toggle / Copy last / Settings / Updates / Quit |
 
 ## How AI mode works
@@ -101,13 +104,14 @@ Nothing gets lost:
 
 ## Settings
 
-Click the menu bar icon → **Settings**.
+Click the Dock icon, press **Cmd+,**, or pick **Settings** from the menu bar item.
 
-- **General**: launch at login · pause and resume playing media around dictation · sound effects · API key · AI capabilities (Haiku enhancement · AI mode)
-- **Dictation**: speech model (Parakeet · Nemotron 3.5 · Whisper turbo · Whisper large-v3) · multiple keyboard/mouse recording buttons · custom multi-select transcription languages (or automatic detection) · auto-submit apps
+- **Overview**: the trigger you configured · usage counters · the last 50 transcriptions
+- **General**: launch at login · pause and resume playing media around dictation · sound effects · appearance
+- **Dictation**: speech model (Parakeet · Nemotron 3.5 · Whisper turbo · Whisper large-v3) · multi-select transcription languages (or automatic detection) · recording buttons and hold/tap mode · auto-submit apps
+- **Langdock**: API key · dictation cleanup · Talk to your screen
 - **Dictionary**: terms the LLM should always spell correctly (`Langdock` or `langdonk = Langdock` mappings)
 - **Snippets**: reusable text blocks
-- **History**: last 50 transcriptions
 - **Agents**: register Langdock agents to invoke by voice
 
 ## Privacy

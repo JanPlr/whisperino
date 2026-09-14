@@ -444,11 +444,46 @@ struct AppSettings: Codable, Equatable {
     }
 }
 
-/// Lifetime dictation counters shown on the Home page. History is capped at
-/// 50 entries, so totals are accumulated here instead of recomputed from it.
+/// Lifetime dictation counters shown on the Overview. History is capped at
+/// 50 entries, so totals are accumulated here instead of recomputed from it,
+/// and `samples` keeps one small record per dictation so the charts can
+/// look back further than the history does.
 struct UsageStats: Codable, Equatable {
     var totalWords: Int = 0
     var totalTranscripts: Int = 0
+    var samples: [UsageSample] = []
+
+    /// Plenty of years at any realistic pace; keeps stats.json small.
+    static let maxSamples = 20_000
+
+    init(totalWords: Int = 0, totalTranscripts: Int = 0, samples: [UsageSample] = []) {
+        self.totalWords = totalWords
+        self.totalTranscripts = totalTranscripts
+        self.samples = samples
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        totalWords = try c.decodeIfPresent(Int.self, forKey: .totalWords) ?? 0
+        totalTranscripts = try c.decodeIfPresent(Int.self, forKey: .totalTranscripts) ?? 0
+        samples = try c.decodeIfPresent([UsageSample].self, forKey: .samples) ?? []
+    }
+}
+
+/// One dictation, reduced to what the Overview charts need.
+struct UsageSample: Codable, Equatable {
+    var date: Date
+    var words: Int
+    var isInstruction: Bool
+    /// Seconds the microphone was open; 0 when unknown (backfilled entries).
+    var seconds: Double
+
+    init(date: Date, words: Int, isInstruction: Bool, seconds: Double = 0) {
+        self.date = date
+        self.words = words
+        self.isInstruction = isInstruction
+        self.seconds = seconds
+    }
 }
 
 struct DictionaryEntry: Codable, Identifiable, Equatable {

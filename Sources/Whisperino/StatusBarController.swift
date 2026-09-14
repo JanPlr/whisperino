@@ -40,29 +40,25 @@ class StatusBarController: NSObject, NSMenuDelegate {
         observeState()
     }
 
-    /// Draw the waveform icon. When `isTemplate` is true, macOS adapts the
-    /// color automatically (black in light mode, white in dark mode).
-    /// When false, `barColor` is used directly.
+    /// Draw the brand line as the menu bar icon. When `asTemplate` is true,
+    /// macOS adapts the color automatically (black in light mode, white in
+    /// dark mode). When false, `barColor` is used directly.
     private static func makeIcon(barColor: NSColor, asTemplate: Bool) -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        let image = NSImage(size: size, flipped: false) { rect in
-            let barWidth: CGFloat = 2.0
-            let gap: CGFloat = 2.0
-            let heights: [CGFloat] = [0.30, 0.55, 1.0, 0.55, 0.30]
-            let totalW = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
-            let originX = (rect.width - totalW) / 2
-            let maxH = rect.height * 0.68
-
-            (asTemplate ? NSColor.black : barColor).setFill()
-            for (i, ratio) in heights.enumerated() {
-                let h = max(barWidth, maxH * ratio)
-                let x = originX + CGFloat(i) * (barWidth + gap)
-                let y = (rect.height - h) / 2
-                NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: h),
-                             xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
-            }
-            return true
+        // The brand line (see BrandMark.swift) rasterized at menu bar scale.
+        let icon = MainActor.assumeIsolated {
+            let renderer = ImageRenderer(
+                content: BrandLine(glyph: .whisperino,
+                                   color: asTemplate ? .black : Color(nsColor: barColor),
+                                   lineWidth: 2.3,
+                                   taperTo: BrandGlyph.whisperinoTaper)
+                    .frame(width: 17, height: 12)
+                    .frame(width: 18, height: 18)
+            )
+            renderer.scale = 4  // crisp on any retina menu bar
+            return renderer.nsImage
         }
+        let image = icon ?? NSImage(size: NSSize(width: 18, height: 18))
+        image.size = NSSize(width: 18, height: 18)
         image.isTemplate = asTemplate
         return image
     }
@@ -277,7 +273,7 @@ class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openSettings() {
-        SettingsWindowController.shared.show()
+        MainWindowController.shared.show()
     }
 
     @objc private func updateAction() {
