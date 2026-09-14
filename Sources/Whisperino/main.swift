@@ -138,6 +138,22 @@ if let qaPage = ProcessInfo.processInfo.environment["WHISPERINO_SETTINGS_QA"] {
         MainWindowController.shared.show(page: SettingsPage(rawValue: qaPage) ?? .overview)
     }
     app.activate(ignoringOtherApps: true)
+    // Optional: write the window's AppKit view hierarchy to a file and quit,
+    // so sidebar/toolbar chrome can be checked without a screenshot.
+    if let dumpPath = ProcessInfo.processInfo.environment["WHISPERINO_SETTINGS_QA_DUMP"] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            var lines: [String] = []
+            func walk(_ v: NSView, _ depth: Int) {
+                lines.append(String(repeating: "  ", count: depth) + "\(type(of: v)) \(NSStringFromRect(v.frame))")
+                for sub in v.subviews { walk(sub, depth + 1) }
+            }
+            if let root = NSApp.windows.first(where: { $0.isVisible })?.contentView?.superview {
+                walk(root, 0)
+            }
+            try? lines.joined(separator: "\n").write(toFile: dumpPath, atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
+        }
+    }
     app.run()
     exit(0)
 }

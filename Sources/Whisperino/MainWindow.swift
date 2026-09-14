@@ -37,7 +37,10 @@ final class MainWindowController: NSObject {
         // and let the sidebar run up under the traffic lights.
         window.titleVisibility = .hidden
         window.styleMask.insert([.miniaturizable, .resizable, .fullSizeContentView])
-        window.toolbarStyle = .unified
+        // Compact: the toolbar exists only so the sidebar runs up under the
+        // traffic lights; with no items and no title, the full-height style
+        // draws an empty 52pt band.
+        window.toolbarStyle = .unifiedCompact
         let toolbar = NSToolbar(identifier: "WhisperinoMainToolbar")
         toolbar.displayMode = .iconOnly
         toolbar.showsBaselineSeparator = false

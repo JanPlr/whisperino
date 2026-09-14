@@ -64,6 +64,9 @@ struct SettingsView: View {
                     .tag(item)
             }
             .listStyle(.sidebar)
+            // Seven fixed rows: nothing to scroll, so never show a scroller
+            // or rubber-band.
+            .scrollDisabled(true)
             .safeAreaInset(edge: .top, spacing: 0) { SidebarHeader() }
             .navigationSplitViewColumnWidth(min: 190, ideal: 200, max: 240)
         } detail: {
@@ -108,23 +111,24 @@ private struct SidebarHeader: View {
     @ObservedObject private var store = SettingsStore.shared
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 8) {
             if store.settings.rafterinoModeEnabled {
                 RafterinoRaftMark()
-                    .frame(width: 18, height: 18)
-                    .padding(5)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .frame(width: 12, height: 12)
+                    .padding(4)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(Rafterino.field))
             } else {
-                BrandBadge(size: 28)
+                BrandBadge(size: 20)
             }
             Text(store.settings.rafterinoModeEnabled ? "rafterino" : "whisperino")
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 14)
+        .padding(.leading, 18)
+        .padding(.trailing, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 10)
     }
 }
 
