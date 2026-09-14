@@ -1,9 +1,8 @@
 import AppKit
 
-/// The standard macOS menu bar. Whisperino is a regular Dock app, so it owns
-/// the menu bar whenever it is frontmost and users expect every stock menu to
-/// be where it always is: About and Settings under the app menu, the full Edit
-/// menu for text fields, and Minimize/Zoom/Close under Window.
+/// The standard macOS main menu. Whisperino is a menu-bar-only app, so this is
+/// never drawn - but its key equivalents still work while the settings window
+/// is key: ⌘C/V/X/A in text fields, ⌘, for Settings, ⌘W to close, ⌘Q to quit.
 ///
 /// Built in code rather than from a NIB because the package ships as a plain
 /// SwiftPM executable with no Interface Builder resources.

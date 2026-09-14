@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Whisperino's single document-less window. The app is a regular Dock app,
-/// so this is what clicking the Dock icon, ⌘0, or "Settings…" brings up.
+/// Whisperino's single document-less window, reached from the menu bar item
+/// or ⌘, while it is key.
 ///
 /// The window uses stock chrome - titled, unified toolbar, standard traffic
 /// lights - and hands its content to `NSHostingController` so SwiftUI's

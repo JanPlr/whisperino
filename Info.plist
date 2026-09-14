@@ -20,6 +20,8 @@
 	<string>3.4.4</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Whisperino needs calendar access only when you approve saving a spoken event.</string>
 	<key>NSHighResolutionCapable</key>

@@ -1,15 +1,14 @@
-# Whisperino 3.4.4 — Built Against the macOS 26 SDK
+# Whisperino 3.4.5 — Menu Bar Only
 
-The 3.4.x releases were built on a macOS 14 runner and linked against the
-macOS 14.5 SDK. On macOS 26 such an app runs in compatibility mode: the
-settings window came up with the older flat sidebar and chrome instead of
-the native macOS 26 look it was designed for. Locally built copies never
-showed this, which is why it took a few releases to pin down.
+Whisperino is back to living in the menu bar alone: no Dock icon, no app
+switcher entry. The settings window is unchanged and still opens from the
+menu bar item.
 
 ## What changed
 
-- Release builds run on a macOS 26 runner, so the app is linked against the
-  macOS 26 SDK and gets the current system appearance. No app code changed.
+- The Dock icon and app switcher entry introduced in 3.4.0 are gone. ⌘,
+  (Settings), ⌘W (close) and copy/paste shortcuts keep working while the
+  settings window is key.
 
 ## Upgrade note
 

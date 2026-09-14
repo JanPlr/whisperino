@@ -92,28 +92,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Show the overview once on the very first launch so setup progress and
-    /// the trigger gesture have a visible home behind the sequenced permission
-    /// prompts. Later launches stay quiet - the app usually starts at login,
-    /// and its window is one Dock click away.
+    /// A menu-bar-only app otherwise appears to do nothing after launch. Show
+    /// the overview once so setup progress and the trigger gesture have a
+    /// visible home behind the sequenced permission prompts.
     private func showWelcomeIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: Self.didShowWelcomeKey) else { return }
         UserDefaults.standard.set(true, forKey: Self.didShowWelcomeKey)
         MainWindowController.shared.show(startOnOverview: true)
-    }
-
-    /// Clicking the Dock icon with no window open brings the window back,
-    /// the behavior every Dock app has.
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard !flag else { return true }
-        MainWindowController.shared.show()
-        return true
-    }
-
-    /// Closing the window does not quit: dictation keeps working from the
-    /// global trigger and the menu bar item.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
     }
 
     private static func seedLaunchAtLogin() {
@@ -154,9 +139,11 @@ if let qaPage = ProcessInfo.processInfo.environment["WHISPERINO_SETTINGS_QA"] {
     exit(0)
 }
 
-// A regular app: Dock icon, app switcher entry, and a real menu bar - on top
-// of the menu bar item, which stays the fastest way to reach dictation.
-app.setActivationPolicy(.regular)
+// Menu bar only - no Dock icon, no app switcher entry. The main menu is
+// still installed: it is never drawn for an accessory app, but its key
+// equivalents (⌘C/V/X/A, ⌘, ⌘W, ⌘Q) route through it while the settings
+// window is key.
+app.setActivationPolicy(.accessory)
 AppMenu.install(into: app)
 
 let delegate = AppDelegate()
